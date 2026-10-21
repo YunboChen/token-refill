@@ -21,21 +21,14 @@
 }
 
 .mark {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  border-radius: 9px;
-  color: var(--accent);
-  background: var(--accent-soft);
-  font-size: 11px;
-  font-weight: 750;
-  letter-spacing: -0.04em;
+  flex-shrink: 0;
+  width: 25px;
+  height: 28px;
+  object-fit: contain;
 }
 
 .mode,
 .stack,
-.note,
 .footer,
 .previewHint {
   color: var(--muted);
@@ -61,7 +54,7 @@
 
 .subtitle,
 .description,
-.emptyState p {
+.usageNote {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.7;
@@ -71,24 +64,96 @@
   margin: 8px 0 0;
 }
 
-.emptyState {
+.usageCard {
+  display: grid;
+  gap: 16px;
   margin-top: 24px;
-  padding: 26px 22px;
+  padding: 22px;
   border: 1px solid var(--border);
   border-radius: 16px;
   background: var(--surface);
 }
 
-.emptyState h2,
 .sectionHeader h2 {
   margin: 0;
   font-size: 14px;
   font-weight: 650;
 }
 
-.emptyState p {
-  max-width: 30em;
-  margin: 10px 0 16px;
+.usageRow {
+  display: grid;
+  gap: 6px;
+}
+
+.usageRowHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.usageLabel {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.usagePercent {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--accent);
+}
+
+.meter {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  overflow: hidden;
+}
+
+.meterFill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 240ms ease-out;
+}
+
+.usageRowFoot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.usageNote {
+  font-size: 12px;
+}
+
+.usageUpdated {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.usageError {
+  margin: 0;
+  color: var(--error);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.usageError .usageNote {
+  color: var(--muted);
+}
+
+.planTag {
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--background);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .environment {
@@ -201,7 +266,7 @@
     font-size: 23px;
   }
 
-  .emptyState {
-    padding: 22px 18px;
+  .usageCard {
+    padding: 18px 16px;
   }
 }

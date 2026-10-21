@@ -10,6 +10,15 @@
 - CSS Variables + CSS Modules：组件样式，默认跟随系统浅色 / 深色模式。
 - pnpm：前端依赖管理。
 
+## 需求与设计文档
+
+首版产品范围已基本收敛，当前进行接入可行性验证与软件设计，尚未开始业务功能实现。以下文档区分已确认需求、工程建议与待验证事项。
+
+- [文档索引](./docs/README.md)
+- [需求文档](./docs/requirements.md)
+- [软件设计文档](./docs/software-design.md)
+- [开发计划文档](./docs/development-plan.md)
+
 ## 环境准备
 
 - Node.js 22.12+（建议使用当前受支持的 LTS 版本）。
@@ -55,7 +64,18 @@ pnpm tauri build
 
 首次编译需要下载并构建 Tauri 的 Rust 依赖，耗时通常明显长于后续增量编译。
 
-`pnpm-lock.yaml` 和 `src-tauri/Cargo.lock` 应随项目提交。正式分发前需要配置自己的应用标识、图标、代码签名与 macOS 公证；当前 `dev.tokenrefill.desktop` 仅作开发标识，图标为占位图标。
+`pnpm-lock.yaml` 和 `src-tauri/Cargo.lock` 应随项目提交。正式分发前需要配置自己的应用标识、代码签名与 macOS 公证；当前 `dev.tokenrefill.desktop` 仅作开发标识。
+
+### 应用图标
+
+平图图标源图是 `src-tauri/icons/source.png`（1024 × 1024，带透明底板外轮廓）。替换源图后运行 `pnpm tauri icon src-tauri/icons/source.png` 重新生成整套图标；页头标志是 `src/assets/logo.png`，浏览器标签图标位于 `public/`。
+
+macOS 26+ 的自适应分层图标（浅色 / 深色 / 有色 / 降低透明度跟随系统）源文件在 `src-tauri/icons/macos/TokenRefill.icon`，由 `src-tauri/tauri.macos.conf.json` 追加进 `bundle.icon`，只影响 macOS 打包：
+
+- 打包器把 `.icon` 交给 `actool` 编成 `Contents/Resources/Assets.car`，再用 `assetutil` 取回内部图标名写入 `CFBundleIconName`；`CFBundleIconFile`（ICNS）保留，供旧系统回退。
+- 缺 `actool`（只装了 Command Line Tools）或 actool 主版本低于 26 时，只记一条日志并跳过 Assets.car，产物仍是平图，构建不失败。
+- 这个 `.icon` 是手工生成的草稿：先用 Icon Composer 打开、逐外观检查并重新保存，再 `pnpm tauri build --bundles app`。验收看三处——`.app/Contents/Resources/Assets.car` 存在、`Info.plist` 里有 `CFBundleIconName`、`assetutil --info Assets.car` 里能查到该名字的 `Icon Image` rendition。
+- `pnpm tauri dev` 的 Dock 图标是编译期内嵌 ICNS 的单张图，不体现自适应效果；必须用打包后的 `.app` 在 Finder 与 Dock 上验收。
 
 ## 目录
 
@@ -65,23 +85,27 @@ src/
   App.module.css      启动页组件样式
   styles.css          系统字体、主题 token、全局样式
   lib/desktop.ts      带类型的 Rust 调用入口
+  assets/logo.png     页头品牌标志
   main.tsx            React 与 Motion 入口
 src-tauri/
   src/lib.rs          Tauri 启动入口与 get_app_info 命令
   src/main.rs         桌面可执行入口
   capabilities/       本地窗口权限配置
-  icons/              占位应用图标
+  icons/              应用图标与 1024 源图
+  icons/macos/        macOS 分层图标草稿 TokenRefill.icon
   tauri.conf.json     窗口、构建和 CSP 配置
+  tauri.macos.conf.json  macOS 专属打包配置（追加分层图标）
+public/               浏览器标签图标、Web manifest
 ```
 
 ## 当前范围
 
-已包含基础窗口、系统浅深色、减少动态效果支持、Motion 反馈动画，以及一个不访问网络的 Rust IPC 命令。
+已包含基础窗口、系统浅深色、减少动态效果支持、Motion 反馈动画，以及首个真实业务链路：**Codex 订阅额度查询**。桌面应用启动后会自动查询并通过本机官方 `codex app-server` 只读获取额度窗口（已用/剩余比例、重置时间），也可手动刷新；要求本机已安装并登录 Codex CLI（未登录或找不到 CLI 时界面会给出明确错误）。不读取、不保存 Codex 登录凭证。
 
 尚未实现：
 
-- 真实账户登录、额度查询和平台适配。
-- Keychain 凭证存储、自动刷新及通知。
+- 百炼 Token Plan、Coding Plan 接入。
+- 凭证独立存储、多账户管理、自动刷新调度、通知。
 - 菜单栏常驻、弹窗定位和窗口焦点策略。
 - 原生 Liquid Glass 与旧系统材质回退。目前没有将 CSS 毛玻璃伪称为系统 Liquid Glass。
 

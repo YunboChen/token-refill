@@ -1,3 +1,5 @@
+mod codex;
+
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -19,10 +21,15 @@ fn get_app_info() -> AppInfo {
     }
 }
 
+#[tauri::command]
+fn refresh_codex_usage() -> Result<codex::CodexUsage, codex::UsageError> {
+    codex::read_usage()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_app_info])
+        .invoke_handler(tauri::generate_handler![get_app_info, refresh_codex_usage])
         .run(tauri::generate_context!())
         .expect("failed to run Token Refill");
 }
