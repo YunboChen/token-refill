@@ -1,35 +1,10 @@
-/* 壳层：左右布局。左侧品牌 + 导航，右侧内容随窗口滚动。
-   macOS Overlay 标题栏下，顶条与应用同色，仅保留拖拽区与红绿灯。 */
+/* 壳层：左右布局。左侧品牌 + 导航，右侧固定页头 + 滚动内容。
+   macOS Overlay 标题栏不单独占行：只在侧栏顶部留红绿灯安全区，
+   页面头直接顶到窗口上沿，避免窗口顶部出现空带。 */
 .app {
   display: flex;
-  flex-direction: column;
   height: 100dvh;
-}
-
-.titlebar {
-  display: flex;
-  flex-shrink: 0;
-  height: 44px;
-}
-
-.titlebarSide {
-  display: flex;
-  align-items: center;
-  width: 224px;
-  flex-shrink: 0;
-  border-right: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.titlebarMain {
-  flex: 1;
-  background: var(--background);
-}
-
-.body {
-  display: flex;
-  flex: 1;
-  min-height: 0;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -37,9 +12,15 @@
   flex-shrink: 0;
   flex-direction: column;
   width: 224px;
-  padding: 14px 16px 20px;
+  padding: 0 16px 20px;
   border-right: 1px solid var(--border);
   background: var(--surface);
+}
+
+/* 只留红绿灯所需高度，字标尽量上提；整段作为窗口拖拽区 */
+.titlebarSafeArea {
+  flex-shrink: 0;
+  height: 44px;
 }
 
 /* 字标独立成行，位于红绿灯条下方；整组图标 + 文字使用同一张 lockup 图。 */
@@ -115,25 +96,113 @@
   background: var(--accent-soft);
 }
 
+/* 侧栏底部：版本号与 tip 图标并排靠左，margin-top:auto 把它压到窗口底部。
+   说明文案绝对定位在整行上方，宽度随侧栏内容区，避免溢出窗口。 */
+.sidebarFoot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: auto;
+  padding-top: 16px;
+}
+
+.version {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.tipTrigger {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: none;
+  cursor: help;
+  transition: color 150ms ease-out, background-color 150ms ease-out;
+}
+
+.tipTrigger:hover,
+.tipTrigger:focus-visible {
+  color: var(--text);
+  background: var(--sunken);
+}
+
+.tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  font-size: 12px;
+  line-height: 1.65;
+  opacity: 0;
+  transform: translateY(3px);
+  pointer-events: none;
+  transition: opacity 130ms ease-out, transform 130ms ease-out;
+}
+
+.tipTrigger:hover ~ .tooltip,
+.tipTrigger:focus-visible ~ .tooltip {
+  opacity: 1;
+  transform: none;
+}
+
 .main {
   display: flex;
   flex: 1;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
-  padding: 14px 28px 20px;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
-/* 大窗口下内容保持舒适行宽，水平居中 */
-.main > * {
+/* 固定页面头：标题与提示语留在条带内，不随下方内容滚动。
+   高度固定为「标题 + 一行提示语」，各分区切换时条带高度不变。
+   用 surface 底色 + 发丝分隔与滚动区分档，与卡片同属“前景层”。 */
+.pageHeader {
+  flex-shrink: 0;
+  height: 82px;
+  padding: 12px 28px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+/* 内容区不设最大宽度，随窗口一起变宽 */
+.pageHeaderInner,
+.mainScroll > * {
   width: 100%;
-  max-width: 680px;
-  margin-inline: auto;
+}
+
+
+/* 滚动区：只有面板内容与页脚在这里滚动 */
+.mainScroll {
+  flex: 1;
+  min-height: 0;
+  padding: 20px 28px 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .panelWrap {
-  flex: 1;
   min-width: 0;
+}
+
+/* 内容首块不再叠加头部间距，避免固定头与卡片之间出现双倍留白 */
+.panelWrap > section > :first-child {
+  margin-top: 0;
 }
 
 /* 面板标题 */
@@ -153,9 +222,12 @@
   line-height: 1.7;
 }
 
+/* 提示语固定一行，窗口过窄时省略，保证页头高度恒定 */
 .subtitle {
   margin: 6px 0 0;
-  max-width: 52ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 卡片：仅真实层级容器使用；圆角统一 14px */
@@ -669,13 +741,9 @@
 
 /* 窗口收窄时优先保内容区：侧栏降到 156px */
 @media (max-width: 560px) {
-  .titlebarSide {
-    width: 156px;
-  }
-
   .sidebar {
     width: 156px;
-    padding: 10px 10px 16px;
+    padding: 0 10px 16px;
   }
 
   .wordmark {
@@ -694,8 +762,12 @@
     height: 16px;
   }
 
-  .main {
-    padding: 18px 14px 14px;
+  .pageHeader {
+    padding: 12px 14px;
+  }
+
+  .mainScroll {
+    padding: 16px 14px 14px;
   }
 
   .panelTitle {

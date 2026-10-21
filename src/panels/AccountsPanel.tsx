@@ -4,9 +4,6 @@ import styles from '../App.module.css';
 export default function AccountsPanel() {
   return (
     <section>
-      <h1 className={styles.panelTitle}>账户</h1>
-      <p className={styles.subtitle}>管理已接入的账户、授权状态与关联套餐。</p>
-
       <div className={styles.empty}>
         <UsersThree size={30} weight="duotone" className={styles.emptyIcon} />
         <p className={styles.emptyTitle}>还没有托管账户</p>

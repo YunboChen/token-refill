@@ -113,11 +113,6 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
 
   return (
     <section>
-      <h1 className={styles.panelTitle}>总览</h1>
-      <p className={styles.subtitle}>
-        各账户与套餐的额度、周期和重置时间在一处查看；不同计量口径的数据不做合并。
-      </p>
-
       <article className={styles.card} aria-live="polite">
         <header className={styles.cardHead}>
           <div className={styles.cardTitleRow}>

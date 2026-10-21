@@ -47,8 +47,6 @@ export default function SettingsPanel() {
 
   return (
     <section>
-      <h1 className={styles.panelTitle}>设置</h1>
-      <p className={styles.subtitle}>刷新节奏、提醒与系统行为。</p>
       <p className={styles.notice}>
         当前为界面草稿：设置仅保存在本机浏览器存储，尚未接入 Rust 后端与系统权限，不会实际执行调度、通知或自启。
       </p>
