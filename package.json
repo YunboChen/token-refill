@@ -1,0 +1,35 @@
+{
+  "name": "token-refill",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=22.12.0",
+    "pnpm": ">=12.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.node.json",
+    "build": "pnpm typecheck && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml --locked",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --locked"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.4",
+    "motion": "^14.4.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.3",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}
