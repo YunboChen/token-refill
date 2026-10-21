@@ -378,7 +378,7 @@
 .meterFill {
   height: 100%;
   border-radius: inherit;
-  background: var(--accent);
+  background: var(--accent-strong);
   transition: width 480ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -424,14 +424,42 @@
   color: inherit;
 }
 
-.notice {
-  margin: 16px 0 0;
-  padding: 10px 12px;
+/* 草稿说明：中性提示条，不与可交互控件争主色 */
+.draftBanner {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 0;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--accent-soft);
-  color: var(--text);
+  background: var(--surface);
+  color: var(--muted);
   font-size: 12.5px;
-  line-height: 1.6;
+  line-height: 1.65;
+}
+
+.draftIcon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.draftTag {
+  flex-shrink: 0;
+  margin-top: 1px;
+  padding: 1px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.55;
+}
+
+.draftText {
+  margin: 0;
+  min-width: 0;
 }
 
 /* 骨架屏：与真实行同形，避免通用转圈 */
@@ -474,16 +502,18 @@
 
 /* 分组（尚未接入 / 设置）：组标题 + 一张分组卡，行内用发丝线分隔 */
 .groupTitle {
-  margin: 28px 0 8px;
+  margin: 24px 0 12px;
   padding-left: 2px;
-  color: var(--muted);
-  font-size: 13px;
+  color: var(--text);
+  font-size: 15px;
   font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
 }
 
 .listCard {
   margin-top: 0;
-  padding: 2px 16px;
+  padding: 3px 16px;
 }
 
 .listCard > * + * {
@@ -509,19 +539,29 @@
   font-weight: 600;
 }
 
-/* 设置行 */
+/* 设置行：整行可点（label 包住开关），悬浮时给一层轻底色 */
 .settingRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px 0;
+  margin-inline: -10px;
+  padding: 13px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 150ms ease-out;
+}
+
+.settingRow:hover {
+  background: var(--sunken);
 }
 
 .stackRow {
   display: grid;
-  gap: 10px;
-  padding: 12px 0;
+  gap: 8px;
+  margin-inline: -10px;
+  padding: 13px 10px;
 }
 
 .settingText {
@@ -547,6 +587,7 @@
 
 /* 单选药丸组（原生 radio，键盘方向键可用） */
 .pills {
+  position: relative;
   display: inline-flex;
   flex-shrink: 0;
   gap: 2px;
@@ -569,7 +610,28 @@
 }
 
 .pill {
+  position: relative;
   cursor: pointer;
+  user-select: none;
+}
+
+/* 选中滑块：单个绝对定位元素按 --pill-index 平移，transition 负责滑动。
+   选项等宽时，宽度 = 可用宽度减去间隙，再除以选项数。 */
+.pillThumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  z-index: 0;
+  width: calc(
+    (100% - 6px - (var(--pill-count) - 1) * 2px) / var(--pill-count)
+  );
+  border-radius: 7px;
+  background: var(--accent-strong);
+  box-shadow: 0 1px 2px rgb(15 20 28 / 0.18);
+  pointer-events: none;
+  transform: translateX(calc(var(--pill-index) * (100% + 2px)));
+  transition: transform 280ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .pill input {
@@ -581,15 +643,21 @@
 }
 
 .pillText {
-  display: block;
-  padding: 4px 11px;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 11px;
   border-radius: 7px;
   color: var(--muted);
   font-size: 12.5px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
   text-align: center;
-  transition: background-color 150ms ease-out, color 150ms ease-out;
+  white-space: nowrap;
+  transition: color 150ms ease-out;
 }
 
 .pill:hover .pillText {
@@ -597,9 +665,7 @@
 }
 
 .pill input:checked + .pillText {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: var(--shadow-pill);
+  color: var(--accent-text);
 }
 
 .pill input:focus-visible + .pillText {
@@ -607,23 +673,34 @@
   outline-offset: 2px;
 }
 
-.switch {
+/* 开关：原生 checkbox 只保留语义与焦点，轨道和滑块由独立元素绘制。
+   WKWebView 下直接给 checkbox 上背景在选中态不稳定，故不依赖原生绘制。 */
+.switchWrap {
   position: relative;
   flex-shrink: 0;
   width: 44px;
   height: 26px;
-  padding: 0;
+}
+
+.switchInput {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.switchTrack {
+  position: absolute;
+  inset: 0;
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   background: var(--sunken);
-  cursor: pointer;
   transition: background-color 180ms cubic-bezier(0.16, 1, 0.3, 1),
     border-color 180ms ease-out;
-}
-
-.switch[data-on] {
-  border-color: var(--accent);
-  background: var(--accent);
 }
 
 .switchKnob {
@@ -638,24 +715,104 @@
   transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.switch[data-on] .switchKnob {
+.switchInput:checked + .switchTrack {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+}
+
+.switchInput:checked + .switchTrack .switchKnob {
   transform: translateX(18px);
 }
 
+.switchInput:focus-visible + .switchTrack {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* 阈值滑块：轨道按当前值填充，与开关、额度条使用同一主色 */
 .range {
   width: 100%;
-  accent-color: var(--accent);
+  height: 22px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--accent-strong) 0%,
+    var(--accent-strong) var(--range-fill, 0%),
+    var(--sunken) var(--range-fill, 0%),
+    var(--sunken) 100%
+  );
+}
+
+.range::-webkit-slider-thumb {
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.range::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--sunken);
+}
+
+.range::-moz-range-progress {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--accent-strong);
+}
+
+.range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
 }
 
 .range:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .rangeValue {
-  color: var(--muted);
+  color: var(--text);
   font-size: 12px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.rangeScale {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stackRow[data-disabled] .settingLabel,
+.stackRow[data-disabled] .rangeValue {
+  color: var(--muted);
+}
+
+.stackRow[data-disabled] .rangeScale {
+  opacity: 0.6;
 }
 
 /* 按钮：主按钮实色，幽灵按钮描边；按下有位移反馈 */
@@ -666,7 +823,7 @@
   border: 1px solid transparent;
   border-radius: 9px;
   color: var(--accent-text);
-  background: var(--accent);
+  background: var(--accent-strong);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -676,7 +833,7 @@
 
 .button:hover:not(:disabled),
 .buttonGhost:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--accent-strong-hover);
 }
 
 .button:active:not(:disabled) {
