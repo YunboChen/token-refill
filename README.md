@@ -86,3 +86,7 @@ src-tauri/
 - 原生 Liquid Glass 与旧系统材质回退。目前没有将 CSS 毛玻璃伪称为系统 Liquid Glass。
 
 前端不应持有账户密钥或在日志中输出凭证。后续平台请求和凭证访问优先放在 Rust / 系统层。
+
+## 许可证
+
+本项目采用 [MIT License](./LICENSE)。
