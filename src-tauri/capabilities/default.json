@@ -3,5 +3,8 @@
   "identifier": "default",
   "description": "Core permissions for the local main window. No filesystem, shell, or remote access plugins.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging"
+  ]
 }

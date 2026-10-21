@@ -19,6 +19,7 @@
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --locked"
   },
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "@tauri-apps/api": "^2.12.4",
     "motion": "^14.4.0",
     "react": "^19.3.1",
