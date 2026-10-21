@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
-import logoMark from './assets/logo.png';
+import { Gauge, GearSix, UsersThree, type Icon } from '@phosphor-icons/react';
+import logoWordmark from './assets/logo-text.png';
 import OverviewPanel from './panels/OverviewPanel';
 import AccountsPanel from './panels/AccountsPanel';
 import SettingsPanel from './panels/SettingsPanel';
@@ -9,10 +10,10 @@ import styles from './App.module.css';
 
 type PanelKey = 'overview' | 'accounts' | 'settings';
 
-const PANELS: { key: PanelKey; label: string }[] = [
-  { key: 'overview', label: '总览' },
-  { key: 'accounts', label: '账户' },
-  { key: 'settings', label: '设置' },
+const PANELS: { key: PanelKey; label: string; Icon: Icon }[] = [
+  { key: 'overview', label: '总览', Icon: Gauge },
+  { key: 'accounts', label: '账户', Icon: UsersThree },
+  { key: 'settings', label: '设置', Icon: GearSix },
 ];
 
 export default function App() {
@@ -22,26 +23,22 @@ export default function App() {
 
   return (
     <div className={styles.app}>
-      {/* macOS Overlay 标题栏：字标与红绿灯同行，整条与应用同色、可拖拽。 */}
+      {/* macOS Overlay 标题栏：只承载红绿灯与拖拽区，字标图下移到侧栏首行。 */}
       <div className={styles.titlebar} aria-hidden="true">
-        <div className={styles.titlebarSide} data-tauri-drag-region>
-          <div className={styles.brand} data-tauri-drag-region>
-            <img
-              className={styles.mark}
-              src={logoMark}
-              alt=""
-              width={28}
-              height={32}
-              data-tauri-drag-region
-            />
-            <span className={styles.brandName} data-tauri-drag-region>Token Refill</span>
-          </div>
-        </div>
+        <div className={styles.titlebarSide} data-tauri-drag-region />
         <div className={styles.titlebarMain} data-tauri-drag-region />
       </div>
 
       <div className={styles.body}>
         <aside className={styles.sidebar}>
+          <img
+            className={styles.wordmark}
+            src={logoWordmark}
+            alt="Token Refill"
+            width={480}
+            height={87}
+          />
+
           <nav className={styles.nav} aria-label="管理窗口分区" role="tablist" aria-orientation="vertical">
             {PANELS.map((panel) => (
               <button
@@ -63,7 +60,10 @@ export default function App() {
                     transition={{ type: 'spring', stiffness: 520, damping: 38 }}
                   />
                 ) : null}
-                <span className={styles.navLabel}>{panel.label}</span>
+                <span className={styles.navLabel}>
+                  <panel.Icon size={18} className={styles.navIcon} aria-hidden />
+                  <span className={styles.navText}>{panel.label}</span>
+                </span>
               </button>
             ))}
           </nav>

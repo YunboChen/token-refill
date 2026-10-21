@@ -15,7 +15,7 @@
 .titlebarSide {
   display: flex;
   align-items: center;
-  width: 200px;
+  width: 224px;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
   background: var(--surface);
@@ -36,41 +36,34 @@
   display: flex;
   flex-shrink: 0;
   flex-direction: column;
-  width: 200px;
-  padding: 12px 14px 20px;
+  width: 224px;
+  padding: 14px 16px 20px;
   border-right: 1px solid var(--border);
   background: var(--surface);
 }
 
-/* 字标与红绿灯同行；左边距为窗口按钮留出净空。 */
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-left: 76px;
-  min-width: 0;
+/* 字标独立成行，位于红绿灯条下方；整组图标 + 文字使用同一张 lockup 图。 */
+/* 偏移 2px 让图中图标中心正对导航图标中心；
+   图中图标中心在 8.33% 处、文字起于 19.58% 处，导航侧据此配 6px + 18px + 9px。 */
+.wordmark {
+  display: block;
+  width: calc(100% - 2px);
+  max-width: 158px;
+  height: auto;
+  margin: 1px 0 24px 2px;
 }
 
-.mark {
-  flex-shrink: 0;
-  width: 22px;
-  height: 25px;
-  object-fit: contain;
-}
-
-.brandName {
-  font-size: 13.5px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* 深色下字标偏蓝、对比不足，整体提亮一档 */
+@media (prefers-color-scheme: dark) {
+  .wordmark {
+    filter: brightness(1.35) saturate(1.05);
+  }
 }
 
 /* 侧边导航：激活底色块用 Motion layoutId 在选项间滑动。 */
 .nav {
   display: grid;
-  gap: 3px;
+  gap: 4px;
 }
 
 .navItem {
@@ -81,18 +74,30 @@
   cursor: pointer;
 }
 
+/* 左内边距 6px：图标与字标图标的左缘对齐成一条竖线 */
 .navLabel {
   position: relative;
   z-index: 1;
-  display: block;
-  padding: 8px 12px;
-  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px 9px 6px;
+  border-radius: 10px;
   color: var(--muted);
-  font-size: 13.5px;
+  font-size: 15px;
   font-weight: 600;
   text-align: left;
   white-space: nowrap;
   transition: color 150ms ease-out;
+}
+
+.navIcon {
+  flex-shrink: 0;
+}
+
+.navText {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .navItem:hover .navLabel {
@@ -106,7 +111,7 @@
 .navPill {
   position: absolute;
   inset: 0;
-  border-radius: 9px;
+  border-radius: 10px;
   background: var(--accent-soft);
 }
 
@@ -662,26 +667,31 @@
   line-height: 1.6;
 }
 
-@media (max-width: 470px) {
+/* 窗口收窄时优先保内容区：侧栏降到 156px */
+@media (max-width: 560px) {
   .titlebarSide {
-    width: 148px;
+    width: 156px;
   }
 
   .sidebar {
-    width: 148px;
+    width: 156px;
     padding: 10px 10px 16px;
   }
 
-  .brand {
-    margin-left: 72px;
-  }
-
-  .brandName {
-    display: none;
+  .wordmark {
+    width: calc(100% - 3px);
+    margin: 1px 0 16px 3px;
   }
 
   .navLabel {
-    padding: 7px 10px;
+    gap: 7px;
+    padding: 8px 10px 8px 6px;
+    font-size: 14px;
+  }
+
+  .navIcon {
+    width: 16px;
+    height: 16px;
   }
 
   .main {
