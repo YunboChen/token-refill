@@ -32,13 +32,8 @@
   max-width: 158px;
   height: auto;
   margin: 1px 0 24px 2px;
-}
-
-/* 深色下字标偏蓝、对比不足，整体提亮一档 */
-@media (prefers-color-scheme: dark) {
-  .wordmark {
-    filter: brightness(1.35) saturate(1.05);
-  }
+  /* 深色下字标偏蓝、对比不足，整体提亮一档；滤镜值随主题变量切换 */
+  filter: var(--wordmark-filter);
 }
 
 /* 侧边导航：激活底色块用 Motion layoutId 在选项间滑动。 */

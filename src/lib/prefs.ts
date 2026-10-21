@@ -1,3 +1,5 @@
+export type ThemePref = 'light' | 'dark' | 'system';
+
 export interface Prefs {
   refreshMinutes: number;
   lowQuotaEnabled: boolean;
@@ -5,9 +7,16 @@ export interface Prefs {
   authExpiredEnabled: boolean;
   resetNoticeEnabled: boolean;
   autoLaunchEnabled: boolean;
+  theme: ThemePref;
 }
 
 export const REFRESH_OPTIONS = [1, 5, 15, 30, 60];
+export const THEME_OPTIONS: ThemePref[] = ['light', 'dark', 'system'];
+export const THEME_LABELS: Record<ThemePref, string> = {
+  light: '浅色',
+  dark: '深色',
+  system: '跟随系统',
+};
 
 const STORAGE_KEY = 'token-refill.prefs-draft';
 
@@ -20,6 +29,7 @@ export const DEFAULT_PREFS: Prefs = {
   authExpiredEnabled: true,
   resetNoticeEnabled: false,
   autoLaunchEnabled: false,
+  theme: 'system',
 };
 
 export function loadPrefs(): Prefs {
@@ -44,6 +54,9 @@ export function loadPrefs(): Prefs {
         ? draft.resetNoticeEnabled : DEFAULT_PREFS.resetNoticeEnabled,
       autoLaunchEnabled: typeof draft.autoLaunchEnabled === 'boolean'
         ? draft.autoLaunchEnabled : DEFAULT_PREFS.autoLaunchEnabled,
+      theme: THEME_OPTIONS.includes(draft.theme as ThemePref)
+        ? draft.theme as ThemePref
+        : DEFAULT_PREFS.theme,
     };
   } catch {
     return DEFAULT_PREFS;

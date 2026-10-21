@@ -1,6 +1,14 @@
 import { useEffect, useId, useState, type CSSProperties } from 'react';
 import { Info } from '@phosphor-icons/react';
-import { loadPrefs, savePrefs, REFRESH_OPTIONS, type Prefs } from '../lib/prefs';
+import {
+  loadPrefs,
+  savePrefs,
+  REFRESH_OPTIONS,
+  THEME_LABELS,
+  THEME_OPTIONS,
+  type Prefs,
+} from '../lib/prefs';
+import { applyTheme } from '../lib/theme';
 import styles from '../App.module.css';
 
 function Toggle({
@@ -47,11 +55,14 @@ function Toggle({
 export default function SettingsPanel() {
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
   const refreshLabelId = useId();
+  const themeLabelId = useId();
   const refreshIndex = Math.max(0, REFRESH_OPTIONS.indexOf(prefs.refreshMinutes));
+  const themeIndex = Math.max(0, THEME_OPTIONS.indexOf(prefs.theme));
   const refreshFill = ((prefs.lowQuotaThreshold - 5) / 45) * 100;
 
   useEffect(() => {
     savePrefs(prefs);
+    applyTheme(prefs.theme);
   }, [prefs]);
 
   function set<K extends keyof Prefs>(key: K, value: Prefs[K]) {
@@ -163,6 +174,38 @@ export default function SettingsPanel() {
 
       <h2 id="settings-system" className={styles.groupTitle}>系统</h2>
       <section className={`${styles.card} ${styles.listCard}`} aria-labelledby="settings-system">
+        <div className={styles.stackRow}>
+          <div className={styles.settingText}>
+            <span id={themeLabelId} className={styles.settingLabel}>外观</span>
+            <span className={styles.settingHint}>
+              选择后立即应用到整个窗口；跟随系统时随系统外观自动切换。
+            </span>
+          </div>
+          <div
+            className={`${styles.pills} ${styles.pillsFull}`}
+            role="radiogroup"
+            aria-labelledby={themeLabelId}
+            style={{
+              '--pill-index': themeIndex,
+              '--pill-count': THEME_OPTIONS.length,
+            } as CSSProperties}
+          >
+            <span className={styles.pillThumb} aria-hidden="true" />
+            {THEME_OPTIONS.map((value) => (
+              <label className={styles.pill} key={value}>
+                <input
+                  type="radio"
+                  name="theme"
+                  value={value}
+                  checked={prefs.theme === value}
+                  onChange={() => set('theme', value)}
+                  aria-label={THEME_LABELS[value]}
+                />
+                <span className={styles.pillText}>{THEME_LABELS[value]}</span>
+              </label>
+            ))}
+          </div>
+        </div>
         <Toggle
           checked={prefs.autoLaunchEnabled}
           onChange={(next) => set('autoLaunchEnabled', next)}

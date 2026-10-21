@@ -2,7 +2,7 @@
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   color: var(--text);
   background: var(--background);
-  color-scheme: light dark;
+  color-scheme: light;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -25,10 +25,36 @@
   --focus: #0f66d6;
   --shadow-card: 0 1px 2px rgb(23 29 39 / 0.05), 0 12px 32px -20px rgb(23 29 39 / 0.16);
   --shadow-pill: 0 1px 2px rgb(15 20 28 / 0.16), 0 0 0 0.5px rgb(15 20 28 / 0.05);
+  --wordmark-filter: none;
+}
+
+/* 外观偏好写在 <html data-theme> 上：light / dark 显式覆盖，
+   system（或尚未写入时）由下方的媒体查询跟随系统。 */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --background: #0f141b;
+  --surface: #171e27;
+  --sunken: #0d1218;
+  --text: #e9eef5;
+  --muted: #97a3b2;
+  --border: #242e3a;
+  --border-strong: #313d4c;
+  --accent: #6cb6f5;
+  --accent-strong: #4092ff;
+  --accent-strong-hover: #5aa6ff;
+  --accent-text: #0b2540;
+  --accent-soft: #1c2f47;
+  --danger: #ff9db0;
+  --danger-soft: #3b222c;
+  --focus: #6cb6f5;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.25), 0 14px 34px -22px rgb(0 0 0 / 0.55);
+  --shadow-pill: 0 1px 2px rgb(0 0 0 / 0.4), 0 0 0 0.5px rgb(255 255 255 / 0.06);
+  --wordmark-filter: brightness(1.35) saturate(1.05);
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
     --background: #0f141b;
     --surface: #171e27;
     --sunken: #0d1218;
@@ -46,6 +72,7 @@
     --focus: #6cb6f5;
     --shadow-card: 0 1px 2px rgb(0 0 0 / 0.25), 0 14px 34px -22px rgb(0 0 0 / 0.55);
     --shadow-pill: 0 1px 2px rgb(0 0 0 / 0.4), 0 0 0 0.5px rgb(255 255 255 / 0.06);
+    --wordmark-filter: brightness(1.35) saturate(1.05);
   }
 }
 
