@@ -53,6 +53,16 @@
   box-sizing: border-box;
 }
 
+/* 根层不参与滚动：macOS WKWebView 的根滚动视图即使内容不溢出，
+   也会在滚轮/触控板输入下把整页（含固定侧栏）横向拖出窗口。
+   锁死根层尺寸与 overscroll，滚动只交给 .mainScroll。 */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
   min-width: 320px;
   margin: 0;
