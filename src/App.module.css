@@ -256,7 +256,7 @@
   min-width: 0;
 }
 
-.cardTitleRow h2 {
+.cardTitleRow h3 {
   margin: 0;
   font-size: 14px;
   font-weight: 650;
@@ -921,21 +921,29 @@
   opacity: 0.7;
 }
 
-/* 空状态 */
+/* 空状态：与账户卡同属前景层，用实线和轻投影代替虚线占位 */
 .empty {
   display: grid;
   gap: 10px;
   justify-items: center;
   margin-top: 18px;
-  padding: 42px 24px;
-  border: 1px dashed var(--border);
+  padding: 44px 24px;
+  border: 1px solid var(--border);
   border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
   text-align: center;
 }
 
-.emptyIcon {
-  color: var(--muted);
-  opacity: 0.65;
+.emptyIconWrap {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 4px;
+  border-radius: 12px;
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .emptyTitle {
@@ -945,11 +953,12 @@
 }
 
 .empty .usageNote {
-  max-width: 420px;
+  max-width: 380px;
+  margin: 0;
 }
 
-.accountsActions {
-  margin-top: 14px;
+.empty .button {
+  margin-top: 6px;
 }
 
 /* ---------- 多账户与授权对话框 ---------- */
@@ -964,6 +973,200 @@
   margin-top: 0;
 }
 
+/* ---------- 平台分组：标题带 + 列表，平台靠徽标与名称区分 ---------- */
+
+.platformStack {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.platformGroup {
+  min-width: 0;
+}
+
+.platformGroup .cardStack {
+  margin-top: 12px;
+}
+
+/* 独立标题行（总览）与卡片内标题带（账户）共用同一套排版 */
+.platformHeading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 2px;
+}
+
+.platformCardHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sunken);
+}
+
+/* 徽标高度与两行文字块（名称 + 说明）等高，视觉上成为一个整体 */
+.platformBadge {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.platformBadge[data-active] {
+  border-color: transparent;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.platformLogo {
+  display: block;
+  width: 19px;
+  height: 19px;
+}
+
+.platformLogoFallback {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.platformIdentity {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.platformNameRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.platformName {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  line-height: 1.3;
+}
+
+.platformVendor {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.platformDescription {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.platformAside {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.platformCount {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.platformStatus {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.platformAddButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--accent);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+
+.platformAddButton:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.platformAddButton:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* 平台卡片：标题带 + 行列表，圆角由外卡统一裁切 */
+.platformCard {
+  margin-top: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* 待接入平台：去掉投影与填充，让它在视觉上退到已接入账户之后 */
+.platformCardMuted {
+  background: transparent;
+  box-shadow: none;
+}
+
+.platformCard > .accountRow {
+  padding: 15px 18px;
+}
+
+.platformCard > .accountRow + .accountRow {
+  border-top: 1px solid var(--border);
+}
+
+.plannedNote {
+  margin: 0;
+  padding: 14px 18px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+/* 总览页的待接入计划：平铺在浅底面板里，不再使用虚线占位 */
+.plannedCard {
+  margin-top: 12px;
+  padding: 2px 18px;
+  border-color: var(--border);
+  background: var(--sunken);
+  box-shadow: none;
+}
+
 .accountProduct {
   color: var(--muted);
   font-size: 11.5px;
@@ -972,8 +1175,15 @@
 
 .accountRow {
   display: grid;
-  gap: 4px;
+  gap: 5px;
   padding: 12px 0;
+}
+
+.accountRowHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .accountTitle {
@@ -986,8 +1196,49 @@
 
 .accountTitle h3 {
   margin: 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 13.5px;
+  font-weight: 620;
+  letter-spacing: -0.005em;
+}
+
+/* 授权状态用语义圆点 + 文字，不再占用一枚药丸 */
+.authStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.authDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+
+.authStatus[data-state='ok'] .authDot {
+  background: var(--accent);
+}
+
+.authStatus[data-state='needs-reauth'] {
+  color: var(--danger);
+}
+
+.authStatus[data-state='needs-reauth'] .authDot {
+  background: var(--danger);
+}
+
+.accountMeta {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .accountActions {
@@ -1015,6 +1266,12 @@
   border-color: var(--border);
   color: var(--text);
   background: var(--sunken);
+}
+
+.miniButton[data-danger]:hover:not(:disabled) {
+  border-color: transparent;
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .miniButton:disabled {

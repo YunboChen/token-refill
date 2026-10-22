@@ -1,6 +1,8 @@
 import { ArrowClockwise } from '@phosphor-icons/react';
 import type { AccountState } from '../lib/desktop';
+import { groupAccountsByPlatform } from '../lib/platforms';
 import { useAppState } from '../lib/store';
+import PlatformHeading from '../components/PlatformHeading';
 import styles from '../App.module.css';
 
 /** 尚未接入的套餐占位；文案与 docs/platform-integration-validation.md 的验证状态保持一致。 */
@@ -94,7 +96,7 @@ function CodexAccountCard({
     <article className={styles.card} aria-live="polite">
       <header className={styles.cardHead}>
         <div className={styles.cardTitleRow}>
-          <h2>{account.displayName}</h2>
+          <h3>{account.displayName}</h3>
           <span className={styles.accountProduct}>
             {product?.displayName ?? 'Codex 订阅'}
             {account.identityHint ? ` · ${account.identityHint}` : ''}
@@ -170,7 +172,7 @@ function CodexAccountCard({
                               <div className={styles.usageRowHead}>
                                 <span className={styles.usageLabel}>{label}</span>
                                 <span className={styles.usagePercent} data-low={low || undefined}>
-                                  {remaining === null ? '—' : `${remaining}%`}
+                                  {remaining === null ? '-' : `${remaining}%`}
                                 </span>
                               </div>
                               <div
@@ -236,39 +238,53 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
   const { state, ready, refresh } = useAppState();
   const threshold = state.preferences.lowQuotaThreshold;
   const lowOn = state.preferences.lowQuotaEnabled;
+  const groups = groupAccountsByPlatform(state.accounts);
 
   return (
     <section>
-      {state.accounts.length === 0 ? (
-        <p className={styles.usageNote}>尚未接入账户。请在“账户”页添加。</p>
-      ) : (
-        <div className={styles.cardStack}>
-          {state.accounts.map((account) => (
-            <CodexAccountCard
-              key={account.accountId}
-              account={account}
-              desktop={desktop}
-              threshold={threshold}
-              lowQuotaEnabled={lowOn}
-              refresh={refresh}
-              ready={ready}
-            />
-          ))}
-        </div>
-      )}
+      <div className={styles.platformStack}>
+        {state.accounts.length === 0 ? (
+          <p className={styles.usageNote}>尚未接入账户。请在“账户”页添加。</p>
+        ) : (
+          groups.map((group) => (
+            <section className={styles.platformGroup} key={group.platform}>
+              <PlatformHeading
+                platform={group.platform}
+                count={group.accounts.length}
+                active
+              />
+              <div className={styles.cardStack}>
+                {group.accounts.map((account) => (
+                  <CodexAccountCard
+                    key={account.accountId}
+                    account={account}
+                    desktop={desktop}
+                    threshold={threshold}
+                    lowQuotaEnabled={lowOn}
+                    refresh={refresh}
+                    ready={ready}
+                  />
+                ))}
+              </div>
+            </section>
+          ))
+        )}
 
-      <h2 className={styles.groupTitle}>尚未接入</h2>
-      <article className={`${styles.card} ${styles.listCard}`}>
-        {pendingPlans.map((plan) => (
-          <div key={plan.title} className={styles.pendingRow}>
-            <div className={styles.pendingHead}>
-              <h3>{plan.title}</h3>
-              <span className={styles.planTag}>{plan.tag}</span>
-            </div>
-            <p className={styles.usageNote}>{plan.note}</p>
-          </div>
-        ))}
-      </article>
+        <section className={styles.platformGroup}>
+          <PlatformHeading platform="bailian" status="待接入" active={false} />
+          <article className={`${styles.card} ${styles.plannedCard}`}>
+            {pendingPlans.map((plan) => (
+              <div key={plan.title} className={styles.pendingRow}>
+                <div className={styles.pendingHead}>
+                  <h3>{plan.title}</h3>
+                  <span className={styles.planTag}>{plan.tag}</span>
+                </div>
+                <p className={styles.usageNote}>{plan.note}</p>
+              </div>
+            ))}
+          </article>
+        </section>
+      </div>
     </section>
   );
 }

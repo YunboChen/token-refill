@@ -14,17 +14,15 @@ import {
   type AuthState,
   type LoginStart,
 } from '../lib/desktop';
+import { groupAccountsByPlatform, pendingPlatforms } from '../lib/platforms';
 import { useAppState } from '../lib/store';
+import PlatformHeading from '../components/PlatformHeading';
 import styles from '../App.module.css';
 
 const AUTH_LABELS: Record<AuthState, string> = {
   unknown: '授权未确认',
   ok: '已授权',
   'needs-reauth': '需要重新授权',
-};
-
-const PLATFORM_LABELS: Record<string, string> = {
-  codex: 'Codex',
 };
 
 type DialogState =
@@ -159,169 +157,230 @@ export default function AccountsPanel() {
     if (ok) setConfirming(null);
   };
 
+  const groups = groupAccountsByPlatform(state.accounts);
+  const unavailable = pendingPlatforms();
+
+  const openAddDialog = () => {
+    setDraftName('');
+    setDialog({ kind: 'add-form' });
+  };
+
   return (
     <section>
-      <h2 className={styles.groupTitle}>已接入账户</h2>
       {ready && state.accounts.length === 0 ? (
         <div className={styles.empty}>
-          <UsersThree size={30} weight="duotone" className={styles.emptyIcon} />
-          <p className={styles.emptyTitle}>还没有托管账户</p>
+          <span className={styles.emptyIconWrap}>
+            <UsersThree size={22} weight="duotone" aria-hidden />
+          </span>
+          <p className={styles.emptyTitle}>还没有接入账户</p>
           <p className={styles.usageNote}>
-            添加账户后，应用会为每个账户使用独立的官方授权目录，互不影响。
+            添加账户后，每个账户会使用独立的官方授权目录，互不影响。
           </p>
+          <button
+            type="button"
+            className={styles.button}
+            onClick={openAddDialog}
+            disabled={!desktop}
+            title={desktop ? '添加 Codex 账户' : '浏览器预览无法发起授权'}
+          >
+            <Plus size={15} weight="bold" aria-hidden />
+            添加 Codex 账户
+          </button>
         </div>
-      ) : (
-        <article className={`${styles.card} ${styles.listCard}`}>
-          {state.accounts.map((account) => {
-            const managed = account.source === 'managed';
-            const busy = account.products.some((product) => product.query.refreshing);
-            const plan = planLabel(account);
-            return (
-              <div className={styles.accountRow} key={account.accountId}>
-                <div className={styles.pendingHead}>
-                  <div className={styles.accountTitle}>
-                    <h3>{account.displayName}</h3>
-                    <span className={styles.planTag}>{AUTH_LABELS[account.authState]}</span>
-                    {plan ? <span className={styles.planTag}>{plan}</span> : null}
-                  </div>
-                  <div className={styles.accountActions}>
-                    <button
-                      type="button"
-                      className={styles.miniButton}
-                      onClick={() => void refresh(account.accountId)}
-                      disabled={!desktop || busy}
-                      aria-label={`刷新 ${account.displayName} 的额度`}
-                      title="刷新额度"
-                    >
-                      <ArrowClockwise
-                        size={14}
-                        className={busy ? styles.spin : undefined}
-                      />
-                    </button>
-                    {managed ? (
-                      <>
-                        <button
-                          type="button"
-                          className={styles.miniButton}
-                          onClick={() => void startReauth(account)}
-                          disabled={!desktop}
-                          title="重新授权"
-                        >
-                          <LinkSimple size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className={styles.miniButton}
-                          onClick={() => setRenaming({ accountId: account.accountId, value: account.displayName })}
-                          disabled={!desktop}
-                          title="重命名"
-                        >
-                          <PencilSimple size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          className={styles.miniButton}
-                          onClick={() => setConfirming(account.accountId)}
-                          disabled={!desktop}
-                          title="移除账户"
-                        >
-                          <Trash size={14} />
-                        </button>
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-                <p className={styles.usageNote}>
-                  {PLATFORM_LABELS[account.platform] ?? account.platform}
-                  {' · '}
-                  {managed ? '独立授权' : '本机登录态'}
-                  {account.identityHint ? ` · ${account.identityHint}` : ''}
-                </p>
-                <p className={styles.usageNote}>
-                  {account.products.map((product) => product.displayName).join('、')}
-                  {' · '}
-                  {checkedAtLabel(latestSnapshotEpoch(account))}
-                </p>
+      ) : null}
 
-                {renaming?.accountId === account.accountId ? (
-                  <form
-                    className={styles.inlineForm}
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void saveRename();
-                    }}
+      <div className={styles.platformStack}>
+        {groups.map((group) => (
+          <article
+            className={`${styles.card} ${styles.platformCard}`}
+            key={group.platform}
+          >
+            <PlatformHeading
+              embedded
+              active
+              platform={group.platform}
+              count={group.accounts.length}
+              action={
+                group.meta.available ? (
+                  <button
+                    type="button"
+                    className={styles.platformAddButton}
+                    onClick={openAddDialog}
+                    disabled={!desktop}
+                    title={
+                      desktop
+                        ? `添加 ${group.meta.name} 账户`
+                        : '浏览器预览无法发起授权'
+                    }
                   >
-                    <input
-                      className={styles.textInput}
-                      value={renaming.value}
-                      onChange={(event) =>
-                        setRenaming({ ...renaming, value: event.target.value })
-                      }
-                      maxLength={60}
-                      aria-label="账户名称"
-                      autoFocus
-                    />
-                    <button type="submit" className={styles.button} disabled={!desktop}>
-                      保存
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.buttonGhost}
-                      onClick={() => setRenaming(null)}
-                    >
-                      取消
-                    </button>
-                  </form>
-                ) : null}
-
-                {confirming === account.accountId ? (
-                  <div className={styles.inlineConfirm}>
-                    <span className={styles.usageNote}>
-                      移除后本应用会删除该账户的独立授权目录；本机 Codex 登录不受影响。
-                    </span>
-                    <div className={styles.inlineConfirmActions}>
+                    <Plus size={13} weight="bold" aria-hidden />
+                    添加账户
+                  </button>
+                ) : null
+              }
+            />
+            {group.accounts.map((account) => {
+              const managed = account.source === 'managed';
+              const busy = account.products.some((product) => product.query.refreshing);
+              const plan = planLabel(account);
+              return (
+                <div className={styles.accountRow} key={account.accountId}>
+                  <div className={styles.accountRowHead}>
+                    <div className={styles.accountTitle}>
+                      <h3>{account.displayName}</h3>
+                      <span
+                        className={styles.authStatus}
+                        data-state={account.authState}
+                      >
+                        <span className={styles.authDot} aria-hidden="true" />
+                        {AUTH_LABELS[account.authState]}
+                      </span>
+                      {plan ? <span className={styles.planTag}>{plan}</span> : null}
+                    </div>
+                    <div className={styles.accountActions}>
                       <button
                         type="button"
-                        className={styles.dangerButton}
-                        onClick={() => void confirmRemove(account.accountId)}
-                        disabled={!desktop}
+                        className={styles.miniButton}
+                        onClick={() => void refresh(account.accountId)}
+                        disabled={!desktop || busy}
+                        aria-label={`刷新 ${account.displayName} 的额度`}
+                        title="刷新额度"
                       >
-                        确认移除
+                        <ArrowClockwise
+                          size={14}
+                          className={busy ? styles.spin : undefined}
+                        />
+                      </button>
+                      {managed ? (
+                        <>
+                          <button
+                            type="button"
+                            className={styles.miniButton}
+                            onClick={() => void startReauth(account)}
+                            disabled={!desktop}
+                            aria-label="重新授权"
+                            title="重新授权"
+                          >
+                            <LinkSimple size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.miniButton}
+                            onClick={() =>
+                              setRenaming({
+                                accountId: account.accountId,
+                                value: account.displayName,
+                              })
+                            }
+                            disabled={!desktop}
+                            aria-label="重命名"
+                            title="重命名"
+                          >
+                            <PencilSimple size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.miniButton}
+                            onClick={() => setConfirming(account.accountId)}
+                            disabled={!desktop}
+                            aria-label="移除账户"
+                            title="移除账户"
+                            data-danger
+                          >
+                            <Trash size={14} />
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                  <p className={styles.accountMeta}>
+                    {managed ? '独立授权' : '本机登录态'}
+                    {account.identityHint ? ` · ${account.identityHint}` : ''}
+                  </p>
+                  <p className={styles.accountMeta}>
+                    {account.products.map((product) => product.displayName).join('、')}
+                    {' · '}
+                    {checkedAtLabel(latestSnapshotEpoch(account))}
+                  </p>
+
+                  {renaming?.accountId === account.accountId ? (
+                    <form
+                      className={styles.inlineForm}
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void saveRename();
+                      }}
+                    >
+                      <input
+                        className={styles.textInput}
+                        value={renaming.value}
+                        onChange={(event) =>
+                          setRenaming({ ...renaming, value: event.target.value })
+                        }
+                        maxLength={60}
+                        aria-label="账户名称"
+                        autoFocus
+                      />
+                      <button type="submit" className={styles.button} disabled={!desktop}>
+                        保存
                       </button>
                       <button
                         type="button"
                         className={styles.buttonGhost}
-                        onClick={() => setConfirming(null)}
+                        onClick={() => setRenaming(null)}
                       >
                         取消
                       </button>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </article>
-      )}
+                    </form>
+                  ) : null}
 
-      <p className={`${styles.settingHint} ${styles.groupNote}`}>
-        本机账户沿用本机 Codex CLI 的登录态；独立账户通过官方浏览器授权接入，
-        登录令牌由 Codex 保存在应用数据目录下的独立授权目录中，不经过前端展示。
-      </p>
-      <div className={styles.accountsActions}>
-        <button
-          type="button"
-          className={styles.button}
-          onClick={() => {
-            setDraftName('');
-            setDialog({ kind: 'add-form' });
-          }}
-          disabled={!desktop}
-          title={desktop ? '添加 Codex 账户' : '浏览器预览无法发起授权'}
-        >
-          <Plus size={15} weight="bold" aria-hidden />
-          添加账户
-        </button>
+                  {confirming === account.accountId ? (
+                    <div className={styles.inlineConfirm}>
+                      <span className={styles.usageNote}>
+                        移除后本应用会删除该账户的独立授权目录；本机 Codex
+                        登录不受影响。
+                      </span>
+                      <div className={styles.inlineConfirmActions}>
+                        <button
+                          type="button"
+                          className={styles.dangerButton}
+                          onClick={() => void confirmRemove(account.accountId)}
+                          disabled={!desktop}
+                        >
+                          确认移除
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.buttonGhost}
+                          onClick={() => setConfirming(null)}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </article>
+        ))}
+
+        {unavailable.map((meta) => (
+          <article
+            key={meta.key}
+            className={`${styles.card} ${styles.platformCard} ${styles.platformCardMuted}`}
+          >
+            <PlatformHeading
+              embedded
+              platform={meta.key}
+              status="待接入"
+              active={false}
+            />
+            <p className={styles.plannedNote}>
+              {meta.name}账户尚未开放接入。开放后会在这里单独管理，与现有账户互不影响。
+            </p>
+          </article>
+        ))}
       </div>
 
       {dialog ? (
