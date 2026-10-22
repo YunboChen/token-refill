@@ -1,23 +1,16 @@
-import { ArrowClockwise } from '@phosphor-icons/react';
+import { ArrowClockwise, Gauge } from '@phosphor-icons/react';
+import { m, useReducedMotion } from 'motion/react';
 import type { AccountState } from '../lib/desktop';
 import { groupAccountsByPlatform } from '../lib/platforms';
 import { useAppState } from '../lib/store';
 import PlatformHeading from '../components/PlatformHeading';
+import PlatformLogo from '../components/PlatformLogo';
 import styles from '../App.module.css';
 
-/** 尚未接入的套餐占位；文案与 docs/platform-integration-validation.md 的验证状态保持一致。 */
-const pendingPlans = [
-  {
-    title: '百炼 Token Plan',
-    tag: '个人版',
-    note: '尚未接入：个人版查询授权与 Credits 计量字段仍待验证，接入后在此按账户展示。',
-  },
-  {
-    title: '百炼 Coding Plan',
-    tag: '中国站',
-    note: '尚未接入：中国站查询授权与多窗口调用次数口径仍待验证，接入后在此按账户展示。',
-  },
-];
+const RING_SIZE = 64;
+const RING_STROKE = 5;
+const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 function durationLabel(mins: number | null): string {
   if (mins === null) return '';
@@ -25,6 +18,11 @@ function durationLabel(mins: number | null): string {
   if (mins < 1440) return `${Math.round(mins / 60)} 小时`;
   if (mins === 10080) return '1 周';
   return `${Math.round(mins / 1440)} 天`;
+}
+
+function windowLabel(mins: number | null): string {
+  const duration = durationLabel(mins);
+  return duration ? `${duration}窗口` : '额度窗口';
 }
 
 function resetLabel(epoch: number | null): string {
@@ -45,20 +43,83 @@ function clockLabel(epoch: number): string {
   });
 }
 
+/** 剩余额度环：数值在环中央，弧长随剩余比例变化。 */
+function QuotaRing({
+  value,
+  low,
+  label,
+}: {
+  value: number | null;
+  low: boolean;
+  label: string;
+}) {
+  const reducedMotion = useReducedMotion();
+  const known = value !== null;
+  const percent = known ? Math.min(100, Math.max(0, value)) : 0;
+  const offset = RING_CIRCUMFERENCE * (1 - percent / 100);
+
+  return (
+    <div
+      className={styles.ring}
+      data-low={low || undefined}
+      data-unknown={!known || undefined}
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={known ? percent : undefined}
+      aria-valuetext={known ? `剩余 ${percent}%` : '剩余比例未知'}
+    >
+      <svg
+        className={styles.ringSvg}
+        viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+        aria-hidden="true"
+        focusable="false"
+      >
+        <circle
+          className={styles.ringTrack}
+          cx={RING_SIZE / 2}
+          cy={RING_SIZE / 2}
+          r={RING_RADIUS}
+          fill="none"
+          strokeWidth={RING_STROKE}
+        />
+        {known ? (
+          <m.circle
+            className={styles.ringArc}
+            cx={RING_SIZE / 2}
+            cy={RING_SIZE / 2}
+            r={RING_RADIUS}
+            fill="none"
+            strokeWidth={RING_STROKE}
+            strokeLinecap="round"
+            strokeDasharray={RING_CIRCUMFERENCE}
+            initial={false}
+            animate={{ strokeDashoffset: offset }}
+            transition={
+              reducedMotion
+                ? { duration: 0 }
+                : { duration: 0.8, ease: [0.16, 1, 0.3, 1] }
+            }
+            transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
+          />
+        ) : null}
+      </svg>
+      <span className={styles.ringValue}>{known ? `${percent}%` : '-'}</span>
+    </div>
+  );
+}
+
 function UsageSkeleton() {
   return (
-    <div className={styles.skeleton} aria-hidden="true">
-      {[
-        { label: 'w96', foot: 'w150' },
-        { label: 'w120', foot: 'w180' },
-      ].map((row) => (
-        <div className={styles.skelRow} key={row.label}>
-          <div className={styles.skelHead}>
-            <span className={`${styles.skel} ${styles[row.label]}`} />
-            <span className={`${styles.skel} ${styles.w56}`} />
+    <div className={styles.quotaGrid} aria-hidden="true">
+      {[0, 1].map((index) => (
+        <div className={styles.quotaTile} key={index}>
+          <span className={`${styles.skel} ${styles.skelRing}`} />
+          <div className={styles.skelLines}>
+            <span className={`${styles.skel} ${styles.w96}`} />
+            <span className={`${styles.skel} ${styles.w150}`} />
           </div>
-          <span className={`${styles.skel} ${styles.meterSkel}`} />
-          <span className={`${styles.skel} ${styles[row.foot]}`} />
         </div>
       ))}
     </div>
@@ -93,26 +154,30 @@ function CodexAccountCard({
     : null;
 
   return (
-    <article className={styles.card} aria-live="polite">
-      <header className={styles.cardHead}>
-        <div className={styles.cardTitleRow}>
-          <h3>{account.displayName}</h3>
-          <span className={styles.accountProduct}>
-            {product?.displayName ?? 'Codex 订阅'}
-            {account.identityHint ? ` · ${account.identityHint}` : ''}
-          </span>
-          {planLabel ? <span className={styles.planTag}>{planLabel}</span> : null}
+    <article className={styles.accountCard} aria-live="polite">
+      <header className={styles.accountHead}>
+        <div className={styles.accountTitleBlock}>
+          <h3 className={styles.accountName}>{account.displayName}</h3>
+          <p className={styles.accountMetaLine}>
+            <span>{product?.displayName ?? 'Codex 订阅'}</span>
+            {planLabel ? <span className={styles.planBadge}>{planLabel}</span> : null}
+            {account.identityHint ? (
+              <span className={styles.accountHint} title={account.identityHint}>
+                {account.identityHint}
+              </span>
+            ) : null}
+          </p>
         </div>
-        <div className={styles.cardTools}>
+        <div className={styles.accountTools}>
           {snapshot ? (
-            <span className={styles.stamp}>
+            <span className={styles.updatedAt}>
               更新于 {clockLabel(snapshot.checkedAtEpoch)}
               {busy ? ' · 刷新中' : ''}
             </span>
           ) : null}
           <button
             type="button"
-            className={styles.iconButton}
+            className={styles.refreshButton}
             onClick={() => void refresh(account.accountId)}
             disabled={!desktop || busy}
             aria-label={`刷新 ${account.displayName} 的额度`}
@@ -128,7 +193,7 @@ function CodexAccountCard({
       </header>
 
       {!desktop ? (
-        <p className={styles.usageNote}>
+        <p className={styles.accountNote}>
           浏览器预览无法调用 Rust，请在桌面应用内查看（
           <code className={styles.codeChip}>pnpm tauri dev</code>）。
         </p>
@@ -139,7 +204,7 @@ function CodexAccountCard({
           {snapshot && lastError ? (
             <p className={styles.noticeStale} role="status">
               上次刷新失败：{lastError.message}
-              <span className={styles.usageNote}>（错误码：{lastError.code}）</span>
+              <span className={styles.noticeAside}>（错误码：{lastError.code}）</span>
               {snapshot ? ` 当前显示 ${clockLabel(snapshot.checkedAtEpoch)} 的数据。` : null}
             </p>
           ) : null}
@@ -147,68 +212,55 @@ function CodexAccountCard({
           {snapshot ? (
             <>
               {snapshot.groups.length === 0 ? (
-                <p className={styles.usageNote}>当前账号未返回额度窗口数据。</p>
+                <p className={styles.accountNote}>当前账号未返回额度窗口数据。</p>
               ) : (
-                <div className={styles.rows}>
-                  {snapshot.groups.map((group, groupIndex) => (
-                    <div
-                      className={styles.usageGroup}
-                      key={group.limitId ?? `group-${groupIndex}`}
-                    >
-                      {group.limitName ? (
-                        <p className={styles.groupLabel}>{group.limitName}</p>
-                      ) : null}
-                      <div className={styles.rows}>
-                        {group.windows.map((window) => {
-                          const remaining = window.remainingPercent;
-                          const used = window.usedPercent;
-                          const label = durationLabel(window.windowDurationMins) || '额度窗口';
-                          const low =
-                            lowQuotaEnabled
-                            && remaining !== null
-                            && remaining <= threshold;
-                          return (
-                            <div className={styles.usageRow} key={window.windowId}>
-                              <div className={styles.usageRowHead}>
-                                <span className={styles.usageLabel}>{label}</span>
-                                <span className={styles.usagePercent} data-low={low || undefined}>
-                                  {remaining === null ? '-' : `${remaining}%`}
-                                </span>
+                snapshot.groups.map((group, groupIndex) => (
+                  <section
+                    className={styles.quotaGroup}
+                    key={group.limitId ?? `group-${groupIndex}`}
+                  >
+                    {group.limitName ? (
+                      <p className={styles.quotaGroupLabel}>{group.limitName}</p>
+                    ) : null}
+                    <div className={styles.quotaGrid}>
+                      {group.windows.map((window) => {
+                        const remaining = window.remainingPercent;
+                        const used = window.usedPercent;
+                        const low =
+                          lowQuotaEnabled
+                          && remaining !== null
+                          && remaining <= threshold;
+                        const label = windowLabel(window.windowDurationMins);
+                        return (
+                          <div className={styles.quotaTile} key={window.windowId}>
+                            <QuotaRing
+                              value={remaining}
+                              low={low}
+                              label={`${account.displayName} ${label}剩余比例`}
+                            />
+                            <div className={styles.quotaCopy}>
+                              <div className={styles.quotaTitleRow}>
+                                <span className={styles.quotaLabel}>{label}</span>
                               </div>
-                              <div
-                                className={styles.meter}
-                                role="progressbar"
-                                aria-label={`${account.displayName} ${label}剩余比例`}
-                                aria-valuenow={remaining ?? undefined}
-                                aria-valuemin={0}
-                                aria-valuemax={100}
-                              >
-                                <div
-                                  className={styles.meterFill}
-                                  style={{ width: `${remaining ?? 0}%` }}
-                                  data-low={low || undefined}
-                                  data-unknown={remaining === null || undefined}
-                                />
-                              </div>
-                              <div className={styles.usageRowFoot}>
-                                <span>{resetLabel(window.resetsAtEpoch)}</span>
-                                <span>{used === null ? '已用未知' : `已用 ${used}%`}</span>
-                              </div>
+                              <span className={styles.quotaMeta}>
+                                {resetLabel(window.resetsAtEpoch)}
+                                {used !== null ? ` · 已用 ${used}%` : ''}
+                              </span>
                               {low ? (
-                                <p className={styles.lowNote}>
+                                <span className={styles.quotaLowNote}>
                                   剩余已低于提醒阈值 {threshold}%
-                                </p>
+                                </span>
                               ) : null}
                             </div>
-                          );
-                        })}
-                      </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  ))}
-                </div>
+                  </section>
+                ))
               )}
               {snapshot.capabilityGaps.length > 0 ? (
-                <p className={styles.usageUpdated}>
+                <p className={styles.dataGaps}>
                   数据缺口：{snapshot.capabilityGaps.join('；')}
                 </p>
               ) : null}
@@ -216,15 +268,15 @@ function CodexAccountCard({
           ) : busy ? (
             <>
               <UsageSkeleton />
-              <p className={styles.usageUpdated}>正在通过 Codex CLI 查询额度…</p>
+              <p className={styles.accountNote}>正在通过 Codex CLI 查询额度…</p>
             </>
           ) : lastError ? (
             <p className={styles.noticeDanger}>
               {lastError.message}
-              <span className={styles.usageNote}>（错误码：{lastError.code}）</span>
+              <span className={styles.noticeAside}>（错误码：{lastError.code}）</span>
             </p>
           ) : (
-            <p className={styles.usageNote}>
+            <p className={styles.accountNote}>
               尚未获取额度。点击右上角刷新；后台会自动重试。
             </p>
           )}
@@ -242,9 +294,17 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
 
   return (
     <section>
-      <div className={styles.platformStack}>
+      <div className={styles.overviewStack}>
         {state.accounts.length === 0 ? (
-          <p className={styles.usageNote}>尚未接入账户。请在“账户”页添加。</p>
+          <div className={styles.overviewEmpty}>
+            <span className={styles.emptyGlyph} aria-hidden="true">
+              <Gauge size={24} weight="duotone" />
+            </span>
+            <h2 className={styles.emptyTitle}>还没有可查看的额度</h2>
+            <p className={styles.usageNote}>
+              在“账户”页接入账户后，这里会显示每个账户的剩余额度、周期与重置时间。
+            </p>
+          </div>
         ) : (
           groups.map((group) => (
             <section className={styles.platformGroup} key={group.platform}>
@@ -253,7 +313,7 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
                 count={group.accounts.length}
                 active
               />
-              <div className={styles.cardStack}>
+              <div className={styles.accountStack}>
                 {group.accounts.map((account) => (
                   <CodexAccountCard
                     key={account.accountId}
@@ -270,20 +330,16 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
           ))
         )}
 
-        <section className={styles.platformGroup}>
-          <PlatformHeading platform="bailian" status="待接入" active={false} />
-          <article className={`${styles.card} ${styles.plannedCard}`}>
-            {pendingPlans.map((plan) => (
-              <div key={plan.title} className={styles.pendingRow}>
-                <div className={styles.pendingHead}>
-                  <h3>{plan.title}</h3>
-                  <span className={styles.planTag}>{plan.tag}</span>
-                </div>
-                <p className={styles.usageNote}>{plan.note}</p>
-              </div>
-            ))}
-          </article>
-        </section>
+        <footer className={styles.upcoming}>
+          <span className={styles.upcomingBadge} aria-hidden="true">
+            <PlatformLogo platform="bailian" fallback="百" />
+          </span>
+          <p className={styles.upcomingNote}>
+            <span className={styles.upcomingName}>百炼</span>
+            Token Plan 与 Coding Plan 正在验证接入，开放后会在这里按账户分别展示。
+          </p>
+          <span className={styles.upcomingStatus}>待接入</span>
+        </footer>
       </div>
     </section>
   );

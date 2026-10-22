@@ -1,6 +1,5 @@
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
-import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { Gauge, GearSix, Info, UsersThree, type Icon } from '@phosphor-icons/react';
 import { version as appVersion } from '../package.json';
 import logoWordmark from './assets/logo-text.png';
@@ -28,7 +27,7 @@ const PANELS: {
     label: '总览',
     Icon: Gauge,
     title: '总览',
-    subtitle: '各账户与套餐的额度、周期和重置时间在一处查看；不同计量口径的数据不做合并。',
+    subtitle: '每个账户的额度、周期与重置时间，一处看清。',
   },
   {
     key: 'accounts',
@@ -50,8 +49,8 @@ export default function App() {
   const [active, setActive] = useState<PanelKey>('overview');
   const { error } = useAppState();
   const desktop = isTauri();
-  const reducedMotion = useReducedMotion();
   const current = PANELS.find((panel) => panel.key === active) ?? PANELS[0];
+  const activeIndex = Math.max(0, PANELS.findIndex((panel) => panel.key === active));
 
   return (
     <div className={styles.app}>
@@ -66,7 +65,14 @@ export default function App() {
           height={87}
         />
 
-        <nav className={styles.nav} aria-label="管理窗口分区" role="tablist" aria-orientation="vertical">
+        <nav
+          className={styles.nav}
+          style={{ '--nav-index': activeIndex } as CSSProperties}
+          aria-label="管理窗口分区"
+          role="tablist"
+          aria-orientation="vertical"
+        >
+          <span className={styles.navPill} aria-hidden="true" />
           {PANELS.map((panel) => (
             <button
               key={panel.key}
@@ -79,14 +85,6 @@ export default function App() {
               data-active={active === panel.key || undefined}
               onClick={() => setActive(panel.key)}
             >
-              {active === panel.key ? (
-                <m.span
-                  layoutId="navPill"
-                  className={styles.navPill}
-                  initial={false}
-                  transition={{ type: 'spring', stiffness: 520, damping: 38 }}
-                />
-              ) : null}
               <span className={styles.navLabel}>
                 <panel.Icon size={18} className={styles.navIcon} aria-hidden />
                 <span className={styles.navText}>{panel.label}</span>
@@ -116,23 +114,12 @@ export default function App() {
         {/* 页面头部独立于滚动区：直接顶到窗口上沿，同时作为拖拽区 */}
         <header className={styles.pageHeader} data-tauri-drag-region>
           <div className={styles.pageHeaderInner}>
-            <AnimatePresence mode="wait" initial={false}>
-              <m.div
-                key={active}
-                data-tauri-drag-region
-                initial={reducedMotion ? false : { opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={reducedMotion ? { opacity: 1 } : { opacity: 0 }}
-                transition={{ duration: reducedMotion ? 0 : 0.15, ease: 'easeOut' }}
-              >
-                <h1 className={styles.panelTitle} data-tauri-drag-region>
-                  {current.title}
-                </h1>
-                <p className={styles.subtitle} data-tauri-drag-region>
-                  {current.subtitle}
-                </p>
-              </m.div>
-            </AnimatePresence>
+            <h1 className={styles.panelTitle} data-tauri-drag-region>
+              {current.title}
+            </h1>
+            <p className={styles.subtitle} data-tauri-drag-region>
+              {current.subtitle}
+            </p>
           </div>
         </header>
 
@@ -142,23 +129,17 @@ export default function App() {
               {error}
             </p>
           ) : null}
-          <AnimatePresence mode="wait" initial={false}>
-            <m.div
-              key={active}
-              id={`panel-${active}`}
-              role="tabpanel"
-              aria-labelledby={`tab-${active}`}
-              className={styles.panelWrap}
-              initial={reducedMotion ? false : { opacity: 0, y: 5 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={reducedMotion ? { opacity: 1 } : { opacity: 0 }}
-              transition={{ duration: reducedMotion ? 0 : 0.15, ease: 'easeOut' }}
-            >
-              {active === 'overview' ? <OverviewPanel desktop={desktop} /> : null}
-              {active === 'accounts' ? <AccountsPanel /> : null}
-              {active === 'settings' ? <SettingsPanel /> : null}
-            </m.div>
-          </AnimatePresence>
+          <div
+            key={active}
+            id={`panel-${active}`}
+            role="tabpanel"
+            aria-labelledby={`tab-${active}`}
+            className={styles.panelWrap}
+          >
+            {active === 'overview' ? <OverviewPanel desktop={desktop} /> : null}
+            {active === 'accounts' ? <AccountsPanel /> : null}
+            {active === 'settings' ? <SettingsPanel /> : null}
+          </div>
 
           {!desktop ? (
             <footer className={styles.footer}>

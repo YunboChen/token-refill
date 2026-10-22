@@ -7,7 +7,7 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   /* 主色取自 logo 蓝色渐变：浅 #a9d6fa · 亮 #2186ee · 深 #0a4fb4。
-     圆角规则：卡片 14px / 控件 10px / 计量条与标签全圆，全应用统一。 */
+     圆角规则：卡片 16px / 控件 10px / 标签与开关全圆，全应用统一。 */
   --background: #f4f6f9;
   --surface: #ffffff;
   --sunken: #eaeef4;
@@ -20,6 +20,7 @@
   --accent-strong-hover: #2a5fae;
   --accent-text: #f6faff;
   --accent-soft: #e4edfa;
+  --accent-wash: rgb(15 102 214 / 0.05);
   --danger: #bf2f4b;
   --danger-soft: #fae9ee;
   --focus: #0f66d6;
@@ -44,6 +45,7 @@
   --accent-strong-hover: #5aa6ff;
   --accent-text: #0b2540;
   --accent-soft: #1c2f47;
+  --accent-wash: rgb(108 182 245 / 0.07);
   --danger: #ff9db0;
   --danger-soft: #3b222c;
   --focus: #6cb6f5;

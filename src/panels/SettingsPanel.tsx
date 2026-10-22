@@ -173,7 +173,7 @@ export default function SettingsPanel() {
           checked={prefs.lowQuotaEnabled}
           onChange={(next) => update({ lowQuotaEnabled: next })}
           label="低额度提醒"
-          hint="仅在能可靠获得或计算剩余比例时适用，总览中的额度条会同步标记。"
+          hint="仅在能可靠获得或计算剩余比例时适用，总览中的剩余额度环会同步标记。"
         />
         <div
           className={styles.stackRow}

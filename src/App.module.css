@@ -36,14 +36,18 @@
   filter: var(--wordmark-filter);
 }
 
-/* 侧边导航：激活底色块用 Motion layoutId 在选项间滑动。 */
+/* 侧边导航：选中底色块用 CSS transform 在选项间滑动。
+   每项固定 36px、间距 4px，位移 = 索引 × 40px。 */
 .nav {
+  position: relative;
   display: grid;
   gap: 4px;
 }
 
 .navItem {
   position: relative;
+  z-index: 1;
+  height: 36px;
   padding: 0;
   border: 0;
   background: none;
@@ -86,9 +90,16 @@
 
 .navPill {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  z-index: 0;
+  width: 100%;
+  height: 36px;
   border-radius: 10px;
   background: var(--accent-soft);
+  pointer-events: none;
+  transform: translateY(calc(var(--nav-index, 0) * 40px));
+  transition: transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* 侧栏底部：版本号与 tip 图标并排靠左，margin-top:auto 把它压到窗口底部。
@@ -166,16 +177,17 @@
 
 /* 固定页面头：标题与提示语留在条带内，不随下方内容滚动。
    高度固定为「标题 + 一行提示语」，各分区切换时条带高度不变。
-   用 surface 底色 + 发丝分隔与滚动区分档，与卡片同属“前景层”。 */
+   用从 surface 到画布的柔和渐变加一条发丝线收口，和内容区分开，
+   但不是整块实色工具栏。 */
 .pageHeader {
   flex-shrink: 0;
   height: 82px;
   padding: 12px 28px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: linear-gradient(180deg, var(--surface), var(--background));
 }
 
-/* 页头随窗口铺满 */
+/* 页头始终靠左，不跟正文抢居中宽度 */
 .pageHeaderInner {
   width: 100%;
 }
@@ -183,7 +195,7 @@
 /* 内容区设最大宽度，窗口拉宽后正文不无限伸展，水平居中 */
 .mainScroll > * {
   width: 100%;
-  max-width: 880px;
+  max-width: 920px;
   margin-inline: auto;
 }
 
@@ -192,7 +204,7 @@
 .mainScroll {
   flex: 1;
   min-height: 0;
-  padding: 20px 28px 20px;
+  padding: 16px 28px 28px;
   overflow-y: auto;
   /* 到底/到顶后不再回弹，也不把滚动传给根层（contain 仍保留本地回弹） */
   overscroll-behavior: none;
@@ -200,6 +212,19 @@
 
 .panelWrap {
   min-width: 0;
+  animation: panelIn 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* 主体内容进场：页头保持不动，只有内容轻微上浮。 */
+@keyframes panelIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* 内容首块不再叠加头部间距，避免固定头与卡片之间出现双倍留白 */
@@ -210,10 +235,10 @@
 /* 面板标题 */
 .panelTitle {
   margin: 0;
-  font-size: 23px;
+  font-size: 26px;
   font-weight: 700;
-  letter-spacing: -0.015em;
-  line-height: 1.35;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
 }
 
 .subtitle,
@@ -226,53 +251,20 @@
 
 /* 提示语固定一行，窗口过窄时省略，保证页头高度恒定 */
 .subtitle {
-  margin: 6px 0 0;
+  margin: 3px 0 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* 卡片：仅真实层级容器使用；圆角统一 14px */
+/* 卡片：仅真实层级容器使用；圆角统一 16px */
 .card {
   margin-top: 18px;
   padding: 18px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 16px;
   background: var(--surface);
   box-shadow: var(--shadow-card);
-}
-
-.cardHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.cardTitleRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.cardTitleRow h3 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 650;
-}
-
-.cardTools {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.stamp {
-  color: var(--muted);
-  font-size: 11.5px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 .planTag {
@@ -286,37 +278,6 @@
   white-space: nowrap;
 }
 
-.iconButton {
-  display: grid;
-  flex-shrink: 0;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  color: var(--text);
-  background: var(--surface);
-  cursor: pointer;
-  transition: background-color 150ms ease-out, border-color 150ms ease-out,
-    transform 100ms ease-out;
-}
-
-.iconButton:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: var(--sunken);
-}
-
-.iconButton:active:not(:disabled) {
-  transform: scale(0.94);
-}
-
-.iconButton:disabled {
-  color: var(--muted);
-  opacity: 0.55;
-  cursor: default;
-}
-
 .spin {
   animation: spin 900ms linear infinite;
 }
@@ -327,37 +288,6 @@
   }
 }
 
-/* 额度行：标签 + 大号剩余百分比 + 细计量条 + 基脚注 */
-.rows {
-  display: grid;
-  gap: 16px;
-  margin-top: 16px;
-}
-
-.usageGroup {
-  display: grid;
-  gap: 10px;
-}
-
-.usageGroup .rows {
-  margin-top: 0;
-}
-
-.groupLabel {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.01em;
-}
-
-.usageRow {
-  display: grid;
-  gap: 7px;
-}
-
-.usageRowHead,
-.usageRowFoot,
 .rangeHead {
   display: flex;
   align-items: baseline;
@@ -365,64 +295,269 @@
   gap: 12px;
 }
 
-.usageLabel {
-  font-size: 13px;
-  font-weight: 600;
+.usageNote {
+  margin: 0;
 }
 
-.usagePercent {
-  font-size: 15px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--accent);
+/* ---------- 总览：平台分组、账户额度卡与剩余额度环 ---------- */
+
+.overviewStack {
+  display: grid;
+  gap: 28px;
+  margin-top: 2px;
 }
 
-.usagePercent[data-low] {
-  color: var(--danger);
+.overviewEmpty {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 48px 24px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  text-align: center;
 }
 
-.meter {
-  height: 7px;
-  overflow: hidden;
+.emptyGlyph {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  margin-bottom: 4px;
   border-radius: 999px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.overviewEmpty .usageNote {
+  max-width: 360px;
+}
+
+.accountStack {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.accountCard {
+  padding: 20px 22px 22px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background-color: var(--surface);
+  background-image: linear-gradient(180deg, var(--accent-wash), transparent 44%);
+  box-shadow: var(--shadow-card);
+}
+
+.accountHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.accountTitleBlock {
+  min-width: 0;
+}
+
+.accountName {
+  margin: 0;
+  font-size: 16.5px;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  line-height: 1.35;
+}
+
+.accountMetaLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.planBadge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+
+.accountHint {
+  overflow: hidden;
+  max-width: 220px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountTools {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.updatedAt {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.refreshButton {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  transition: color 150ms ease-out, background-color 150ms ease-out,
+    transform 100ms ease-out;
+}
+
+.refreshButton:hover:not(:disabled) {
+  color: var(--text);
   background: var(--sunken);
 }
 
-.meterFill {
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent-strong);
-  transition: width 480ms cubic-bezier(0.16, 1, 0.3, 1);
+.refreshButton:active:not(:disabled) {
+  transform: scale(0.92);
 }
 
-.meterFill[data-low] {
-  background: var(--danger);
+.refreshButton:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
-.meterFill[data-unknown] {
-  background: var(--border-strong);
+.accountNote {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.65;
 }
 
-.usageRowFoot {
+.quotaGroup {
+  margin-top: 18px;
+}
+
+.quotaGroupLabel {
+  margin: 0 0 10px;
   color: var(--muted);
   font-size: 12px;
+  font-weight: 650;
 }
 
-.lowNote {
-  margin: 0;
+/* 额度窗口直接落在卡片上，不再套一层盒子：环 + 标签 + 重置信息 */
+.quotaGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(248px, 1fr));
+  gap: 18px;
+}
+
+.quotaTile {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.ring {
+  position: relative;
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+}
+
+.ringSvg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.ringTrack {
+  stroke: var(--border);
+}
+
+.ringArc {
+  stroke: var(--accent-strong);
+}
+
+.ring[data-low] .ringArc {
+  stroke: var(--danger);
+}
+
+.ring[data-unknown] .ringTrack {
+  stroke-dasharray: 2 5;
+  stroke-linecap: round;
+}
+
+.ringValue {
+  position: relative;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.ring[data-low] .ringValue {
   color: var(--danger);
-  font-size: 11.5px;
+}
+
+.ring[data-unknown] .ringValue {
+  color: var(--muted);
   font-weight: 600;
 }
 
-.usageUpdated {
-  margin: 14px 0 0;
-  color: var(--muted);
-  font-size: 12px;
+.quotaCopy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
 
-.usageNote {
-  margin: 0;
+.quotaTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.quotaLabel {
+  font-size: 13.5px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.quotaMeta {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.quotaLowNote {
+  color: var(--danger);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.dataGaps {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.6;
 }
 
 /* 状态块：错误 / 提示，圆角 10 与控件同档 */
@@ -437,8 +572,9 @@
   overflow-wrap: anywhere;
 }
 
-.noticeDanger .usageNote {
+.noticeAside {
   color: inherit;
+  opacity: 0.72;
 }
 
 /* 刷新失败但保留缓存：中性提示，避免错误条盖掉已有数据 */
@@ -454,8 +590,9 @@
   overflow-wrap: anywhere;
 }
 
-.noticeStale .usageNote {
+.noticeStale .noticeAside {
   color: var(--muted);
+  opacity: 1;
 }
 
 .globalNotice {
@@ -513,18 +650,7 @@
   font-weight: 600;
 }
 
-/* 骨架屏：与真实行同形，避免通用转圈 */
-.skeleton {
-  display: grid;
-  gap: 16px;
-  margin-top: 16px;
-}
-
-.skelRow {
-  display: grid;
-  gap: 8px;
-}
-
+/* 骨架屏：与额度窗口同形（环 + 两行文字），避免通用转圈 */
 .skel {
   display: block;
   height: 11px;
@@ -533,17 +659,21 @@
   animation: pulse 1.3s ease-in-out infinite;
 }
 
-.skelHead {
-  display: flex;
-  justify-content: space-between;
+.skelRing {
+  flex-shrink: 0;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+}
+
+.skelLines {
+  display: grid;
+  flex: 1;
+  gap: 8px;
 }
 
 .w96 { width: 96px; }
-.w120 { width: 120px; }
-.w56 { width: 56px; }
 .w150 { width: 150px; }
-.w180 { width: 180px; }
-.meterSkel { height: 7px; border-radius: 999px; }
 
 @keyframes pulse {
   50% {
@@ -571,24 +701,6 @@
   border-top: 1px solid var(--border);
 }
 
-.pendingRow {
-  display: grid;
-  gap: 4px;
-  padding: 12px 0;
-}
-
-.pendingHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.pendingHead h3 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-}
 
 /* 设置行：整行可点（label 包住开关），悬浮时给一层轻底色 */
 .settingRow {
@@ -786,7 +898,7 @@
   outline-offset: 2px;
 }
 
-/* 阈值滑块：轨道按当前值填充，与开关、额度条使用同一主色 */
+/* 阈值滑块：轨道按当前值填充，与开关、剩余额度环使用同一主色 */
 .range {
   width: 100%;
   height: 22px;
@@ -929,7 +1041,7 @@
   margin-top: 18px;
   padding: 44px 24px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 16px;
   background: var(--surface);
   box-shadow: var(--shadow-card);
   text-align: center;
@@ -961,18 +1073,6 @@
   margin-top: 6px;
 }
 
-/* ---------- 多账户与授权对话框 ---------- */
-
-.cardStack {
-  display: grid;
-  gap: 14px;
-  margin-top: 18px;
-}
-
-.cardStack > .card {
-  margin-top: 0;
-}
-
 /* ---------- 平台分组：标题带 + 列表，平台靠徽标与名称区分 ---------- */
 
 .platformStack {
@@ -985,16 +1085,12 @@
   min-width: 0;
 }
 
-.platformGroup .cardStack {
-  margin-top: 12px;
-}
-
 /* 独立标题行（总览）与卡片内标题带（账户）共用同一套排版 */
 .platformHeading {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 2px;
+  gap: 14px;
+  padding: 0 4px;
 }
 
 .platformCardHead {
@@ -1011,10 +1107,10 @@
   display: grid;
   flex-shrink: 0;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 42px;
+  height: 42px;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 13px;
   color: var(--muted);
   background: var(--surface);
   font-size: 14px;
@@ -1025,13 +1121,15 @@
 .platformBadge[data-active] {
   border-color: transparent;
   color: var(--accent);
-  background: var(--accent-soft);
+  background:
+    linear-gradient(155deg, var(--accent-soft), transparent 72%),
+    var(--surface);
 }
 
 .platformLogo {
   display: block;
-  width: 19px;
-  height: 19px;
+  width: 21px;
+  height: 21px;
 }
 
 .platformLogoFallback {
@@ -1056,23 +1154,23 @@
 
 .platformName {
   margin: 0;
-  font-size: 14px;
+  font-size: 17px;
   font-weight: 650;
-  letter-spacing: -0.005em;
+  letter-spacing: -0.015em;
   line-height: 1.3;
 }
 
 .platformVendor {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .platformDescription {
   margin: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.55;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1086,7 +1184,7 @@
 
 .platformCount {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -1158,18 +1256,50 @@
   line-height: 1.65;
 }
 
-/* 总览页的待接入计划：平铺在浅底面板里，不再使用虚线占位 */
-.plannedCard {
-  margin-top: 12px;
-  padding: 2px 18px;
-  border-color: var(--border);
-  background: var(--sunken);
-  box-shadow: none;
+/* 待接入平台：一行的页脚说明，不再单独占一块卡片 */
+.upcoming {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px;
 }
 
-.accountProduct {
+.upcomingBadge {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--sunken);
+}
+
+.upcomingBadge .platformLogo {
+  width: 17px;
+  height: 17px;
+}
+
+.upcomingNote {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.upcomingName {
+  margin-right: 6px;
+  color: var(--text);
+  font-weight: 650;
+}
+
+.upcomingStatus {
+  flex-shrink: 0;
   color: var(--muted);
   font-size: 11.5px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
