@@ -1,7 +1,7 @@
 # Token Refill 软件设计文档
 
-- 文档版本：0.11
-- 状态：已实现 Codex 本地只读链路背后的统一状态层与后台刷新调度；平台鉴权、百炼字段与多账户授权仍未定案
+- 文档版本：0.12
+- 状态：已实现 Codex 本机查询、官方浏览器授权多账户、统一状态层与后台刷新调度；百炼字段与授权仍未定案
 - 最近更新：2026-10-22
 - 需求来源：[需求文档](./requirements.md)
 
@@ -16,12 +16,14 @@
 | 层次 | 现状 | 位置 |
 | --- | --- | --- |
 | 前端界面 | 总览、账户、设置三页；读取统一状态并订阅变更事件 | `src/panels/` |
-| 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences` 与 `app-state-changed` | `src/lib/desktop.ts`、`src/lib/store.tsx` |
-| 本地后端 | Rust 状态存储、后台刷新调度与 Codex 适配器 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs` |
+| 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences`、账户授权/改名/移除命令与 `app-state-changed`、`account-login-changed` 事件 | `src/lib/desktop.ts`、`src/lib/store.tsx` |
+| 本地后端 | Rust 状态存储、后台刷新调度、Codex 适配器与独立授权目录协调 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs` |
 | 桌面配置 | 窗口、构建、安全策略及打包配置 | `src-tauri/tauri.conf.json` |
 | 权限声明 | 窗口权限与事件监听权限 | `src-tauri/capabilities/` |
 
-现有调用链为：前端启动 → 订阅 `app-state-changed` → `get_app_state` 取缓存快照 → Rust 调度器按间隔或手动请求查询 Codex app-server → 状态落盘并广播。账户凭证尚未引入；当前 Codex 查询使用本机既有登录态，不读取或保存凭证。
+现有调用链为：前端启动 → 订阅 `app-state-changed` → `get_app_state` 取缓存快照 → Rust 调度器按间隔或手动请求查询 Codex app-server → 状态落盘并广播。
+
+账户分两类：本机账户沿用现有登录态；独立账户在应用数据目录的 `codex-profiles/<accountId>/` 下拥有独立 `CODEX_HOME`。每次查询会在同一 app-server 会话中先读取 `account/read` 获取脱敏邮箱与套餐档位，再读取额度；即使额度请求失败（如网络异常），只要身份读取成功，账户页仍能显示当前登录账号，身份读取本身失败则保留原值，不误清空。添加或重新授权时，Rust 启动该目录下的 app-server，调用官方 `account/login/start` 取得浏览器授权 URL，等待 `account/login/completed` 后读取身份与额度。登录令牌由 Codex CLI 写入隔离目录，应用不解析、不复制、不向前端返回；`account-login-changed` 仅携带流程标识、账户标识、状态和脱敏错误。
 
 ## 3. 候选职责划分
 
@@ -127,7 +129,7 @@ Windows 不进入本次首发验收。用户已确认 macOS 首版同时支持 A
 
 | 对象 | 建议核心内容 | 约束 |
 | --- | --- | --- |
-| Account | 本地随机 `accountId`、平台、显示名、可选脱敏身份标识、授权状态 | 不以邮箱作唯一主键；不在前端对象中携带凭证或安全存储引用 |
+| Account | 本地随机/生成 `accountId`、平台、显示名、授权来源（本机或独立授权）、可选脱敏身份标识、授权状态 | 不以邮箱作唯一主键；不在前端对象中携带凭证或安全存储引用 |
 | Product | 本地 `productId`、所属账户、产品类型、可选套餐档位及远端标识 | 首批类型为 Codex 订阅、Token Plan 个人版、Coding Plan 中国站；远端标识不可靠时不猜测 |
 | QuotaWindow | 本地窗口标识、来源窗口标识、标签、计量单位、可选总量/已用/剩余/比例、可选周期及重置时间 | 不强制存在绝对额度；比例必须来源可靠或能在相同口径下推导 |
 | QuotaSnapshot | 对应产品、额度窗口列表、最近成功获取时间、可选来源更新时间、能力缺口 | 只保留所需快照；来源更新时间未知时不能把本地查询时间冒充平台更新时间 |
@@ -157,7 +159,7 @@ Windows 不进入本次首发验收。用户已确认 macOS 首版同时支持 A
 - 移除账户时明确凭证、缓存与配置各自的删除范围。
 - 遥测、云同步与诊断上报不默认引入；如确有需求，单独讨论数据与授权范围。
 
-首发系统已确定为 macOS，Keychain 为凭证存储的建议方案，尚未完成选型验证；后续 Windows 需要对应的系统安全存储方案。用户已接受主动导入已有授权的产品方向，但每种来源的具体读取范围、系统权限及续期方式仍需明确，实际读取应由用户主动授权。
+首发系统已确定为 macOS，Keychain 仍为后续系统级凭证存储的候选方案。当前 Codex 独立账户由 Codex CLI 在应用数据目录的 `codex-profiles/<accountId>/` 中维护授权文件，目录权限 0700；应用本身不解析或复制令牌。移除账户时删除对应目录，不影响本机默认登录。后续 Windows 需要对应的安全存储与目录权限方案。用户已接受主动导入已有授权的产品方向，但每种来源的具体读取范围、系统权限及续期方式仍需明确，实际读取应由用户主动授权。
 
 ### 6.1 本地持久化方案建议
 
@@ -287,17 +289,17 @@ Windows 不进入本次首发验收。用户已确认 macOS 首版同时支持 A
 
 ## 10. IPC 与平台适配契约草案
 
-下列名称描述内部命令边界。`get_app_state`、`refresh_usage`、`update_preferences` 已实现；其余仍为计划名称，不是已存在的 Tauri 命令。具体参数和类型在接入验证后继续调整。
+下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`cancel_account_login`、`rename_account`、`remove_account`、`open_external_url`。其余仍为计划名称。
 
 ### 10.1 前端命令边界
 
 | 候选命令 | 输入方向 | 结果与限制 | 对应需求 |
 | --- | --- | --- | --- |
 | get_app_state | 无敏感输入 | 返回脱敏账户、产品、快照、查询状态、设置与版本标记；不返回凭证 | REQ-001、REQ-002、REQ-008 |
-| begin_account_connection | 产品类型、接入方式及需要重新授权时的账户标识 | 返回流程标识与可展示状态；实际授权及主动导入由 Rust 协调，不能假设已存在 OAuth 或可复制令牌 | REQ-003 |
-| cancel_account_connection | 流程标识 | 取消本应用流程及必要临时状态，不改变外部工具登录 | REQ-003 |
-| rename_account | 本地账户标识、显示名 | 校验并保存名称，向两个界面同步 | REQ-003 |
-| remove_account | 本地账户标识、已确认的移除意图 | 停止该账户任务并清理本应用数据，失败可见；不执行外部全局注销 | REQ-003 |
+| begin_account_login（已实现） | 可选账户标识与显示名 | 为独立 `CODEX_HOME` 启动官方 ChatGPT 授权，返回 `loginId` 与浏览器授权 URL；令牌不经过前端 | REQ-003 |
+| cancel_account_login（已实现） | 流程标识 | 取消本应用授权流程；不改变本机 Codex 登录 | REQ-003 |
+| rename_account（已实现） | 本地账户标识、显示名 | 校验并保存名称，向两个界面同步 | REQ-003 |
+| remove_account（已实现） | 本地账户标识 | 仅允许移除独立授权账户，删除本应用授权目录并停止后续查询；本机账户不可移除 | REQ-003 |
 | refresh_usage | 全部账户或指定本地账户 | 返回任务标识或已合并的在途任务，不等待全部查询才响应；后端执行去重与限流 | REQ-004 |
 | update_preferences | 经校验的设置变更 | 保存常规设置并协调系统操作；系统拒绝通知或自启时如实返回实际状态 | REQ-004、REQ-006、REQ-010 |
 | get_system_permissions / request_notification_permission | 读取状态或用户明确触发的权限请求 | 区分应用设置与系统许可；不在额度查询失败时反复弹出权限申请 | REQ-006、REQ-010 |

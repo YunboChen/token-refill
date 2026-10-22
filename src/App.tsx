@@ -14,7 +14,7 @@ type PanelKey = 'overview' | 'accounts' | 'settings';
 
 /* 侧栏底部的说明文案：只在悬浮/聚焦 tip 图标时出现 */
 const LOCAL_ONLY_NOTE =
-  '本地运行。Codex 额度通过本机官方 app-server 只读查询，不读取或保存登录凭证。';
+  '本地运行。本机账户沿用 Codex CLI 登录态；独立账户通过官方浏览器授权，各自使用隔离的本地授权目录，令牌不在界面中展示。';
 
 const PANELS: {
   key: PanelKey;

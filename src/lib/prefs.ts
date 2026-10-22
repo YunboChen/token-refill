@@ -32,6 +32,8 @@ export function defaultAppState(): AppState {
         platform: 'codex',
         displayName: '本机 Codex',
         authState: 'unknown',
+        source: 'local',
+        identityHint: null,
         products: [
           {
             productId: 'codex-subscription',

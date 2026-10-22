@@ -15,6 +15,8 @@ export function getAppInfo(): Promise<AppInfo> {
 // ---------- 与 Rust state.rs 对应的脱敏状态 ----------
 
 export type AuthState = 'unknown' | 'ok' | 'needs-reauth';
+/** local：本机 Codex 登录态；managed：应用内独立授权账户。 */
+export type AccountSource = 'local' | 'managed';
 
 export interface Preferences {
   refreshMinutes: number;
@@ -73,7 +75,24 @@ export interface AccountState {
   platform: string;
   displayName: string;
   authState: AuthState;
+  source: AccountSource;
+  identityHint: string | null;
   products: ProductState[];
+}
+
+export interface LoginStart {
+  loginId: string;
+  accountId: string;
+  authUrl: string;
+}
+
+export type LoginStatus = 'succeeded' | 'failed' | 'canceled';
+
+export interface AccountLoginEvent {
+  loginId: string;
+  accountId: string;
+  status: LoginStatus;
+  message: string | null;
 }
 
 export interface AppState {
@@ -84,6 +103,7 @@ export interface AppState {
 }
 
 export const APP_STATE_EVENT = 'app-state-changed';
+export const ACCOUNT_LOGIN_EVENT = 'account-login-changed';
 
 export function getAppState(): Promise<AppState> {
   return invoke<AppState>('get_app_state');
@@ -102,4 +122,38 @@ export function onAppStateChanged(
   handler: (state: AppState) => void,
 ): Promise<UnlistenFn> {
   return listen<AppState>(APP_STATE_EVENT, (event) => handler(event.payload));
+}
+
+/** 发起官方浏览器授权；authUrl 由 Codex app-server 返回，令牌不经过前端。 */
+export function beginAccountLogin(
+  accountId?: string,
+  displayName?: string,
+): Promise<LoginStart> {
+  return invoke<LoginStart>('begin_account_login', {
+    accountId: accountId ?? null,
+    displayName: displayName ?? null,
+  });
+}
+
+export function cancelAccountLogin(loginId: string): Promise<void> {
+  return invoke<void>('cancel_account_login', { loginId });
+}
+
+export function renameAccount(accountId: string, displayName: string): Promise<AppState> {
+  return invoke<AppState>('rename_account', { accountId, displayName });
+}
+
+export function removeAccount(accountId: string): Promise<AppState> {
+  return invoke<AppState>('remove_account', { accountId });
+}
+
+/** 由 Rust 校验仅允许 HTTPS，并交给系统浏览器打开。 */
+export function openExternalUrl(url: string): Promise<void> {
+  return invoke<void>('open_external_url', { url });
+}
+
+export function onAccountLoginChanged(
+  handler: (event: AccountLoginEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<AccountLoginEvent>(ACCOUNT_LOGIN_EVENT, (event) => handler(event.payload));
 }

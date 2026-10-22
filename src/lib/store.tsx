@@ -9,11 +9,17 @@ import {
 } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import {
+  beginAccountLogin,
+  cancelAccountLogin,
   getAppState,
   onAppStateChanged,
+  openExternalUrl,
   refreshUsage,
+  removeAccount as removeAccountCommand,
+  renameAccount as renameAccountCommand,
   updatePreferences,
   type AppState,
+  type LoginStart,
   type Preferences,
 } from './desktop';
 import { clearLegacyPreferences, defaultAppState, readLegacyPreferences } from './prefs';
@@ -25,6 +31,11 @@ interface AppStateContextValue {
   error: string | null;
   refresh: (accountId?: string) => Promise<void>;
   savePreferences: (preferences: Preferences) => Promise<boolean>;
+  beginLogin: (accountId?: string, displayName?: string) => Promise<LoginStart | null>;
+  cancelLogin: (loginId: string) => Promise<void>;
+  renameAccount: (accountId: string, displayName: string) => Promise<boolean>;
+  removeAccount: (accountId: string) => Promise<boolean>;
+  openExternal: (url: string) => Promise<void>;
 }
 
 const AppStateContext = createContext<AppStateContextValue | null>(null);
@@ -137,6 +148,77 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [desktop, applyState],
   );
 
+  const beginLogin = useCallback(
+    async (accountId?: string, displayName?: string) => {
+      if (!desktop) return null;
+      try {
+        const start = await beginAccountLogin(accountId, displayName);
+        setError(null);
+        return start;
+      } catch (err) {
+        setError(errorMessage(err));
+        return null;
+      }
+    },
+    [desktop],
+  );
+
+  const cancelLogin = useCallback(
+    async (loginId: string) => {
+      if (!desktop) return;
+      try {
+        await cancelAccountLogin(loginId);
+      } catch (err) {
+        setError(errorMessage(err));
+      }
+    },
+    [desktop],
+  );
+
+  const renameAccount = useCallback(
+    async (accountId: string, displayName: string) => {
+      if (!desktop) return false;
+      try {
+        const next = await renameAccountCommand(accountId, displayName);
+        applyState(next);
+        setError(null);
+        return true;
+      } catch (err) {
+        setError(errorMessage(err));
+        return false;
+      }
+    },
+    [desktop, applyState],
+  );
+
+  const removeAccount = useCallback(
+    async (accountId: string) => {
+      if (!desktop) return false;
+      try {
+        const next = await removeAccountCommand(accountId);
+        applyState(next);
+        setError(null);
+        return true;
+      } catch (err) {
+        setError(errorMessage(err));
+        return false;
+      }
+    },
+    [desktop, applyState],
+  );
+
+  const openExternal = useCallback(
+    async (url: string) => {
+      if (!desktop) return;
+      try {
+        await openExternalUrl(url);
+      } catch (err) {
+        setError(errorMessage(err));
+      }
+    },
+    [desktop],
+  );
+
   const value = useMemo<AppStateContextValue>(
     () => ({
       state,
@@ -145,8 +227,25 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       error,
       refresh,
       savePreferences,
+      beginLogin,
+      cancelLogin,
+      renameAccount,
+      removeAccount,
+      openExternal,
     }),
-    [state, ready, desktop, error, refresh, savePreferences],
+    [
+      state,
+      ready,
+      desktop,
+      error,
+      refresh,
+      savePreferences,
+      beginLogin,
+      cancelLogin,
+      renameAccount,
+      removeAccount,
+      openExternal,
+    ],
   );
 
   return (

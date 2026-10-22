@@ -1,14 +1,20 @@
 //! Codex 订阅用量读取：通过本机 `codex app-server` 的 stdio JSON-RPC 协议查询额度。
 //!
-//! 不读取、不复制 Codex 登录凭证；只启动官方 app-server 子进程发起只读查询，
-//! 完成后立即退出。CLI 缺失或未登录时返回结构化错误，由界面提示。
-//! 协议结构来自 `codex app-server generate-json-schema`（CLI 0.163.0）。
+//! 两数据来源：
+//! - 本机账户：沿用用户已有的 Codex 登录态（不读取、不复制其凭证）。
+//! - 托管账户：为每个账户设置独立 `CODEX_HOME`，通过官方 `account/login/start`
+//!   浏览器授权登录；授权令牌由 Codex CLI 写入该独立目录，应用不解析、不回传。
+//!
+//! 查询只启动官方 app-server 子进程发起只读请求，完成后立即退出；CLI 缺失或
+//! 未登录时返回结构化错误，由界面提示。协议结构来自
+//! `codex app-server generate-json-schema`（CLI 0.160.1）。
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -68,6 +74,41 @@ impl UsageError {
 
 fn io_error(err: impl std::fmt::Display) -> UsageError {
     UsageError::new("io", format!("启动 Codex app-server 失败：{err}"))
+}
+
+/// `account/read` 返回的脱敏身份信息；不含任何令牌。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexIdentity {
+    pub account_type: String,
+    pub email: Option<String>,
+    pub plan_type: Option<String>,
+}
+
+/// 浏览器授权流程的公开信息：只含流程标识与授权 URL。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginStart {
+    pub login_id: String,
+    pub auth_url: String,
+}
+
+/// 授权完成后的结果。额度读取失败不影响账户已授权的事实。
+#[derive(Debug)]
+pub struct LoginOutcome {
+    pub identity: Option<CodexIdentity>,
+    pub usage: Option<CodexUsage>,
+    pub usage_error: Option<UsageError>,
+}
+
+/// 一次查询的结果。额度失败不丢弃已读到的身份：网络异常时仍能展示本机
+/// 登录的是哪个账户。`identity_checked` 表示 `account/read` 是否成功返回；
+/// 只有成功返回且账户为空时，才应清除界面上的身份提示。
+#[derive(Debug)]
+pub struct CodexReadout {
+    pub usage: Result<CodexUsage, UsageError>,
+    pub identity: Option<CodexIdentity>,
+    pub identity_checked: bool,
 }
 
 /// 只把明确的登录/未授权错误归为授权失效；普通网络或协议错误仍按 rpc 处理，
@@ -169,6 +210,26 @@ fn parse_rate_limits(
     })
 }
 
+/// 解析 `account/read` 结果。账户为空时返回 None，而不是伪造身份。
+fn parse_identity(value: &serde_json::Value) -> Option<CodexIdentity> {
+    let account = value.get("account")?.as_object()?;
+    Some(CodexIdentity {
+        account_type: account
+            .get("type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
+        email: account
+            .get("email")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        plan_type: account
+            .get("planType")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+    })
+}
+
 // ---------- Codex CLI 查找 ----------
 
 fn is_executable(path: &Path) -> bool {
@@ -246,14 +307,19 @@ struct AppServer {
 }
 
 impl AppServer {
-    fn spawn(binary: &Path) -> Result<Self, UsageError> {
-        let mut child = Command::new(binary)
+    /// `codex_home` 为 Some 时使用独立的 CODEX_HOME；None 时沿用进程环境，
+    /// 即本机已登录的 Codex 账户。
+    fn spawn(binary: &Path, codex_home: Option<&Path>) -> Result<Self, UsageError> {
+        let mut command = Command::new(binary);
+        command
             .args(["app-server", "--stdio"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(io_error)?;
+            .stderr(Stdio::null());
+        if let Some(codex_home) = codex_home {
+            command.env("CODEX_HOME", codex_home);
+        }
+        let mut child = command.spawn().map_err(io_error)?;
 
         let stdin = child
             .stdin
@@ -288,6 +354,42 @@ impl AppServer {
         line.push('\n');
         self.stdin.write_all(line.as_bytes()).map_err(io_error)?;
         self.stdin.flush().map_err(io_error)
+    }
+
+    fn initialize(&mut self) -> Result<(), UsageError> {
+        self.send(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "clientInfo": {
+                    "name": "token-refill",
+                    "title": "Token Refill",
+                    "version": env!("CARGO_PKG_VERSION"),
+                }
+            }
+        }))?;
+        self.await_response(1, INITIALIZE_TIMEOUT)?;
+        self.send(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "initialized"
+        }))
+    }
+
+    fn send_request(
+        &mut self,
+        id: i64,
+        method: &str,
+        params: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, UsageError> {
+        self.send(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params
+        }))?;
+        self.await_response(id, timeout)
     }
 
     /// 读取消息直到收到指定 id 的响应；通知与其他响应被忽略。
@@ -353,48 +455,225 @@ impl Drop for AppServer {
     }
 }
 
-pub fn read_usage() -> Result<CodexUsage, UsageError> {
+/// `codex_home` 为 Some 时查询该独立授权目录下的账户，None 时查询本机登录态。
+pub fn read_usage(codex_home: Option<&Path>) -> Result<CodexReadout, UsageError> {
     let binary = find_codex_binary()?;
-    read_usage_from(&binary)
+    read_usage_from(&binary, codex_home)
 }
 
-fn read_usage_from(binary: &Path) -> Result<CodexUsage, UsageError> {
-    let mut server = AppServer::spawn(binary)?;
+fn read_usage_from(binary: &Path, codex_home: Option<&Path>) -> Result<CodexReadout, UsageError> {
+    let mut server = AppServer::spawn(binary, codex_home)?;
+    server.initialize()?;
 
-    server.send(serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "clientInfo": {
-                "name": "token-refill",
-                "title": "Token Refill",
-                "version": env!("CARGO_PKG_VERSION"),
-            }
-        }
-    }))?;
-    server.await_response(1, INITIALIZE_TIMEOUT)?;
+    // 身份读取是附带能力：失败不影响额度查询，也不能据此清空已有身份提示。
+    let (identity, identity_checked) = match server.send_request(
+        2,
+        "account/read",
+        serde_json::json!({ "refreshToken": false }),
+        READ_TIMEOUT,
+    ) {
+        Ok(result) => (parse_identity(&result), true),
+        Err(_) => (None, false),
+    };
 
-    server.send(serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "initialized"
-    }))?;
+    let usage = server
+        .send_request(
+            3,
+            "account/rateLimits/read",
+            serde_json::json!({ "excludeResetCreditDetails": true }),
+            READ_TIMEOUT,
+        )
+        .and_then(|result| {
+            let checked_at_epoch = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or_default();
+            parse_rate_limits(result, checked_at_epoch)
+        });
 
-    let result = {
+    Ok(CodexReadout {
+        usage,
+        identity,
+        identity_checked,
+    })
+}
+
+// ---------- 浏览器授权登录 ----------
+
+/// 一次进行中的浏览器授权。`wait` 持有 app-server 进程直到授权完成或取消。
+pub struct LoginSession {
+    server: AppServer,
+    login_id: String,
+    auth_url: String,
+    next_request_id: i64,
+}
+
+impl LoginSession {
+    /// 在独立 `CODEX_HOME` 中启动官方 ChatGPT 授权流程。
+    pub fn start(binary: &Path, codex_home: &Path) -> Result<Self, UsageError> {
+        let mut server = AppServer::spawn(binary, Some(codex_home))?;
+        server.initialize()?;
         server.send(serde_json::json!({
             "jsonrpc": "2.0",
             "id": 2,
+            "method": "account/login/start",
+            "params": { "type": "chatgpt" }
+        }))?;
+        let result = server.await_response(2, INITIALIZE_TIMEOUT)?;
+        let login_id = result
+            .get("loginId")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| UsageError::new("decode", "Codex 授权响应缺少 loginId"))?
+            .to_string();
+        let auth_url = result
+            .get("authUrl")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| UsageError::new("decode", "Codex 授权响应缺少授权地址"))?
+            .to_string();
+        Ok(Self {
+            server,
+            login_id,
+            auth_url,
+            next_request_id: 3,
+        })
+    }
+
+    pub fn info(&self) -> LoginStart {
+        LoginStart {
+            login_id: self.login_id.clone(),
+            auth_url: self.auth_url.clone(),
+        }
+    }
+
+    /// 等待 `account/login/completed`。`cancel` 置位后主动取消并返回 canceled。
+    pub fn wait(
+        &mut self,
+        cancel: &AtomicBool,
+        timeout: Duration,
+    ) -> Result<LoginOutcome, UsageError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if cancel.load(Ordering::SeqCst) {
+                self.cancel();
+                return Err(UsageError::new("canceled", "已取消授权。"));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                self.cancel();
+                return Err(UsageError::new(
+                    "timeout",
+                    "等待浏览器授权超时，请重新发起授权。",
+                ));
+            }
+            let wait = remaining.min(Duration::from_millis(250));
+            match self.server.incoming.recv_timeout(wait) {
+                Ok(message) => {
+                    if message.get("method").and_then(|value| value.as_str())
+                        != Some("account/login/completed")
+                    {
+                        continue;
+                    }
+                    let params = message
+                        .get("params")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    let same_login = params
+                        .get("loginId")
+                        .and_then(|value| value.as_str())
+                        .map(|id| id == self.login_id)
+                        .unwrap_or(true);
+                    if !same_login {
+                        continue;
+                    }
+                    if params
+                        .get("success")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false)
+                    {
+                        break;
+                    }
+                    let detail = params
+                        .get("error")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("浏览器授权未完成");
+                    return Err(UsageError::new(
+                        "login",
+                        format!("Codex 授权失败：{detail}"),
+                    ));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let status = self.server.child.wait().ok();
+                    let code = status.and_then(|s| s.code()).unwrap_or(-1);
+                    return Err(UsageError::new(
+                        "server-exit",
+                        format!("Codex app-server 在授权期间退出（退出码 {code}）。"),
+                    ));
+                }
+            }
+        }
+
+        let identity = self.identity().ok().flatten();
+        let (usage, usage_error) = match self.rate_limits() {
+            Ok(usage) => (Some(usage), None),
+            Err(error) => (None, Some(error)),
+        };
+        Ok(LoginOutcome {
+            identity,
+            usage,
+            usage_error,
+        })
+    }
+
+    fn identity(&mut self) -> Result<Option<CodexIdentity>, UsageError> {
+        let id = self.take_request_id();
+        self.server.send(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "account/read",
+            "params": { "refreshToken": false }
+        }))?;
+        let result = self.server.await_response(id, READ_TIMEOUT)?;
+        Ok(parse_identity(&result))
+    }
+
+    fn rate_limits(&mut self) -> Result<CodexUsage, UsageError> {
+        let id = self.take_request_id();
+        self.server.send(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
             "method": "account/rateLimits/read",
             "params": { "excludeResetCreditDetails": true }
         }))?;
-        server.await_response(2, READ_TIMEOUT)?
-    };
+        let result = self.server.await_response(id, READ_TIMEOUT)?;
+        let checked_at_epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or_default();
+        parse_rate_limits(result, checked_at_epoch)
+    }
 
-    let checked_at_epoch = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or_default();
-    parse_rate_limits(result, checked_at_epoch)
+    fn take_request_id(&mut self) -> i64 {
+        let id = self.next_request_id;
+        self.next_request_id += 1;
+        id
+    }
+
+    fn cancel(&mut self) {
+        let id = self.take_request_id();
+        if self
+            .server
+            .send(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "account/login/cancel",
+                "params": { "loginId": self.login_id }
+            }))
+            .is_ok()
+        {
+            let _ = self.server.await_response(id, Duration::from_secs(3));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -479,29 +758,29 @@ mod tests {
 
         // 合成数据脚本模拟 `codex app-server --stdio`：验证进程管理、
         // 行分隔 JSON-RPC、通知跳过与响应解析全链路，不使用真实账户。
-        let response = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "result": {
-                "rateLimits": fixture()["rateLimits"],
-                "rateLimitsByLimitId": fixture()["rateLimitsByLimitId"]
-            }
+        let result = serde_json::json!({
+            "rateLimits": fixture()["rateLimits"],
+            "rateLimitsByLimitId": fixture()["rateLimitsByLimitId"]
         })
         .to_string();
         let script = format!(
             r#"#!/usr/bin/env python3
 import sys, json
-RESPONSE = {response:?}
+RESULT = {result:?}
+IDENTITY = {{"account": {{"type": "chatgpt", "email": "local@example.com", "planType": "plus"}}, "requiresOpenaiAuth": True}}
 for line in sys.stdin:
     try:
         msg = json.loads(line)
     except json.JSONDecodeError:
         continue
-    if msg.get("method") == "initialize":
+    method = msg.get("method")
+    if method == "initialize":
         print(json.dumps({{"jsonrpc": "2.0", "id": msg["id"], "result": {{"userAgent": "fake"}}}}), flush=True)
         print(json.dumps({{"jsonrpc": "2.0", "method": "account/rateLimits/updated", "params": {{}}}}), flush=True)
-    elif msg.get("method") == "account/rateLimits/read":
-        print(RESPONSE, flush=True)
+    elif method == "account/read":
+        print(json.dumps({{"jsonrpc": "2.0", "id": msg["id"], "result": IDENTITY}}), flush=True)
+    elif method == "account/rateLimits/read":
+        print(json.dumps({{"jsonrpc": "2.0", "id": msg["id"], "result": json.loads(RESULT)}}), flush=True)
 "#
         );
         let path =
@@ -509,14 +788,117 @@ for line in sys.stdin:
         fs::write(&path, script).expect("write fake server");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod fake server");
 
-        let usage = read_usage_from(&path).expect("fake server responds");
+        let readout = read_usage_from(&path, None).expect("fake server responds");
         fs::remove_file(&path).ok();
 
+        let usage = readout.usage.expect("usage parses");
         assert!(usage.checked_at_epoch > 0);
         assert_eq!(usage.buckets.len(), 1);
         assert_eq!(usage.buckets[0].windows.len(), 2);
         assert_eq!(usage.buckets[0].windows[0].remaining_percent, 96);
         assert_eq!(usage.buckets[0].windows[1].remaining_percent, 87);
+        assert!(readout.identity_checked);
+        assert_eq!(
+            readout
+                .identity
+                .and_then(|identity| identity.email)
+                .as_deref(),
+            Some("local@example.com")
+        );
+    }
+
+    #[test]
+    fn account_response_parses_identity_without_tokens() {
+        let identity = parse_identity(&serde_json::json!({
+            "account": {
+                "type": "chatgpt",
+                "email": "synth@example.com",
+                "planType": "plus"
+            },
+            "requiresOpenaiAuth": true
+        }))
+        .expect("identity");
+        assert_eq!(identity.account_type, "chatgpt");
+        assert_eq!(identity.email.as_deref(), Some("synth@example.com"));
+        assert_eq!(identity.plan_type.as_deref(), Some("plus"));
+
+        assert!(parse_identity(&serde_json::json!({ "account": null })).is_none());
+    }
+
+    #[test]
+    fn login_session_drives_fake_app_server_in_isolated_home() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // 合成脚本同时验证：授权流程、完成通知、独立 CODEX_HOME 与额度读取。
+        // 不使用真实账户，也不写入任何真实凭证。
+        let home =
+            std::env::temp_dir().join(format!("token-refill-login-home-{}", std::process::id()));
+        fs::remove_dir_all(&home).ok();
+        fs::create_dir_all(&home).expect("create fake codex home");
+
+        let usage = serde_json::json!({
+            "rateLimits": fixture()["rateLimits"],
+            "rateLimitsByLimitId": fixture()["rateLimitsByLimitId"]
+        })
+        .to_string();
+        let identity = serde_json::json!({
+            "account": {
+                "type": "chatgpt",
+                "email": "synth@example.com",
+                "planType": "plus"
+            },
+            "requiresOpenaiAuth": true
+        })
+        .to_string();
+        let script = format!(
+            r#"#!/usr/bin/env python3
+import sys, json, os
+HOME = {home:?}
+USAGE = {usage:?}
+IDENTITY = {identity:?}
+if os.environ.get("CODEX_HOME") != HOME:
+    sys.exit(7)
+for line in sys.stdin:
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    method = msg.get("method")
+    if method == "initialize":
+        print(json.dumps({{"jsonrpc": "2.0", "id": msg["id"], "result": {{"userAgent": "fake"}}}}), flush=True)
+    elif method == "account/login/start":
+        print(json.dumps({{"jsonrpc": "2.0", "id": msg["id"], "result": {{"type": "chatgpt", "loginId": "login-1", "authUrl": "https://auth.example.test/authorize"}}}}), flush=True)
+        print(json.dumps({{"jsonrpc": "2.0", "method": "account/login/completed", "params": {{"loginId": "login-1", "success": True, "error": None}}}}), flush=True)
+    elif method == "account/read":
+        print(json.dumps({{"jsonrpc": "2.0", "id": msg["id"], "result": json.loads(IDENTITY)}}), flush=True)
+    elif method == "account/rateLimits/read":
+        print(json.dumps({{"jsonrpc": "2.0", "id": msg["id"], "result": json.loads(USAGE)}}), flush=True)
+"#
+        );
+        let path = std::env::temp_dir().join(format!(
+            "token-refill-fake-login-codex-{}.py",
+            std::process::id()
+        ));
+        fs::write(&path, script).expect("write fake server");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod fake server");
+
+        let mut session = LoginSession::start(&path, &home).expect("login starts");
+        assert_eq!(session.info().login_id, "login-1");
+        assert_eq!(
+            session.info().auth_url,
+            "https://auth.example.test/authorize"
+        );
+        let outcome = session
+            .wait(&AtomicBool::new(false), Duration::from_secs(5))
+            .expect("login completes");
+        fs::remove_file(&path).ok();
+        fs::remove_dir_all(&home).ok();
+
+        let identity = outcome.identity.expect("identity");
+        assert_eq!(identity.email.as_deref(), Some("synth@example.com"));
+        let usage = outcome.usage.expect("usage");
+        assert_eq!(usage.buckets[0].windows[0].remaining_percent, 96);
+        assert!(outcome.usage_error.is_none());
     }
 
     #[test]
