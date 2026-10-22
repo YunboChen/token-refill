@@ -560,6 +560,24 @@
   padding: 13px 10px;
 }
 
+/* 非整行可点的设置行（控件本身有语义，如单选药丸组）：文字左、控件右。
+   窗口收窄时在下方媒体查询里退回上下布局。 */
+.settingRowStatic {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-inline: -10px;
+  padding: 13px 10px;
+}
+
+/* 选中滑块按等分宽度计算，因此这里用等宽列，让文字长短不一的选项也能对齐 */
+.settingRowStatic .pills {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+}
+
 .settingText {
   display: grid;
   gap: 2px;
@@ -591,18 +609,6 @@
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--sunken);
-}
-
-.pillsFull {
-  width: 100%;
-}
-
-.pillsFull .pill {
-  flex: 1;
-}
-
-.pillsFull .pillText {
-  text-align: center;
 }
 
 .pill {
@@ -936,5 +942,17 @@
   .settingRow,
   .usageRowHead {
     align-items: flex-start;
+  }
+}
+
+/* 左右结构的药丸行在中等宽度就会挤压说明文字，提前退回上下布局 */
+@media (max-width: 720px) {
+  .settingRowStatic {
+    display: grid;
+    gap: 10px;
+  }
+
+  .settingRowStatic .pills {
+    width: 100%;
   }
 }

@@ -81,7 +81,7 @@ export default function SettingsPanel() {
 
       <h2 id="settings-refresh" className={styles.groupTitle}>刷新</h2>
       <section className={`${styles.card} ${styles.listCard}`} aria-labelledby="settings-refresh">
-        <div className={styles.stackRow}>
+        <div className={styles.settingRowStatic}>
           <div className={styles.settingText}>
             <span id={refreshLabelId} className={styles.settingLabel}>
               自动刷新间隔（分钟）
@@ -91,7 +91,7 @@ export default function SettingsPanel() {
             </span>
           </div>
           <div
-            className={`${styles.pills} ${styles.pillsFull}`}
+            className={styles.pills}
             role="radiogroup"
             aria-labelledby={refreshLabelId}
             style={{
@@ -174,7 +174,7 @@ export default function SettingsPanel() {
 
       <h2 id="settings-system" className={styles.groupTitle}>系统</h2>
       <section className={`${styles.card} ${styles.listCard}`} aria-labelledby="settings-system">
-        <div className={styles.stackRow}>
+        <div className={styles.settingRowStatic}>
           <div className={styles.settingText}>
             <span id={themeLabelId} className={styles.settingLabel}>外观</span>
             <span className={styles.settingHint}>
@@ -182,7 +182,7 @@ export default function SettingsPanel() {
             </span>
           </div>
           <div
-            className={`${styles.pills} ${styles.pillsFull}`}
+            className={styles.pills}
             role="radiogroup"
             aria-labelledby={themeLabelId}
             style={{
