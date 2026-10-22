@@ -14,9 +14,9 @@
       {
         "label": "main",
         "title": "Token Refill",
-        "width": 820,
+        "width": 960,
         "height": 780,
-        "minWidth": 480,
+        "minWidth": 960,
         "minHeight": 560,
         "center": true,
         "resizable": true,
