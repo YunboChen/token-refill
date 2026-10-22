@@ -70,6 +70,24 @@ fn io_error(err: impl std::fmt::Display) -> UsageError {
     UsageError::new("io", format!("启动 Codex app-server 失败：{err}"))
 }
 
+/// 只把明确的登录/未授权错误归为授权失效；普通网络或协议错误仍按 rpc 处理，
+/// 避免把超时误报成需要重新登录。
+fn classify_rpc_error(message: &str) -> &'static str {
+    let lower = message.to_ascii_lowercase();
+    let auth_markers = [
+        "not logged in",
+        "unauthorized",
+        "unauthenticated",
+        "authentication required",
+        "401",
+    ];
+    if auth_markers.iter().any(|marker| lower.contains(marker)) {
+        "auth-expired"
+    } else {
+        "rpc"
+    }
+}
+
 // ---------- 协议响应结构（仅声明本功能用到的字段，其余忽略） ----------
 
 #[derive(Debug, Deserialize)]
@@ -315,7 +333,10 @@ impl AppServer {
                     .get("message")
                     .and_then(|m| m.as_str())
                     .unwrap_or("未知错误");
-                return Err(UsageError::new("rpc", format!("Codex 查询失败：{text}")));
+                return Err(UsageError::new(
+                    classify_rpc_error(text),
+                    format!("Codex 查询失败：{text}"),
+                ));
             }
             return Ok(message
                 .get("result")
@@ -496,6 +517,14 @@ for line in sys.stdin:
         assert_eq!(usage.buckets[0].windows.len(), 2);
         assert_eq!(usage.buckets[0].windows[0].remaining_percent, 96);
         assert_eq!(usage.buckets[0].windows[1].remaining_percent, 87);
+    }
+
+    #[test]
+    fn only_explicit_auth_failures_are_classified_as_expired() {
+        assert_eq!(classify_rpc_error("not logged in"), "auth-expired");
+        assert_eq!(classify_rpc_error("HTTP 401 Unauthorized"), "auth-expired");
+        assert_eq!(classify_rpc_error("request timed out"), "rpc");
+        assert_eq!(classify_rpc_error("unexpected response shape"), "rpc");
     }
 
     #[test]

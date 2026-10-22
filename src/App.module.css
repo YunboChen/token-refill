@@ -334,6 +334,23 @@
   margin-top: 16px;
 }
 
+.usageGroup {
+  display: grid;
+  gap: 10px;
+}
+
+.usageGroup .rows {
+  margin-top: 0;
+}
+
+.groupLabel {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
 .usageRow {
   display: grid;
   gap: 7px;
@@ -382,6 +399,10 @@
   background: var(--danger);
 }
 
+.meterFill[data-unknown] {
+  background: var(--border-strong);
+}
+
 .usageRowFoot {
   color: var(--muted);
   font-size: 12px;
@@ -420,6 +441,27 @@
   color: inherit;
 }
 
+/* 刷新失败但保留缓存：中性提示，避免错误条盖掉已有数据 */
+.noticeStale {
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--sunken);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.noticeStale .usageNote {
+  color: var(--muted);
+}
+
+.globalNotice {
+  margin: 0 0 16px;
+}
+
 /* 草稿说明：中性提示条，不与可交互控件争主色 */
 .draftBanner {
   display: flex;
@@ -456,6 +498,19 @@
 .draftText {
   margin: 0;
   min-width: 0;
+}
+
+.saveState {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.saveState[data-state='error'] {
+  color: var(--danger);
+  font-weight: 600;
 }
 
 /* 骨架屏：与真实行同形，避免通用转圈 */
@@ -887,6 +942,10 @@
 
 .empty .usageNote {
   max-width: 420px;
+}
+
+.accountsActions {
+  margin-top: 14px;
 }
 
 .codeChip {

@@ -1,14 +1,6 @@
-export type ThemePref = 'light' | 'dark' | 'system';
+import type { AppState, Preferences } from './desktop';
 
-export interface Prefs {
-  refreshMinutes: number;
-  lowQuotaEnabled: boolean;
-  lowQuotaThreshold: number;
-  authExpiredEnabled: boolean;
-  resetNoticeEnabled: boolean;
-  autoLaunchEnabled: boolean;
-  theme: ThemePref;
-}
+export type ThemePref = 'light' | 'dark' | 'system';
 
 export const REFRESH_OPTIONS = [1, 5, 15, 30, 60];
 export const THEME_OPTIONS: ThemePref[] = ['light', 'dark', 'system'];
@@ -18,55 +10,131 @@ export const THEME_LABELS: Record<ThemePref, string> = {
   system: '跟随系统',
 };
 
-const STORAGE_KEY = 'token-refill.prefs-draft';
-
-// 默认值取自需求文档已确认项：5 分钟刷新、低额度 20% 且默认开、失效提醒默认开、
-// 重置提醒与自启默认关。
-export const DEFAULT_PREFS: Prefs = {
+// 与 Rust `Preferences::default` 保持一致：5 分钟刷新、低额度 20% 且默认开、
+// 失效提醒默认开、重置提醒与自启默认关。
+export const DEFAULT_PREFERENCES: Preferences = {
   refreshMinutes: 5,
   lowQuotaEnabled: true,
   lowQuotaThreshold: 20,
   authExpiredEnabled: true,
   resetNoticeEnabled: false,
   autoLaunchEnabled: false,
-  theme: 'system',
 };
 
-export function loadPrefs(): Prefs {
+// 浏览器预览使用的占位状态；桌面端以 Rust 返回的完整状态为准。
+export function defaultAppState(): AppState {
+  return {
+    schemaVersion: 1,
+    revision: 0,
+    accounts: [
+      {
+        accountId: 'codex-local',
+        platform: 'codex',
+        displayName: '本机 Codex',
+        authState: 'unknown',
+        products: [
+          {
+            productId: 'codex-subscription',
+            kind: 'codex-subscription',
+            displayName: 'Codex 订阅',
+            planTier: null,
+            snapshot: null,
+            query: {
+              refreshing: false,
+              lastAttemptEpoch: null,
+              lastError: null,
+            },
+          },
+        ],
+      },
+    ],
+    preferences: DEFAULT_PREFERENCES,
+  };
+}
+
+const THEME_KEY = 'token-refill.theme';
+const LEGACY_PREFS_KEY = 'token-refill.prefs-draft';
+
+function validTheme(value: unknown): value is ThemePref {
+  return value === 'light' || value === 'dark' || value === 'system';
+}
+
+function readLegacyDraft(): Record<string, unknown> | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_PREFS;
+    const raw = localStorage.getItem(LEGACY_PREFS_KEY);
+    if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== 'object' || parsed === null) return DEFAULT_PREFS;
-    const draft = parsed as Partial<Prefs>;
-    return {
-      refreshMinutes: REFRESH_OPTIONS.includes(draft.refreshMinutes ?? NaN)
-        ? draft.refreshMinutes as number
-        : DEFAULT_PREFS.refreshMinutes,
-      lowQuotaEnabled: typeof draft.lowQuotaEnabled === 'boolean'
-        ? draft.lowQuotaEnabled : DEFAULT_PREFS.lowQuotaEnabled,
-      lowQuotaThreshold: typeof draft.lowQuotaThreshold === 'number'
-        && draft.lowQuotaThreshold >= 5 && draft.lowQuotaThreshold <= 50
-        ? draft.lowQuotaThreshold : DEFAULT_PREFS.lowQuotaThreshold,
-      authExpiredEnabled: typeof draft.authExpiredEnabled === 'boolean'
-        ? draft.authExpiredEnabled : DEFAULT_PREFS.authExpiredEnabled,
-      resetNoticeEnabled: typeof draft.resetNoticeEnabled === 'boolean'
-        ? draft.resetNoticeEnabled : DEFAULT_PREFS.resetNoticeEnabled,
-      autoLaunchEnabled: typeof draft.autoLaunchEnabled === 'boolean'
-        ? draft.autoLaunchEnabled : DEFAULT_PREFS.autoLaunchEnabled,
-      theme: THEME_OPTIONS.includes(draft.theme as ThemePref)
-        ? draft.theme as ThemePref
-        : DEFAULT_PREFS.theme,
-    };
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null;
   } catch {
-    return DEFAULT_PREFS;
+    return null;
   }
 }
 
-export function savePrefs(prefs: Prefs): void {
+export function loadTheme(): ThemePref {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+    const stored = localStorage.getItem(THEME_KEY);
+    if (validTheme(stored)) return stored;
   } catch {
-    // 本地草稿写入失败不影响页面；正式持久化以后端为准。
+    // 浏览器禁用本地存储时退回系统外观。
+  }
+
+  const legacy = readLegacyDraft();
+  if (legacy && validTheme(legacy.theme)) return legacy.theme;
+  return 'system';
+}
+
+export function saveTheme(theme: ThemePref): void {
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch {
+    // 本地写入失败不影响当前会话的外观。
+  }
+}
+
+/**
+ * 旧版本把整套设置以草稿形式存在 localStorage。升级后读取一次并写入 Rust，
+ * 写入成功后再删除旧键，避免迁移失败时丢掉原有设置。
+ */
+export function readLegacyPreferences(): Preferences | null {
+  const legacy = readLegacyDraft();
+  if (!legacy) return null;
+
+  const refreshMinutes =
+    typeof legacy.refreshMinutes === 'number'
+    && REFRESH_OPTIONS.includes(legacy.refreshMinutes)
+      ? legacy.refreshMinutes
+      : DEFAULT_PREFERENCES.refreshMinutes;
+  const lowQuotaThreshold =
+    typeof legacy.lowQuotaThreshold === 'number'
+    && legacy.lowQuotaThreshold >= 5
+    && legacy.lowQuotaThreshold <= 50
+      ? legacy.lowQuotaThreshold
+      : DEFAULT_PREFERENCES.lowQuotaThreshold;
+
+  return {
+    refreshMinutes,
+    lowQuotaEnabled: typeof legacy.lowQuotaEnabled === 'boolean'
+      ? legacy.lowQuotaEnabled
+      : DEFAULT_PREFERENCES.lowQuotaEnabled,
+    lowQuotaThreshold,
+    authExpiredEnabled: typeof legacy.authExpiredEnabled === 'boolean'
+      ? legacy.authExpiredEnabled
+      : DEFAULT_PREFERENCES.authExpiredEnabled,
+    resetNoticeEnabled: typeof legacy.resetNoticeEnabled === 'boolean'
+      ? legacy.resetNoticeEnabled
+      : DEFAULT_PREFERENCES.resetNoticeEnabled,
+    autoLaunchEnabled: typeof legacy.autoLaunchEnabled === 'boolean'
+      ? legacy.autoLaunchEnabled
+      : DEFAULT_PREFERENCES.autoLaunchEnabled,
+  };
+}
+
+export function clearLegacyPreferences(): void {
+  try {
+    localStorage.removeItem(LEGACY_PREFS_KEY);
+  } catch {
+    // 删除失败不影响已写入后端的设置；下次启动可能再次迁移一次。
   }
 }

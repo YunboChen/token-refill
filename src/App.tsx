@@ -4,6 +4,7 @@ import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { Gauge, GearSix, Info, UsersThree, type Icon } from '@phosphor-icons/react';
 import { version as appVersion } from '../package.json';
 import logoWordmark from './assets/logo-text.png';
+import { useAppState } from './lib/store';
 import OverviewPanel from './panels/OverviewPanel';
 import AccountsPanel from './panels/AccountsPanel';
 import SettingsPanel from './panels/SettingsPanel';
@@ -47,6 +48,7 @@ const PANELS: {
 
 export default function App() {
   const [active, setActive] = useState<PanelKey>('overview');
+  const { error } = useAppState();
   const desktop = isTauri();
   const reducedMotion = useReducedMotion();
   const current = PANELS.find((panel) => panel.key === active) ?? PANELS[0];
@@ -135,6 +137,11 @@ export default function App() {
         </header>
 
         <div className={styles.mainScroll}>
+          {error ? (
+            <p className={`${styles.noticeDanger} ${styles.globalNotice}`} role="alert">
+              {error}
+            </p>
+          ) : null}
           <AnimatePresence mode="wait" initial={false}>
             <m.div
               key={active}

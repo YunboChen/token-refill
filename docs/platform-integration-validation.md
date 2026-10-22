@@ -91,9 +91,11 @@
 
 已通过本机 `codex app-server generate-json-schema`（CLI 0.163.0）导出并核实协议：`initialize` → `initialized` → `account/rateLimits/read` 的 JSON-RPC 方法与行分隔帧格式；响应含 `usedPercent`（必选，语义为**已用**）、可选 `windowDurationMins`、可选 `resetsAt`（Unix 秒）、`planType` 枚举（含 `plus`）及 `rateLimitsByLimitId` 多窗口视图。剩余比例由应用侧 `max(0, 100 - usedPercent)` 派生，低额度判断使用该派生值。
 
-据此实现了 Codex 垂直链路（Rust 命令 `refresh_codex_usage` + 前端额度卡），并用假 app-server 脚本完成进程、协议与解析的端到端测试（合成数据，不含真实账户）。
+据此实现了 Codex 垂直链路（Rust 适配器 + 统一状态层与后台刷新调度 + 前端额度卡），并用假 app-server 脚本完成进程、协议与解析的端到端测试（合成数据，不含真实账户）。前端通过 `get_app_state` 读取缓存状态、`refresh_usage` 触发刷新，并订阅 `app-state-changed`；查询失败保留上次成功快照。
 
-**未在本会话执行真实账户读取**：真实额度返回会携带用户身份与用量数据，属于需用户本人查看的隐私内容。剩余/已用口径的最终确认，由用户运行应用后与 Codex 客户端显示对照：当前截图（5 小时剩 96%、1 周剩 87%）应对应 `usedPercent` 约 4 与 13。若数值相反，说明该字段语义与 schema 命名不符，需回到适配层修正换算。
+**未在本会话执行真实账户读取**：真实额度返回会携带用户身份与用量数据，属于需用户本人查看的隐私内容。剩余/已用口径的最终确认，由用户运行应用后与 Codex 客户端显示对照；文档不记录具体额度数值。若应用显示的剩余比例与客户端相反，说明该字段语义与 schema 命名不符，需回到适配层修正换算。
+
+**2026-10-22 本机运行补充**：用户本机运行的应用已完成一次真实 Codex 查询并写入状态快照；核对状态文件元数据可见 `authState=ok`、`planTier=plus`、`checkedAtEpoch` 有效。自动化会话未读取或记录任何额度数值；剩余/已用口径仍需用户本人对照客户端确认。
 
 当前接入方式为“官方本地组件的受控只读使用”，与已确认原则的边界关系（正式版是否内置/依赖该 CLI）仍是 DEV-003 待决项；不影响本机走通链路。
 

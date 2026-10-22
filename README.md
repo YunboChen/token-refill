@@ -36,7 +36,7 @@ pnpm install --frozen-lockfile
 pnpm tauri dev
 ```
 
-桌面应用启动后，点击“检查 Rust 连接”，应显示 Rust 返回的应用名称、版本、平台和架构。
+桌面应用启动后进入总览页：先展示 Rust 侧缓存（首次为空时显示查询中），随后按设置自动刷新。Codex 需要本机已安装并登录官方 CLI；未安装或未登录时界面会显示对应错误，其他界面仍可用。
 
 只预览网页：
 
@@ -44,7 +44,7 @@ pnpm tauri dev
 pnpm dev
 ```
 
-访问 `http://127.0.0.1:1420`。浏览器预览不会模拟 Rust 返回值，连接检测按钮不可用。
+访问 `http://127.0.0.1:1420`。浏览器预览使用内置默认状态，不会调用 Rust 或读取真实额度；设置仅在当前页面内存中生效。
 
 ## 检查与构建
 
@@ -81,16 +81,21 @@ macOS 26+ 的自适应分层图标（浅色 / 深色 / 有色 / 降低透明度�
 
 ```text
 src/
-  App.tsx             启动页与连接检测交互
-  App.module.css      启动页组件样式
+  App.tsx             管理窗口外壳与分区导航
+  App.module.css      界面组件样式
   styles.css          系统字体、主题 token、全局样式
-  lib/desktop.ts      带类型的 Rust 调用入口
+  lib/desktop.ts      带类型的 Rust 状态与命令入口
+  lib/store.tsx       统一状态订阅、刷新与偏好保存
+  lib/prefs.ts        主题与默认偏好
+  panels/             总览、账户、设置
   assets/logo.png     页头品牌标志
   main.tsx            React 与 Motion 入口
 src-tauri/
-  src/lib.rs          Tauri 启动入口与 get_app_info 命令
+  src/lib.rs          Tauri 启动入口与 IPC 命令
+  src/state.rs        状态模型、JSON 持久化与刷新调度
+  src/codex.rs        Codex app-server 只读适配器
   src/main.rs         桌面可执行入口
-  capabilities/       本地窗口权限配置
+  capabilities/       本地窗口与事件权限配置
   icons/              应用图标与 1024 源图
   icons/macos/        macOS 分层图标草稿 TokenRefill.icon
   tauri.conf.json     窗口、构建和 CSP 配置
@@ -100,12 +105,18 @@ public/               浏览器标签图标、Web manifest
 
 ## 当前范围
 
-已包含基础窗口、系统浅深色、减少动态效果支持、Motion 反馈动画，以及首个真实业务链路：**Codex 订阅额度查询**。桌面应用启动后会自动查询并通过本机官方 `codex app-server` 只读获取额度窗口（已用/剩余比例、重置时间），也可手动刷新；要求本机已安装并登录 Codex CLI（未登录或找不到 CLI 时界面会给出明确错误）。不读取、不保存 Codex 登录凭证。
+已包含基础窗口、系统浅深色、减少动态效果支持、Motion 反馈动画，以及首个真实业务链路：**Codex 订阅额度查询**。
+
+桌面应用启动后先读取 Rust 侧的缓存快照，再按设置自动刷新：默认每 5 分钟一次，可在设置中调整；支持手动刷新，同一账户的在途请求会去重。查询在 Rust 后台线程执行，窗口切换不会重复发起；失败时保留上一次成功数据并标明错误，不把失败显示成零额度。账户、套餐、额度窗口、更新时间与查询状态由统一状态模型管理，偏好保存到应用数据目录的版本化 JSON。
+
+当前 Codex 查询依赖本机已安装并登录的 Codex CLI（未登录或找不到 CLI 时界面会给出明确错误），不读取、不保存 Codex 登录凭证。账户页目前为只读展示。
 
 尚未实现：
 
 - 百炼 Token Plan、Coding Plan 接入。
-- 凭证独立存储、多账户管理、自动刷新调度、通知。
+- 多账户授权、凭证独立存储，以及账户添加、改名、重新授权与移除。
+- 平台限流退避参数、休眠唤醒后的补偿策略。
+- 通知发送、开机自启的系统权限接入。
 - 菜单栏常驻、弹窗定位和窗口焦点策略。
 - 原生 Liquid Glass 与旧系统材质回退。目前没有将 CSS 毛玻璃伪称为系统 Liquid Glass。
 
