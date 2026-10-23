@@ -90,10 +90,10 @@ Windows 目标目录：
 
 ## 8. 打包
 
-- `bundle.targets: "all"` 在 Windows 上展开为 MSI 与 NSIS 两类安装包；图标沿用 `icons/icon.ico`，无需新增平台配置。
-- WebView2 安装策略保持 Tauri 默认（下载引导器，安装时需要联网）；Windows 11 通常已预装。
-- Windows 安装包由 `.github/workflows/release.yml` 的 `build-windows` job（`windows-latest`、MSVC、Node 24）构建，与 macOS 通用包一起上传到同一个 draft Release；job 内先执行 `pnpm test:rust`。该 job 目前只通过 actionlint 静态校验，尚未在 GitHub Actions 实际跑过。
-- 代码签名与发布渠道未定：当前未配置 Authenticode 证书，产物未签名，首次运行会有 SmartScreen 提示，需要在发布说明中写明。
+- Windows 产物只有两种：免安装单文件 exe（`pnpm tauri build --no-bundle`）与 NSIS 安装器（`--bundles nsis`）。仓库不发布 MSI；`bundle.targets: "all"` 只影响本地手动打包的默认值。
+- 免安装 exe 约占 10 MiB，前端资源已内嵌，运行依赖系统 WebView2（Win10/11 通常已预装），数据仍写入 `%APPDATA%\dev.tokenrefill.desktop\`。
+- Windows 构建由 `.github/workflows/release.yml` 的 `build-windows` job（`windows-latest`、MSVC、Node 24）完成：先 `pnpm test:rust`，再 `--no-bundle` 生成便携 exe，随后 `tauri-action` 用 `--bundles nsis` 生成安装器并创建 draft Release，最后用 `softprops/action-gh-release@v3` 把便携 exe 追加到同一个 Release。该 job 目前只通过 actionlint 静态校验，尚未在 GitHub Actions 实际跑过。
+- 代码签名与发布渠道未定：当前未配置 Authenticode 证书，两种产物都未签名，首次运行会有 SmartScreen 提示，需要在发布说明中写明。
 - 最低 Windows 版本、架构（x64 / arm64）与实际安装验收仍待确认；当前 CI 只构建 x64。
 
 ## 9. 验证记录
@@ -112,11 +112,11 @@ Windows 目标目录：
 | 授权回调端口 | 修复前绑定 1455 返回 `10013`；把 1455–1457 加为管理员排除段后，真实 `LoginSession::start` 返回 `redirect_uri=127.0.0.1:1455` 的授权地址，取消流程正常 |
 | Windows 布局规则 | Chromium 中 `data-platform="windows"` 时安全区高度 44px → 10px，页面头贴顶 |
 | `release.yml` | `actionlint` 校验通过；Windows job 尚未在 GitHub Actions 实际运行 |
-| Windows 安装包构建 | 本机 `pnpm tauri build --bundles msi,nsis` 成功：MSI 3.61 MiB、NSIS 2.48 MiB（仅构建，未安装验证） |
+| Windows 产物构建 | 本机 `--no-bundle` 产出 10.1 MiB 免安装 exe，启动后保持运行；`--bundles nsis` 产出 2.48 MiB 安装器（未安装验证） |
 
 尚未验证：
 
-- MSI/NSIS 安装包的安装、卸载与升级流程（构建已在本机通过）。
+- NSIS 安装器的安装、卸载与升级流程（构建已在本机通过）。
 - 已完成授权的账户在 Windows 上查询额度（本机 CLI 未登录，只验证到授权失效路径）。
 - 应用窗口的实际渲染与视觉细节（仅确认进程启动与状态写入，未截图窗口）。
 - Windows 10 具体小版本、arm64、长时间运行与休眠恢复。

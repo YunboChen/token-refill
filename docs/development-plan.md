@@ -136,7 +136,7 @@
 
 - 兼容层已实现：CLI 查找覆盖 `codex.exe` / `.cmd` 与常见安装目录，授权链接改用 `ShellExecuteW`，数据目录沿用 `%APPDATA%`，窗口使用系统标题栏。
 - 重新确认 Windows 版本、架构及使用范围。
-- 适配系统安全存储、托盘、窗口行为和打包安装；完成 MSI/NSIS 构建与全新环境安装验收。
+- 适配系统安全存储、托盘、窗口行为和打包安装；完成免安装 exe 与 NSIS 安装器构建及全新环境安装验收。
 - 验证三类查询链路在 Windows 的依赖条件与可靠性。
 
 交付物与排期：安装包、运行验收记录与支持声明待后续需求细化，不属于本次 macOS 首发验收。
@@ -211,3 +211,5 @@
 2026-10-23 已实现 Windows 兼容层：Codex CLI 查找按平台区分 `codex` / `codex.exe` / `.cmd`，补充 npm、pnpm、Volta、Bun、Scoop、nvm-windows、fnm 与官方安装包目录；授权链接改用 `ShellExecuteW`，避免 `cmd /C start` 解析 URL 中的 `&`；数据目录沿用 `app_data_dir()`，Unix 权限位不变，Windows 依赖 `%APPDATA%` 的按用户 ACL；窗口使用系统标题栏，前端按 `get_app_info().platform` 收窄顶部留白。
 
 本轮验证：Windows 10.0.26300 x64 + MSVC 目标，`cargo check --all-targets` 通过，`cargo test` 30 项通过（两个 Python 假 app-server 用例按平台跳过），`tsc --noEmit` 与 `vite build` 通过；真实 `codex.exe` 完成 `initialize` / `account/read` 握手，未登录时返回 `auth-expired`；应用二进制启动后生成 `%APPDATA%\dev.tokenrefill.desktop\state.json` 并写入查询状态；Windows 标题栏留白规则在 Chromium 中验证为 44px → 10px。`cargo clippy` 仍有 1 条既有告警（`apply_login_success` 参数个数），与本次改动无关。MSI/NSIS 安装包、已登录账户查询、实际窗口截图与 Windows 10 具体版本仍未验证；本机 GNU 目标因缺 `dlltool.exe` 无法编译，结论仅对 MSVC 目标成立。
+
+2026-10-23 Windows 产物调整为免安装单文件 exe（`--no-bundle`）与 NSIS 安装器（`--bundles nsis`），不再产出 MSI。本机验证：免安装 exe 10.1 MiB、可正常启动；NSIS 安装器 2.48 MiB。CI 的 `build-windows` job 用 `tauri-action` 创建 draft Release 并上传安装器，再用 `softprops/action-gh-release@v3` 追加免安装 exe；workflow 通过 actionlint，尚未在 GitHub Actions 实际运行。安装、卸载与升级验收仍未完成。

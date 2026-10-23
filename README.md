@@ -55,7 +55,7 @@ pnpm dev
 - 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立账户的 `CODEX_HOME`。
 - 窗口使用系统标题栏，前端按 `get_app_info().platform` 收窄侧栏顶部留白。
 - 授权链接通过 `ShellExecuteW` 交给系统浏览器，不经过 `cmd.exe`，URL 中的 `&` 不会被当作命令分隔符。
-- `pnpm tauri build` 在 Windows 上产出 MSI 与 NSIS 安装包；两者尚未做安装与卸载验收。详见 [Windows 兼容设计](./docs/windows-support.md)。
+- `pnpm tauri build` 在 Windows 上默认产出 MSI 与 NSIS；本项目只发布 NSIS 安装器（`-setup.exe`）与免安装单文件 exe（`--no-bundle`）。两者尚未做安装与卸载验收。详见 [Windows 兼容设计](./docs/windows-support.md)。
 
 #### Windows 开发排错
 
@@ -130,7 +130,7 @@ public/               浏览器标签图标、Web manifest
 
 ## 发布
 
-打包由 [.github/workflows/release.yml](./.github/workflows/release.yml) 在 GitHub Actions 上完成：macOS 通用包（Apple Silicon + Intel 的 `.dmg`）与 Windows x64 安装包（`.msi`、`-setup.exe`）。
+打包由 [.github/workflows/release.yml](./.github/workflows/release.yml) 在 GitHub Actions 上完成：macOS 通用包（Apple Silicon + Intel 的 `.dmg`），以及 Windows x64 的免安装单文件 exe 与 NSIS 安装器（`-setup.exe`）。Windows 不产出 MSI。
 
 发版步骤：
 
@@ -148,7 +148,7 @@ public/               浏览器标签图标、Web manifest
    git push origin v0.2.0
    ```
 
-CI 会先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS 通用包与 Windows x64 包：macOS 用 `cargo tauri` + ad-hoc 签名，Windows 用 MSVC 工具链构建 MSI/NSIS 并先跑一遍 `pnpm test:rust`。两类产物都挂到同一个 **draft Release**，确认无误后手动发布。tag 与 `tauri.conf.json` / `package.json` / `Cargo.toml` 任一处版本不一致时构建直接失败，避免出现版本号对不上的安装包。
+CI 会先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS 通用包与 Windows x64 产物：macOS 用 `cargo tauri` + ad-hoc 签名；Windows 用 MSVC 工具链，先跑 `pnpm test:rust`，再用 `--no-bundle` 产出免安装 exe，最后用 `--bundles nsis` 产出安装器。两类产物都挂到同一个 **draft Release**，确认无误后手动发布。tag 与 `tauri.conf.json` / `package.json` / `Cargo.toml` 任一处版本不一致时构建直接失败，避免出现版本号对不上的安装包。
 
 也可以在 Actions 页面手动触发 `release`，此时按当前 `tauri.conf.json` 版本创建 `vX.Y.Z` 草稿。
 
@@ -164,7 +164,7 @@ xattr -dr com.apple.quarantine "/Applications/Token Refill.app"
 
 macOS 26 的自适应图标依赖 runner 上的 Xcode 26 `actool`；runner 版本更低时会按上文跳过 `Assets.car`，产物退回平图图标，构建不会失败。
 
-Windows 安装包（MSI/NSIS）由 `build-windows` job 用 MSVC 工具链构建，当前未配置 Authenticode 证书，首次运行会出现 SmartScreen 提示；接入代码签名证书后可在该 job 补充签名步骤。Windows 包的安装与卸载验收仍未完成。
+Windows 的免安装 exe 与 NSIS 安装器由 `build-windows` job 用 MSVC 工具链构建。两者都未配置 Authenticode 证书，首次运行会出现 SmartScreen 提示；免安装 exe 依赖系统 WebView2（Win10/11 通常已预装）。接入代码签名证书后可在该 job 补充签名步骤。Windows 包的安装与卸载验收仍未完成。
 
 ## 当前范围
 

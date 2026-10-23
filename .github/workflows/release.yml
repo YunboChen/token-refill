@@ -153,15 +153,40 @@ jobs:
       # 这里同时跑方式与 macOS 一致的 --locked 测试。
       - run: pnpm test:rust
 
-      # 未配置代码签名证书：产物未签名，首次运行会有 SmartScreen 提示。
-      # 用项目自带的 Node CLI（pnpm tauri），Windows 没有 macOS 的 actool/libuv 问题。
+      # 产物一：免安装单文件 exe。--no-bundle 只产出可执行文件，不生成安装器。
+      # 依赖系统 WebView2（Win10/11 通常已预装），数据仍写入 %APPDATA%。
+      - name: Build portable exe
+        id: portable
+        shell: pwsh
+        run: |
+          pnpm tauri build --no-bundle
+          $version = node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version"
+          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "v$version" }
+          New-Item -ItemType Directory -Force portable | Out-Null
+          Copy-Item "src-tauri/target/release/token-refill.exe" "portable/Token.Refill_${version}_x64.exe"
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      # 产物二：NSIS 安装器（.exe）。不含 MSI。
+      # 未配置代码签名证书：两个产物均未签名，首次运行会有 SmartScreen 提示。
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tauriScript: pnpm tauri
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
-          releaseName: Token Refill v__VERSION__
+          tagName: ${{ steps.portable.outputs.tag }}
+          releaseName: Token Refill v${{ steps.portable.outputs.version }}
           releaseDraft: true
           prerelease: false
-          args: --bundles msi,nsis
+          args: --bundles nsis
+
+      # 把免安装 exe 追加到同一个 draft Release。tauri-action 只上传它自己构建的安装器。
+      - uses: softprops/action-gh-release@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.portable.outputs.tag }}
+          name: Token Refill v${{ steps.portable.outputs.version }}
+          draft: true
+          prerelease: false
+          files: portable/Token.Refill_${{ steps.portable.outputs.version }}_x64.exe
