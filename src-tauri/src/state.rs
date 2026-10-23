@@ -444,6 +444,8 @@ fn apply_error(
 
 /// 授权成功后的状态写入。新账户追加到列表；重新授权更新原账户，
 /// 不重复创建记录。额度读取失败时保留已授权状态并记录查询错误。
+// 各参数相互独立、没有自然的聚合体，硬拆成结构体只会让调用点更难读。
+#[allow(clippy::too_many_arguments)]
 fn apply_login_success(
     state: &mut PersistedState,
     account_id: &str,

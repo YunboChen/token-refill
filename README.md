@@ -105,6 +105,44 @@ src-tauri/
 public/               浏览器标签图标、Web manifest
 ```
 
+## 发布
+
+打包由 [.github/workflows/release.yml](./.github/workflows/release.yml) 在 GitHub Actions 上完成，当前只产出 macOS 通用包（Apple Silicon + Intel 的 `.dmg`）。
+
+发版步骤：
+
+1. 把三处版本号改成同一个值，并重新生成 `Cargo.lock`：
+
+   ```sh
+   # package.json / src-tauri/tauri.conf.json 手动改
+   cargo check --manifest-path src-tauri/Cargo.toml   # 同步 Cargo.lock
+   ```
+
+2. 提交后打 tag 并推送：
+
+   ```sh
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+CI 会先跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），再打通用包，成功后把 `.dmg` 挂到一个 **draft Release** 上，确认无误后手动发布。tag 与 `tauri.conf.json` / `package.json` / `Cargo.toml` 任一处版本不一致时构建直接失败，避免出现版本号对不上的安装包。
+
+也可以在 Actions 页面手动触发 `release`，此时按当前 `tauri.conf.json` 版本创建 `vX.Y.Z` 草稿。
+
+### 签名状态
+
+当前未接入 Apple Developer 证书，产物是 ad-hoc 签名、未公证，其他 Mac 首次打开会提示"无法验证开发者"。可以右键 →「打开」，或先移除隔离属性：
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/Token Refill.app"
+```
+
+接入证书后，在仓库 Secrets 配置 `APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`，tauri-action 会自动签名并公证；同时删除 workflow 里的 `APPLE_SIGNING_IDENTITY: "-"`。
+
+macOS 26 的自适应图标依赖 runner 上的 Xcode 26 `actool`；runner 版本更低时会按上文跳过 `Assets.car`，产物退回平图图标，构建不会失败。
+
+Windows 暂未进入构建矩阵：`src-tauri/src/codex.rs` 的 `is_executable` 无条件使用 `std::os::unix::fs::PermissionsExt`，Codex CLI 查找也只处理 Unix 路径，Windows 上无法编译。适配后给 workflow 加一条 `windows-latest` 矩阵即可。
+
 ## 当前范围
 
 已包含基础窗口、系统浅深色、减少动态效果支持、Motion 反馈动画，以及首个真实业务链路：**Codex 订阅额度查询**。

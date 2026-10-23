@@ -1,0 +1,108 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: check
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # tauri.conf.json 的 version 就是安装包版本；三处版本或 tag 不一致时直接失败，
+      # 避免出现 tag 是 v0.2.0、安装包却仍然自称 0.1.0 的产物。
+      # Cargo.toml 版本变动会让 Cargo.lock 过期，而下面的检查用的是 --locked，所以一并在这里挡掉。
+      - name: Check versions are in sync
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          conf_version=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json', 'utf8')).version")
+          pkg_version=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
+          cargo_version=$(awk -F'"' '/^version = /{print $2; exit}' src-tauri/Cargo.toml)
+          tag_version="${GITHUB_REF_NAME#v}"
+          for entry in "tauri.conf.json:$conf_version" "package.json:$pkg_version" "Cargo.toml:$cargo_version"; do
+            if [ "${entry#*:}" != "$tag_version" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} 应为 ${tag_version}，但 ${entry%%:*} 是 ${entry#*:}。请统一三处版本（改完 Cargo.toml 后重新生成 Cargo.lock）再重新打 tag。"
+              exit 1
+            fi
+          done
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: pnpm install --frozen-lockfile
+
+      # 前端类型检查与产物构建，同时为 Rust 侧准备 tauri.conf.json 指向的 frontendDist。
+      - run: pnpm build
+
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+
+      - run: pnpm test:rust
+
+  build-macos:
+    name: build macos (universal)
+    needs: check
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: universal
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 未接入 Apple Developer 证书，显式使用 ad-hoc 签名，产物可直接构建但不能通过公证。
+          APPLE_SIGNING_IDENTITY: "-"
+        with:
+          # tag 推送时沿用该 tag；手动触发时按 app version 生成 vX.Y.Z。
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: Token Refill v__VERSION__
+          releaseDraft: true
+          prerelease: false
+          args: --target universal-apple-darwin
