@@ -1,10 +1,15 @@
+mod antigravity;
+mod api_key;
 mod bailian;
 mod codex;
+mod commandcode;
 mod discovery;
+mod opencode;
 pub mod quota;
 mod relay;
 mod state;
 mod update;
+mod usage_api;
 
 use std::fs;
 #[cfg(not(target_os = "windows"))]
@@ -98,6 +103,45 @@ fn rename_account(
     display_name: String,
 ) -> Result<PersistedState, String> {
     store.rename_account(&account_id, &display_name)
+}
+
+/// 用 API Key 接入 OpenCode Go / Command Code；密钥只交给 Rust，不进入前端状态。
+#[tauri::command]
+async fn add_api_key_account(
+    store: tauri::State<'_, Arc<StateStore>>,
+    platform: String,
+    display_name: Option<String>,
+    api_key: String,
+) -> Result<PersistedState, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || {
+        store.add_api_key_account(&platform, display_name.as_deref(), &api_key)
+    })
+    .await
+    .map_err(|err| format!("添加账户失败：{err}"))?
+}
+
+/// 替换已有 API Key 账户的密钥；验证通过才覆盖。
+#[tauri::command]
+async fn replace_api_key(
+    store: tauri::State<'_, Arc<StateStore>>,
+    account_id: String,
+    api_key: String,
+) -> Result<PersistedState, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || store.replace_api_key(&account_id, &api_key))
+        .await
+        .map_err(|err| format!("更新 API Key 失败：{err}"))?
+}
+
+/// 接入本机 Antigravity CLI 登录态；额度在后台刷新。
+#[tauri::command]
+fn add_antigravity_account(
+    store: tauri::State<'_, Arc<StateStore>>,
+    display_name: Option<String>,
+) -> Result<PersistedState, String> {
+    let store = Arc::clone(&store);
+    store.add_antigravity_account(display_name.as_deref())
 }
 
 #[tauri::command]
@@ -299,6 +343,9 @@ pub fn run() {
             begin_bailian_login,
             cancel_account_login,
             rename_account,
+            add_api_key_account,
+            replace_api_key,
+            add_antigravity_account,
             remove_account,
             open_external_url,
             send_test_notification,

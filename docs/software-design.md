@@ -1,7 +1,7 @@
 # Token Refill 软件设计文档
 
-- 文档版本：0.13
-- 状态：已实现 Codex 与百炼两类套餐查询、官方浏览器授权多账户、统一状态层与后台刷新调度
+- 文档版本：0.14
+- 状态：已实现 Codex、百炼、OpenCode Go、Command Code 与 Antigravity 额度查询、多账户接入、统一状态层与后台刷新调度
 - 最近更新：2026-10-23
 - 需求来源：[需求文档](./requirements.md)
 
@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | 前端界面 | 总览、账户、设置三页；读取统一状态并订阅变更事件 | `src/panels/` |
 | 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences`、账户授权/改名/移除命令与 `app-state-changed`、`account-login-changed` 事件 | `src/lib/desktop.ts`、`src/lib/store.tsx` |
-| 本地后端 | Rust 状态存储、后台刷新调度、Codex/百炼适配器、中转网关密钥额度适配器与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/bailian.rs`、`src-tauri/src/quota/`、`src-tauri/src/discovery.rs` |
+| 本地后端 | Rust 状态存储、后台刷新调度、Codex/百炼/OpenCode Go/Command Code/Antigravity 适配器、中转网关密钥额度适配器与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/bailian.rs`、`src-tauri/src/opencode.rs`、`src-tauri/src/commandcode.rs`、`src-tauri/src/antigravity.rs`、`src-tauri/src/quota/`、`src-tauri/src/discovery.rs` |
 | 桌面配置 | 窗口、构建、安全策略及打包配置 | `src-tauri/tauri.conf.json` |
 | 权限声明 | 窗口权限与事件监听权限 | `src-tauri/capabilities/` |
 
@@ -26,6 +26,10 @@
 账户分两类：本机账户沿用现有登录态；独立账户在应用数据目录的 `codex-profiles/<accountId>/` 下拥有独立 `CODEX_HOME`。每次查询会在同一 app-server 会话中先读取 `account/read` 获取脱敏邮箱与套餐档位，再读取额度；即使额度请求失败（如网络异常），只要身份读取成功，账户页仍能显示当前登录账号，身份读取本身失败则保留原值，不误清空。添加或重新授权时，Rust 启动该目录下的 app-server，调用官方 `account/login/start` 取得浏览器授权 URL，等待 `account/login/completed` 后读取身份与额度。登录令牌由 Codex CLI 写入隔离目录，应用不解析、不复制、不向前端返回；`account-login-changed` 仅携带流程标识、账户标识、状态和脱敏错误。
 
 百炼账户属于独立授权账户：Rust 在 `127.0.0.1` 随机端口启动一次性回调服务，打开官方控制台登录页；浏览器把控制台 `access_token` 回传到该地址，`state` 校验通过后才写入 `bailian-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600）。一个百炼账户下有两个产品：Token Plan 与 Coding Plan。每次刷新顺序请求两类额度接口，任一失败只影响对应产品并保留其上次成功快照；两者都判定会话失效时才把账户标为需要重新授权。令牌不进入 `PersistedState`、IPC 返回值、事件或日志；移除账户会删除该目录。
+
+OpenCode Go 与 Command Code 属于 API Key 账户：添加时先用一次真实查询验证密钥，成功后写入 `api-profiles/<accountId>/credentials.json`（同样 0700/0600），失败不会留下账户或凭证。OpenCode Go 读取官方 `GET https://opencode.ai/zen/go/v1/usage` 的 5 小时 / 每周 / 订阅月百分比；Command Code 读取 CLI 同款 `/alpha/billing/credits`、`/alpha/usage/summary` 与 `/alpha/billing/subscriptions`，月度上限由“已用 + 剩余”推导，辅助接口失败时保留滚动窗口并记录能力缺口。密钥只在 Rust 侧使用，不进入 `PersistedState`、事件或错误消息。
+
+Antigravity 是本机账户：应用只调用 `agy -p /usage --output-format json` 读取官方打印结果，不读取 CLI 的钥匙串、令牌文件或浏览器会话。查询前校验 `agy --version` ≥ 1.1.11，并设置 `AGY_CLI_DISABLE_AUTO_UPDATE=true`；查询带超时并能主动结束未登录时等待交互的进程。返回按模型分组展示每周 / 5 小时剩余比例与重置时间。
 
 ## 3. 候选职责划分
 
@@ -311,7 +315,7 @@ Codex 与百炼两类套餐均已完成真实读取验证，百炼的协议与�
 
 ## 10. IPC 与平台适配契约草案
 
-下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`cancel_account_login`、`rename_account`、`remove_account`、`open_external_url`、`check_for_update`。其余仍为计划名称。
+下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`open_external_url`、`check_for_update`。其余仍为计划名称。
 
 ### 10.1 前端命令边界
 
@@ -321,7 +325,10 @@ Codex 与百炼两类套餐均已完成真实读取验证，百炼的协议与�
 | begin_account_login（已实现） | 可选账户标识与显示名 | 为独立 `CODEX_HOME` 启动官方 ChatGPT 授权，返回 `loginId` 与浏览器授权 URL；令牌不经过前端 | REQ-003 |
 | cancel_account_login（已实现） | 流程标识 | 取消本应用授权流程；不改变本机 Codex 登录 | REQ-003 |
 | rename_account（已实现） | 本地账户标识、显示名 | 校验并保存名称，向两个界面同步 | REQ-003 |
-| remove_account（已实现） | 本地账户标识 | 仅允许移除独立授权账户，删除本应用授权目录并停止后续查询；本机账户不可移除 | REQ-003 |
+| add_api_key_account（已实现） | 平台、可选显示名、API Key | 先真实查询验证，成功后写入 `api-profiles/<accountId>/credentials.json`；密钥不回传前端 | REQ-003 |
+| replace_api_key（已实现） | 本地账户标识、新 API Key | 验证通过才覆盖凭证并更新快照；失败保留原凭证 | REQ-003 |
+| add_antigravity_account（已实现） | 可选显示名 | 登记本机 `agy` 登录态并触发后台刷新；不接收或保存令牌 | REQ-003 |
+| remove_account（已实现） | 本地账户标识 | 移除独立授权账户及其本应用目录；本机 Codex 账户不可移除；Antigravity 仅删除账户记录 | REQ-003 |
 | refresh_usage | 全部账户或指定本地账户 | 返回任务标识或已合并的在途任务，不等待全部查询才响应；后端执行去重与限流 | REQ-004 |
 | update_preferences | 经校验的设置变更 | 保存常规设置并协调系统操作；系统拒绝通知或自启时如实返回实际状态 | REQ-004、REQ-006、REQ-010 |
 | get_system_permissions / request_notification_permission | 读取状态或用户明确触发的权限请求 | 区分应用设置与系统许可；不在额度查询失败时反复弹出权限申请 | REQ-006、REQ-010 |

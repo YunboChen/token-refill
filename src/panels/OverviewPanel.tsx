@@ -26,6 +26,16 @@ function windowLabel(mins: number | null, name: string | null = null): string {
 }
 
 function amountLabel(window: QuotaWindow): string | null {
+  if (window.unit === 'usd') {
+    const money = (value: number) => `$${value.toFixed(2)}`;
+    if (window.usedAmount !== null && window.totalAmount !== null) {
+      return `已用 ${money(window.usedAmount)} / ${money(window.totalAmount)}`;
+    }
+    if (window.remainingAmount !== null) {
+      return `剩余 ${money(window.remainingAmount)}`;
+    }
+    return null;
+  }
   if (window.usedAmount === null || window.totalAmount === null) return null;
   const unit = window.unit === 'calls' ? '次' : window.unit;
   return `已用 ${window.usedAmount} / ${window.totalAmount} ${unit}`;

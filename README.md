@@ -1,6 +1,6 @@
 # Token Refill
 
-用于查看 AI 套餐额度的本地桌面应用。目前已完成 Codex 订阅额度查询，以及阿里云百炼 Token Plan 个人版、Coding Plan 中国站额度查询；两类平台都支持通过官方浏览器授权接入多个独立账户。
+用于查看 AI 套餐额度的本地桌面应用。目前支持 Codex 订阅、阿里云百炼 Token Plan 个人版与 Coding Plan 中国站、OpenCode Go、Command Code，以及 Google Antigravity 的额度查询。Codex 与百炼通过官方浏览器授权接入多个独立账户；OpenCode Go 与 Command Code 使用各自的 API Key；Antigravity 沿用本机 Antigravity CLI（`agy`）登录态。
 
 ## 技术栈
 
@@ -43,6 +43,9 @@ pnpm tauri dev
 
 - **Codex**：应用会为每个账户创建单独的 `CODEX_HOME`，通过 Codex 官方浏览器授权登录。各账户的登录令牌由 Codex CLI 保存在应用数据目录下的独立授权目录中（macOS/Linux 目录权限 0700，Windows 继承 `%APPDATA%` 的按用户 ACL），应用不读取、不复制、也不向前端展示令牌；添加独立账户不会修改本机 Codex 的默认登录态。本机账户也会读取当前 CLI 登录的脱敏邮箱与套餐档位，便于确认正在查看的是哪个账号。
 - **百炼**：应用打开阿里云百炼控制台登录页，登录成功后控制台会话令牌通过 `127.0.0.1` 回环地址直接交给 Rust，写入应用数据目录下的 `bailian-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 继承 `%APPDATA%` 的按用户 ACL）。令牌不进入前端状态、事件或日志，也不会修改 `bl` CLI 或其他工具的配置。一次授权同时查询 Token Plan 与 Coding Plan。Token Plan 会读取订阅档位（Lite / Essential / Standard / Pro）；账号提示优先使用控制台返回的昵称，昵称为数字时回退为脱敏 UID（控制台令牌接口拿不到阿里云登录名）。Coding Plan 未订阅时接口返回空列表，应用显示为数据缺口；Token Plan 对未订阅账户的返回尚未验证，不据此推断为零额度。
+- **OpenCode Go**：在 OpenCode 控制台复制 Go / Go Plus 的 API Key，粘贴到添加账户弹窗。应用先用 `GET https://opencode.ai/zen/go/v1/usage` 验证一次，再写入 `api-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600）。展示 5 小时、每周与订阅月三个窗口；订阅月按购买日滚动，不推算天数。403 表示该 Key 未开通 Go 订阅。
+- **Command Code**：使用 Provider API Key（通常以 `user_` 开头），访问 CLI 同款 `/alpha/billing/*` 与 `/alpha/usage/summary` 接口。展示 5 小时、每周滚动窗口与订阅月额度；月度窗口以“已用 + 剩余”推导上限，订阅接口不可用时仍保留滚动窗口并标注能力缺口。
+- **Antigravity**：需要本机已安装并登录 Antigravity CLI（`agy` ≥ 1.1.11）。应用调用官方打印模式 `agy -p /usage --output-format json`，按模型分组展示每周 / 5 小时剩余比例；不读取 agy 的钥匙串、令牌文件或浏览器会话，也不修改其登录状态。找不到 CLI 时可用 `AGY_BIN` 指定路径；低于 1.1.11 时应用会拒绝查询，避免旧版把 `/usage` 当作提示词消耗额度。
 
 百炼额度通过百炼控制台网关读取，依赖控制台会话，不能使用推理 API Key 替代。会话过期后账户页会提示重新授权。
 
@@ -57,7 +60,8 @@ pnpm dev
 ### Windows 说明
 
 - Codex CLI 查找顺序：`CODEX_BIN` → `PATH` → nvm-windows / fnm 的版本目录 → npm、pnpm、Volta、Bun、Scoop、`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` 等默认安装位置。候选文件为 `codex.exe`、`codex.cmd`、`codex.bat`、`codex.com`，优先原生可执行文件；找不到时设置 `CODEX_BIN` 指向完整路径。
-- 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立账户的 `CODEX_HOME`。
+- 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立 Codex 账户的 `CODEX_HOME`，`bailian-profiles\<accountId>\` 与 `api-profiles\<accountId>\` 分别保存百炼控制台令牌和 OpenCode / Command Code 的 API Key。
+- Antigravity 需要本机可运行的 `agy`，查找顺序为 `AGY_BIN` → `PATH` → `%LOCALAPPDATA%\agy\bin` 等常见目录；额度通过 `agy -p /usage --output-format json` 读取。
 - 窗口使用系统标题栏，前端按 `get_app_info().platform` 收窄侧栏顶部留白。
 - 授权链接通过 `ShellExecuteW` 交给系统浏览器，不经过 `cmd.exe`，URL 中的 `&` 不会被当作命令分隔符。
 - `src-tauri/tauri.windows.conf.json` 把 Windows 的 `bundle.targets` 收窄为 `["nsis"]`：`pnpm tauri build` 只产出 NSIS 安装器（`-setup.exe`），不再生成 MSI；免安装单文件 exe 用 `pnpm tauri build --no-bundle`。两者尚未做安装与卸载验收。详见 [Windows 兼容设计](./docs/windows-support.md)。
