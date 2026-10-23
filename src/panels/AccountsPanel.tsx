@@ -3,8 +3,10 @@ import { createPortal } from 'react-dom';
 import { AnimatePresence, m } from 'motion/react';
 import {
   ArrowClockwise,
+  ArrowSquareOut,
   CircleNotch,
   LinkSimple,
+  LockSimple,
   PencilSimple,
   Plus,
   Trash,
@@ -20,11 +22,9 @@ import {
 import {
   accountPlatformGroups,
   pendingPlatforms,
-  platformMeta,
 } from '../lib/platforms';
 import { useAppState } from '../lib/store';
 import PlatformHeading from '../components/PlatformHeading';
-import PlatformLogo from '../components/PlatformLogo';
 import styles from '../App.module.css';
 
 const AUTH_LABELS: Record<AuthState, string> = {
@@ -41,28 +41,42 @@ const PLATFORM_CHOICES: {
   addLabel: string;
   /** 标题下方一行，说明平台与授权方式 */
   subtitle: string;
-  /** 授权流程要点：分条展示，避免整段文字堆在弹窗里 */
-  steps: string[];
+  /** 授权流程：分两步，标题说明做什么，正文说明怎么做 */
+  steps: { title: string; text: string }[];
+  /** 输入框下方的隐私说明，用一句话收住授权边界 */
+  note: string;
 }[] = [
   {
     key: 'codex',
     addLabel: '添加 Codex 账户',
     subtitle: 'ChatGPT 订阅 · 官方浏览器授权',
     steps: [
-      '在系统浏览器中完成 Codex 官方授权',
-      '每个账户使用独立授权目录',
-      '不读取或修改本机 Codex 的默认登录',
+      {
+        title: '登录 ChatGPT',
+        text: '在系统浏览器中完成 Codex 官方授权',
+      },
+      {
+        title: '自动连接账户',
+        text: '每个账户使用独立授权目录，不影响本机登录态',
+      },
     ],
+    note: '授权在本机完成，不读取或修改本机 Codex 的默认登录。',
   },
   {
     key: 'bailian',
     addLabel: '添加百炼账户',
     subtitle: '阿里云 · Token Plan / Coding Plan',
     steps: [
-      '在系统浏览器中登录要接入的阿里云账号',
-      '控制台会话令牌经本机回环地址直接交给应用',
-      '不经过前端，也不写入外部工具的配置',
+      {
+        title: '登录阿里云',
+        text: '在系统浏览器中登录要接入的阿里云账号',
+      },
+      {
+        title: '自动连接账户',
+        text: '控制台会话令牌经本机回环地址直接交给应用',
+      },
     ],
+    note: '授权信息仅在本机接收，不经过前端，也不写入外部工具的配置。',
   },
 ];
 
@@ -515,42 +529,42 @@ export default function AccountsPanel() {
                 {dialog.kind === 'add-form' ? (
                   <>
                     <header className={styles.dialogHeader}>
-                      <span
-                        className={styles.platformBadge}
-                        data-active
-                        aria-hidden="true"
-                      >
-                        <PlatformLogo
-                          platform={dialog.platform}
-                          fallback={platformMeta(dialog.platform).mark}
-                        />
-                      </span>
-                      <div className={styles.dialogHeading}>
-                        <h2 id="account-dialog-title">{choice.addLabel}</h2>
-                        <p className={styles.dialogSubtitle}>{choice.subtitle}</p>
-                      </div>
+                      <h2 id="account-dialog-title">{choice.addLabel}</h2>
+                      <p className={styles.dialogSubtitle}>{choice.subtitle}</p>
                     </header>
-                    <ul className={styles.dialogSteps} role="list">
-                      {choice.steps.map((step) => (
-                        <li className={styles.dialogStep} key={step}>
-                          {step}
+                    <ol className={styles.dialogSteps} role="list">
+                      {choice.steps.map((step, index) => (
+                        <li className={styles.dialogStep} key={step.title}>
+                          <span className={styles.stepMarker} aria-hidden="true">
+                            {index + 1}
+                          </span>
+                          <div className={styles.stepBody}>
+                            <h3 className={styles.stepTitle}>{step.title}</h3>
+                            <p className={styles.stepText}>{step.text}</p>
+                          </div>
                         </li>
                       ))}
-                    </ul>
-                    <label className={styles.field}>
-                      <span className={styles.fieldLabel}>账户名称（可选）</span>
-                      <input
-                        className={styles.textInput}
-                        value={draftName}
-                        onChange={(event) => setDraftName(event.target.value)}
-                        placeholder={
-                          dialog.platform === 'bailian'
-                            ? '留空则显示为“百炼账户”'
-                            : '留空则使用授权后的脱敏邮箱'
-                        }
-                        maxLength={60}
-                      />
-                    </label>
+                    </ol>
+                    <div className={styles.dialogFieldGroup}>
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabel}>账户名称（可选）</span>
+                        <input
+                          className={styles.textInput}
+                          value={draftName}
+                          onChange={(event) => setDraftName(event.target.value)}
+                          placeholder={
+                            dialog.platform === 'bailian'
+                              ? '留空则显示为“百炼账户”'
+                              : '留空则使用授权后的脱敏邮箱'
+                          }
+                          maxLength={60}
+                        />
+                      </label>
+                      <p className={styles.dialogNote}>
+                        <LockSimple size={13} aria-hidden />
+                        {choice.note}
+                      </p>
+                    </div>
                     <div className={styles.dialogActions}>
                       <button
                         type="button"
@@ -565,11 +579,16 @@ export default function AccountsPanel() {
                         onClick={() => void startAdd(dialog.platform)}
                         disabled={starting}
                       >
-                        {starting
-                          ? '正在启动…'
-                          : dialog.platform === 'bailian'
-                            ? '前往阿里云授权'
-                            : '前往浏览器授权'}
+                        {starting ? (
+                          '正在启动…'
+                        ) : (
+                          <>
+                            {dialog.platform === 'bailian'
+                              ? '前往阿里云授权'
+                              : '前往浏览器授权'}
+                            <ArrowSquareOut size={13} aria-hidden />
+                          </>
+                        )}
                       </button>
                     </div>
                   </>
@@ -644,32 +663,20 @@ export default function AccountsPanel() {
                 ) : (
                   <>
                     <header className={styles.dialogHeader}>
-                      <span
-                        className={styles.platformBadge}
-                        data-active
-                        aria-hidden="true"
-                      >
-                        <PlatformLogo
-                          platform={dialog.platform}
-                          fallback={platformMeta(dialog.platform).mark}
-                        />
-                      </span>
-                      <div className={styles.dialogHeading}>
-                        <h2 id="account-dialog-title">
-                          {dialog.phase === 'succeeded'
-                            ? '授权完成'
-                            : dialog.phase === 'failed'
-                              ? '授权失败'
-                              : dialog.phase === 'canceled'
-                                ? '已取消授权'
-                                : dialog.mode === 'reauth'
-                                  ? '重新授权'
-                                  : dialog.platform === 'bailian'
-                                    ? '登录阿里云百炼'
-                                    : '在浏览器中完成授权'}
-                        </h2>
-                        <p className={styles.dialogSubtitle}>{choice.subtitle}</p>
-                      </div>
+                      <h2 id="account-dialog-title">
+                        {dialog.phase === 'succeeded'
+                          ? '授权完成'
+                          : dialog.phase === 'failed'
+                            ? '授权失败'
+                            : dialog.phase === 'canceled'
+                              ? '已取消授权'
+                              : dialog.mode === 'reauth'
+                                ? '重新授权'
+                                : dialog.platform === 'bailian'
+                                  ? '登录阿里云百炼'
+                                  : '在浏览器中完成授权'}
+                      </h2>
+                      <p className={styles.dialogSubtitle}>{choice.subtitle}</p>
                     </header>
 
                     {dialog.phase === 'waiting' ? (
@@ -705,6 +712,7 @@ export default function AccountsPanel() {
                             onClick={() => void openExternal(dialog.start.authUrl)}
                           >
                             重新打开授权页面
+                            <ArrowSquareOut size={13} aria-hidden />
                           </button>
                         </div>
                       </>

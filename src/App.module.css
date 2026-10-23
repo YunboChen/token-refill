@@ -1856,8 +1856,9 @@
 .dialog {
   position: relative;
   display: grid;
+  /* 标题、流程、表单各成一组，组间留白比组内大一档 */
   gap: 16px;
-  width: min(440px, 100%);
+  width: min(460px, 100%);
   padding: 20px;
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
@@ -1867,9 +1868,11 @@
 
 .dialog h2 {
   margin: 0;
-  padding-right: 26px;
-  font-size: 15.5px;
+  padding-right: 44px;
+  font-size: 20px;
   font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
 }
 
 /* 重命名弹窗整体是表单，沿用弹窗本身的纵向间距 */
@@ -1878,63 +1881,112 @@
   gap: 16px;
 }
 
-/* 授权弹窗头部：复用平台徽标，把标题和接入方式收成一组，
-   右侧留出关闭按钮的位置 */
+/* 授权弹窗头部：大标题 + 一行说明，右侧给关闭按钮留出空间 */
 .dialogHeader {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding-right: 26px;
-}
-
-.dialogHeading {
   display: grid;
-  gap: 2px;
-  min-width: 0;
+  gap: 5px;
+  padding-right: 44px;
 }
 
-.dialogHeading h2 {
+.dialogHeader h2 {
   padding-right: 0;
 }
 
 .dialogSubtitle {
   margin: 0;
   color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
-/* 授权要点：分条列出，比整段说明更好扫读 */
+/* 授权流程：编号圆点加竖向连线，把授权过程讲成一条路径。
+   容器本身不加底色，弹窗里只保留输入框这一处凹陷。 */
 .dialogSteps {
   display: grid;
-  gap: 7px;
-  margin: 0;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--sunken);
+  gap: 14px;
+  margin: 2px 0 0;
+  padding: 0;
   list-style: none;
 }
 
 .dialogStep {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: start;
+}
+
+/* 连线从圆点下方接到下一步上方，两端各留一点呼吸 */
+.dialogStep:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  top: 28px;
+  bottom: -8px;
+  left: 11px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--muted);
+  opacity: 0.4;
+}
+
+.stepMarker {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: var(--accent-text);
+  background: var(--accent-strong);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.stepBody {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding-top: 1px;
+}
+
+.stepTitle {
+  margin: 0;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.stepText {
+  margin: 0;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 名称输入与隐私说明是一组：说明紧贴输入框，不和上方流程混在一起 */
+.dialogFieldGroup {
+  display: grid;
+  gap: 9px;
+  margin-top: 4px;
+}
+
+.dialogNote {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
   line-height: 1.55;
 }
 
-/* 圆点只是视觉引导，不暗示“已完成”，用伪元素避免列表标记被重置 */
-.dialogStep::before {
-  content: '';
+.dialogNote > svg {
   flex: none;
-  width: 5px;
-  height: 5px;
-  margin-top: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-  opacity: 0.85;
+  margin-top: 1.5px;
 }
 
 .authBlock {
@@ -1944,15 +1996,15 @@
 
 .dialogClose {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: 16px;
+  right: 16px;
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   color: var(--muted);
   background: transparent;
   cursor: pointer;
@@ -1963,12 +2015,22 @@
   background: var(--sunken);
 }
 
+/* 底部操作区：不用分割线和底色，靠收紧的上间距与内容连成一组 */
 .dialogActions {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 6px;
+  /* 网格间距 16px，这里再收 4px，按钮与上方内容保持 12px */
+  margin-top: -4px;
+}
+
+/* 操作区的按钮比页面内按钮高一档，和弹窗的输入框对齐 */
+.dialogActions .button,
+.dialogActions .buttonGhost,
+.dialogActions .dangerButton {
+  min-height: 36px;
+  padding: 8px 15px;
 }
 
 .field {
@@ -1999,9 +2061,17 @@
   box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
+/* 浏览器默认占位色在浅色凹陷底上对比不足，统一用次要文字色 */
+.textInput::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
 /* 弹窗里的输入框沿用说明面板的凹陷底色，
-   避免在深色弹窗中塌成一块更黑的区域 */
+   并在授权弹窗里放大一档，配合更大的标题和操作区 */
 .dialog .textInput {
+  min-height: 38px;
+  padding: 9px 12px;
   background: var(--sunken);
 }
 
