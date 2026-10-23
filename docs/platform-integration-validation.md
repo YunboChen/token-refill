@@ -178,7 +178,8 @@
 - 返回：`usage.rolling` / `weekly` / `monthly`，每项包含 `status`、`percent`（已用百分比）与 `resetsAt`（RFC 3339）。`status = rate-limited` 时按 100% 处理。
 - 口径：API 返回账户维度的汇总百分比，不按模型拆分；`rolling` 为 5 小时窗口，`weekly` 为 1 周窗口，`monthly` 按订阅周期滚动，应用不写死 30 天。
 - 错误：401 视为 Key 失效；403 视为未开通 Go 订阅；429 与 5xx 分别提示稍后重试。
-- 未验证：Go Plus 与 Go 的响应是否完全一致；订阅月重置时间是否始终返回；多工作区 Key 的口径差异。
+- 本机检测：启动时调用 `opencode auth export`，从活动凭据中优先选择 `integrationID = opencode-go`，其次 `opencode`，只接受 `value.type = key`。检测到后创建本地账户并在每次刷新时重新读取；未检测到时由用户手动填写 API Key。不直接读取 SQLite 或系统密钥环。
+- 未验证：Go Plus 与 Go 的响应是否完全一致；订阅月重置时间是否始终返回；多工作区 Key 的口径差异。本机实测 `opencode auth export` 返回 `opencode` 集成下的 `oc_sk_…` Key，可直接用于 Go usage 接口。
 
 ### 8.2 Command Code
 

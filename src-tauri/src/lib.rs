@@ -332,7 +332,8 @@ pub fn run() {
                 Err(err) => eprintln!("读取开机自启状态失败：{err}"),
             }
 
-            state::start_scheduler(store);
+            state::start_scheduler(Arc::clone(&store));
+            state::auto_detect_local_accounts(store);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

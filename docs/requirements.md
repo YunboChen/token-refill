@@ -219,3 +219,4 @@
 | DEC-023 | 百炼采用控制台浏览器授权：官方登录页把控制台令牌回传到本机回环地址，应用存入私有目录并直接读取两类订阅额度；不依赖 `bl` CLI、不读取其配置 | 实现阶段按官方 CLI 的公开协议核实并完成真实读取；用户开始接入百炼 | REQ-001 至 REQ-004、REQ-008；同一账户下 Token Plan 与 Coding Plan 作为两个产品，不合并单位；多账号隔离与令牌续期仍需实测 |
 | DEC-024 | 新增 OpenCode Go、Command Code、Antigravity：前两者使用各自 API Key，Antigravity 使用本机 `agy` 官方打印模式 | 用户明确要求接入三类额度 | REQ-001 至 REQ-004；不读取浏览器 Cookie、系统钥匙串或其他工具令牌；Antigravity 要求 `agy` ≥ 1.1.11，真实账户验证仍需用户提供环境 |
 | DEC-025 | 网络代理由设置页统一选择：跟随系统 / 不走代理 / 指定代理，作用于全部 HTTP 查询与外置 CLI | 用户明确要求三态代理，不接受仅自动检测 | REQ-004、REQ-008；跟随系统读取 Windows/macOS 系统代理，指定代理仅接受不含凭据的 HTTP/HTTPS 地址，PAC 不解析 |
+| DEC-026 | 优先读取本机 CLI 登录态：OpenCode 使用 `opencode auth export`，Antigravity 先实际读取 `agy /usage`；检测成功自动接入，未检测到再走手动添加 | 用户明确要求先读 CLI 逻辑 | REQ-003、REQ-004；不直接解析 SQLite、钥匙串或浏览器 Cookie；本地 OpenCode 账户每次刷新重新读取 CLI 凭据 |

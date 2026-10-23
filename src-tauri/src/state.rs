@@ -39,6 +39,7 @@ pub const BAILIAN_TOKEN_PLAN_ID: &str = "bailian-token-plan";
 pub const BAILIAN_CODING_PLAN_ID: &str = "bailian-coding-plan";
 pub const OPENCODE_GO_PLATFORM: &str = "opencode-go";
 pub const OPENCODE_GO_PRODUCT_ID: &str = "opencode-go";
+pub const OPENCODE_LOCAL_ACCOUNT_ID: &str = "opencode-local";
 pub const COMMAND_CODE_PLATFORM: &str = "commandcode";
 pub const COMMAND_CODE_PRODUCT_ID: &str = "commandcode";
 pub const ANTIGRAVITY_PLATFORM: &str = "antigravity";
@@ -1610,6 +1611,9 @@ impl StateStore {
         let action = match (notice.platform.as_str(), notice.source) {
             ("codex", AccountSource::Local) => "请重新登录本机 Codex CLI 后再刷新。",
             (ANTIGRAVITY_PLATFORM, _) => "请先在终端重新运行 agy 完成登录后再刷新。",
+            (OPENCODE_GO_PLATFORM, AccountSource::Local) => {
+                "请先在 opencode 中登录，或在账户页重新填写 API Key。"
+            }
             (OPENCODE_GO_PLATFORM | COMMAND_CODE_PLATFORM, _) => {
                 "请在账户页重新填写 API Key 后再刷新。"
             }
@@ -1899,6 +1903,109 @@ impl StateStore {
         })?;
         let _ = self.request_refresh(Some(ANTIGRAVITY_ACCOUNT_ID));
         Ok(state)
+    }
+
+    /// 启动时自动接入本机 OpenCode CLI 已保存的凭据。只读取官方
+    /// `opencode auth export` 的输出；找不到凭据时保持未接入，由用户手动添加。
+    fn detect_local_opencode(self: &Arc<Self>) {
+        if self
+            .snapshot()
+            .accounts
+            .iter()
+            .any(|account| account.platform == OPENCODE_GO_PLATFORM)
+        {
+            return;
+        }
+        if opencode::read_cli_api_key().is_err() {
+            return;
+        }
+        let Some(product) = api_key_product(OPENCODE_GO_PLATFORM) else {
+            return;
+        };
+        let mut added = false;
+        self.update_soft(|state| {
+            if state
+                .accounts
+                .iter()
+                .any(|account| account.platform == OPENCODE_GO_PLATFORM)
+            {
+                return;
+            }
+            state.accounts.push(AccountState {
+                account_id: OPENCODE_LOCAL_ACCOUNT_ID.to_string(),
+                platform: OPENCODE_GO_PLATFORM.to_string(),
+                display_name: "本机 OpenCode".to_string(),
+                auth_state: AuthState::Unknown,
+                source: AccountSource::Local,
+                identity_hint: None,
+                products: vec![product],
+            });
+            added = true;
+        });
+        if added {
+            let _ = self.request_refresh(Some(OPENCODE_LOCAL_ACCOUNT_ID));
+        }
+    }
+
+    /// 启动时检查本机 agy 登录态：能直接读到额度才自动接入；
+    /// 未安装或未登录时保持未接入，避免制造一个必然失败的账户。
+    fn detect_local_antigravity(self: &Arc<Self>) {
+        if self
+            .snapshot()
+            .accounts
+            .iter()
+            .any(|account| account.platform == ANTIGRAVITY_PLATFORM)
+        {
+            return;
+        }
+        if antigravity::find_agy_binary().is_err() {
+            return;
+        }
+        let Ok(usage) = antigravity::read_usage() else {
+            return;
+        };
+        let snapshot = antigravity_snapshot(&usage);
+        let checked_at = snapshot.checked_at_epoch;
+        let plan_tier = usage.plan_tier.clone();
+        let identity_hint = usage
+            .account
+            .as_deref()
+            .map(mask_email)
+            .filter(|hint| hint != "已授权账户");
+        let mut products = antigravity_products();
+        if let Some(product) = products.first_mut() {
+            product.plan_tier = plan_tier;
+            product.active = Some(true);
+            product.snapshot = Some(snapshot);
+            product.query.last_attempt_epoch = Some(checked_at);
+        }
+        let mut notices = Vec::new();
+        let mut added = false;
+        self.update_soft(|state| {
+            if state
+                .accounts
+                .iter()
+                .any(|account| account.platform == ANTIGRAVITY_PLATFORM)
+            {
+                return;
+            }
+            state.accounts.push(AccountState {
+                account_id: ANTIGRAVITY_ACCOUNT_ID.to_string(),
+                platform: ANTIGRAVITY_PLATFORM.to_string(),
+                display_name: platform_display_name(ANTIGRAVITY_PLATFORM).to_string(),
+                auth_state: AuthState::Ok,
+                source: AccountSource::Local,
+                identity_hint,
+                products,
+            });
+            notices = low_quota_notices(state, ANTIGRAVITY_ACCOUNT_ID);
+            added = true;
+        });
+        if added {
+            for notice in &notices {
+                self.notify_low_quota(notice);
+            }
+        }
     }
 
     /// 发起官方浏览器授权。新账户授权成功后加入列表；重新授权复用原账户记录。
@@ -2515,26 +2622,42 @@ fn probe_api_key(
 }
 
 fn refresh_api_key(store: &Arc<StateStore>, account_id: &str, platform: &str) {
-    let Some(profile) = store.private_api_dir(account_id) else {
-        store.update_soft(|state| clear_refreshing(state, account_id));
-        return;
-    };
-    let credential = match api_key::load(&profile) {
-        Ok(credential) if credential.platform == platform => credential,
-        _ => {
-            store.apply_platform_refresh_error(
-                account_id,
-                platform,
-                &ProviderError::new(
-                    "credentials-missing",
-                    "该账户的 API Key 已丢失，请重新填写。",
-                ),
-            );
+    let source = store
+        .snapshot()
+        .accounts
+        .iter()
+        .find(|account| account.account_id == account_id)
+        .map(|account| account.source);
+    let api_key = if source == Some(AccountSource::Local) && platform == OPENCODE_GO_PLATFORM {
+        match opencode::read_cli_api_key() {
+            Ok(api_key) => api_key,
+            Err(error) => {
+                store.apply_platform_refresh_error(account_id, platform, &error);
+                return;
+            }
+        }
+    } else {
+        let Some(profile) = store.private_api_dir(account_id) else {
+            store.update_soft(|state| clear_refreshing(state, account_id));
             return;
+        };
+        match api_key::load(&profile) {
+            Ok(credential) if credential.platform == platform => credential.api_key,
+            _ => {
+                store.apply_platform_refresh_error(
+                    account_id,
+                    platform,
+                    &ProviderError::new(
+                        "credentials-missing",
+                        "该账户的 API Key 已丢失，请重新填写。",
+                    ),
+                );
+                return;
+            }
         }
     };
 
-    match probe_api_key(platform, &credential.api_key) {
+    match probe_api_key(platform, &api_key) {
         Ok((snapshot, plan_tier, active)) => {
             let mut low_notices = Vec::new();
             let mut reset_notices = Vec::new();
@@ -2592,6 +2715,14 @@ fn refresh_antigravity(store: &Arc<StateStore>, account_id: &str) {
         }
         Err(error) => store.apply_platform_refresh_error(account_id, ANTIGRAVITY_PLATFORM, &error),
     }
+}
+
+pub fn auto_detect_local_accounts(store: Arc<StateStore>) {
+    // 启动后在后台探测，避免阻塞窗口；Antigravity 首次查询可能耗时十余秒。
+    thread::spawn(move || {
+        store.detect_local_opencode();
+        store.detect_local_antigravity();
+    });
 }
 
 pub fn start_scheduler(store: Arc<StateStore>) {

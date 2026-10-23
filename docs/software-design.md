@@ -29,6 +29,8 @@
 
 OpenCode Go 与 Command Code 属于 API Key 账户：添加时先用一次真实查询验证密钥，成功后写入 `api-profiles/<accountId>/credentials.json`（同样 0700/0600），失败不会留下账户或凭证。OpenCode Go 读取官方 `GET https://opencode.ai/zen/go/v1/usage` 的 5 小时 / 每周 / 订阅月百分比；Command Code 读取 CLI 同款 `/alpha/billing/credits`、`/alpha/usage/summary` 与 `/alpha/billing/subscriptions`，月度上限由“已用 + 剩余”推导，辅助接口失败时保留滚动窗口并记录能力缺口。密钥只在 Rust 侧使用，不进入 `PersistedState`、事件或错误消息。
 
+启动后 Rust 会在后台探测本机已有登录态：OpenCode 调用官方 `opencode auth export`，存在活动 API Key 时自动创建“本机 OpenCode”账户，并在每次刷新时重新读取 CLI 凭据；Antigravity 先确认 `agy` 可执行，再实际读取一次 `/usage`，成功才创建“本机 Antigravity”账户。未探测到时不创建账户，保持“添加账户”的手动流程。探测只使用官方 CLI 命令，不直接解析 SQLite、钥匙串或浏览器 Cookie。
+
 Antigravity 是本机账户：应用只调用 `agy -p /usage --output-format json` 读取官方打印结果，不读取 CLI 的钥匙串、令牌文件或浏览器会话。查询前校验 `agy --version` ≥ 1.1.11，并设置 `AGY_CLI_DISABLE_AUTO_UPDATE=true`；查询带超时并能主动结束未登录时等待交互的进程。返回按模型分组展示每周 / 5 小时剩余比例与重置时间。
 
 网络代理由设置页统一配置（跟随系统 / 不走代理 / 指定代理），状态层在启动与偏好变更后写入全局代理配置。ureq 请求按目标 URL 选择代理并跳过回环地址与 `NO_PROXY`；子进程（`agy`、Codex app-server）在构造 `Command` 时写入或移除代理环境变量。跟随系统时优先使用进程已有的 `HTTP(S)_PROXY` / `ALL_PROXY`，其次读取 Windows Internet Settings 或 macOS `scutil --proxy`；PAC/自动配置脚本不解析。指定代理只接受不含凭据的 HTTP/HTTPS URL。

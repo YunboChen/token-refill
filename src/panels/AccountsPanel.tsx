@@ -447,11 +447,14 @@ export default function AccountsPanel() {
                       : account.platform === 'antigravity'
                         ? '本机 agy 登录'
                         : account.platform === 'opencode-go'
-                          || account.platform === 'commandcode'
-                          ? 'API Key 授权'
-                          : managed
-                            ? '独立授权'
-                            : '本机登录态'}
+                          ? managed
+                            ? 'API Key 授权'
+                            : '本机 CLI 登录'
+                          : account.platform === 'commandcode'
+                            ? 'API Key 授权'
+                            : managed
+                              ? '独立授权'
+                              : '本机登录态'}
                     {account.identityHint ? ` · ${account.identityHint}` : ''}
                   </p>
                   <div className={styles.planList}>
