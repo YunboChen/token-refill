@@ -749,6 +749,11 @@
   margin: 0 0 16px;
 }
 
+/* 账户页内的授权失败提示：首个子元素不带顶部间距，和下方分组留出呼吸 */
+.accountNotice {
+  margin: 0 0 18px;
+}
+
 /* 草稿说明：中性提示条，不与可交互控件争主色 */
 .draftBanner {
   display: flex;

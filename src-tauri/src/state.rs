@@ -1208,6 +1208,14 @@ struct PendingLogin {
     cancel: Arc<AtomicBool>,
 }
 
+/// 仍占用授权入口的流程。已请求取消的流程正在回收回调端口与子进程，
+/// 不再阻塞新的授权；否则用户取消后要等后台线程收尾才能重新发起。
+fn active_login(logins: &HashMap<String, PendingLogin>) -> Option<&PendingLogin> {
+    logins
+        .values()
+        .find(|pending| !pending.cancel.load(Ordering::SeqCst))
+}
+
 pub struct StateStore {
     inner: Mutex<PersistedState>,
     path: PathBuf,
@@ -1437,7 +1445,7 @@ impl StateStore {
         {
             // 官方登录回调端口由 app-server 占用，同一时间只允许一个授权流程。
             let logins = lock(&self.logins);
-            if let Some(pending) = logins.values().next() {
+            if let Some(pending) = active_login(&logins) {
                 if pending.account_id == target_id {
                     return Err("该账户正在等待授权，请先完成或取消当前登录。".to_string());
                 }
@@ -1541,7 +1549,7 @@ impl StateStore {
         {
             // 同一时间只允许一个授权流程，避免多个回环监听同时等待。
             let logins = lock(&self.logins);
-            if let Some(pending) = logins.values().next() {
+            if let Some(pending) = active_login(&logins) {
                 if pending.account_id == target_id {
                     return Err("该账户正在等待授权，请先完成或取消当前登录。".to_string());
                 }
@@ -3123,5 +3131,26 @@ mod tests {
             vec!["未找到有效的 Coding Plan 订阅"]
         );
         assert_eq!(state.accounts[1].auth_state, AuthState::Ok);
+    }
+
+    #[test]
+    fn canceled_login_releases_the_authorization_slot_immediately() {
+        let mut logins = HashMap::new();
+        let cancel = Arc::new(AtomicBool::new(false));
+        logins.insert(
+            "login-1".to_string(),
+            PendingLogin {
+                account_id: "codex-1".to_string(),
+                cancel: Arc::clone(&cancel),
+            },
+        );
+        assert_eq!(
+            active_login(&logins).map(|pending| pending.account_id.as_str()),
+            Some("codex-1")
+        );
+
+        // 取消后即使后台线程还没回收回调端口，也不该再阻止新的授权。
+        cancel.store(true, Ordering::SeqCst);
+        assert!(active_login(&logins).is_none());
     }
 }

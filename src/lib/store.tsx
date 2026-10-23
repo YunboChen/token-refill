@@ -33,12 +33,15 @@ interface AppStateContextValue {
   ready: boolean;
   desktop: boolean;
   error: string | null;
+  /** 发起授权失败的提示；只属于账户页，不进入其他页面的全局错误条。 */
+  loginError: string | null;
   update: UpdateStatus | null;
   refresh: (accountId?: string) => Promise<void>;
   savePreferences: (preferences: Preferences) => Promise<boolean>;
   beginLogin: (accountId?: string, displayName?: string) => Promise<LoginStart | null>;
   beginBailianLogin: (accountId?: string, displayName?: string) => Promise<LoginStart | null>;
   cancelLogin: (loginId: string) => Promise<void>;
+  clearLoginError: () => void;
   renameAccount: (accountId: string, displayName: string) => Promise<boolean>;
   removeAccount: (accountId: string) => Promise<boolean>;
   setAutoLaunch: (enabled: boolean) => Promise<boolean>;
@@ -60,6 +63,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(defaultAppState);
   const [ready, setReady] = useState(!desktop);
   const [error, setError] = useState<string | null>(null);
+  const [loginError, setLoginError] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
 
   // 启动时静默检查一次版本；失败（离线、限流）不打扰用户，设置页仍可手动重试。
@@ -178,10 +182,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       if (!desktop) return null;
       try {
         const start = await beginAccountLogin(accountId, displayName);
-        setError(null);
+        setLoginError(null);
         return start;
       } catch (err) {
-        setError(errorMessage(err));
+        setLoginError(errorMessage(err));
         return null;
       }
     },
@@ -193,10 +197,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       if (!desktop) return null;
       try {
         const start = await beginBailianLoginCommand(accountId, displayName);
-        setError(null);
+        setLoginError(null);
         return start;
       } catch (err) {
-        setError(errorMessage(err));
+        setLoginError(errorMessage(err));
         return null;
       }
     },
@@ -208,12 +212,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       if (!desktop) return;
       try {
         await cancelAccountLogin(loginId);
-      } catch (err) {
-        setError(errorMessage(err));
+      } catch {
+        // 取消是收尾动作：授权刚好结束时 Rust 会返回“未找到等待中的流程”，
+        // 这不算用户可见的失败，也不再占用授权入口。
       }
     },
     [desktop],
   );
+
+  const clearLoginError = useCallback(() => setLoginError(null), []);
 
   const renameAccount = useCallback(
     async (accountId: string, displayName: string) => {
@@ -281,12 +288,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       ready,
       desktop,
       error,
+      loginError,
       update,
       refresh,
       savePreferences,
       beginLogin,
       beginBailianLogin,
       cancelLogin,
+      clearLoginError,
       renameAccount,
       removeAccount,
       setAutoLaunch,
@@ -297,12 +306,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       ready,
       desktop,
       error,
+      loginError,
       update,
       refresh,
       savePreferences,
       beginLogin,
       beginBailianLogin,
       cancelLogin,
+      clearLoginError,
       renameAccount,
       removeAccount,
       setAutoLaunch,

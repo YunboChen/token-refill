@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, m } from 'motion/react';
 import {
@@ -145,9 +145,11 @@ export default function AccountsPanel() {
     state,
     desktop,
     refresh,
+    loginError,
     beginLogin,
     beginBailianLogin,
     cancelLogin,
+    clearLoginError,
     renameAccount,
     removeAccount,
     openExternal,
@@ -157,6 +159,34 @@ export default function AccountsPanel() {
   const [starting, setStarting] = useState(false);
   // 改名与移除都在弹窗里确认，提交期间锁住按钮避免重复请求。
   const [acting, setActing] = useState(false);
+
+  // 每次发起授权递增。弹窗在启动请求返回前关闭、或整个面板卸载时，
+  // 晚到的结果按过期处理并立刻取消，不在 Rust 侧留下等待中的流程。
+  const startAttemptRef = useRef(0);
+
+  useEffect(() => () => {
+    startAttemptRef.current += 1;
+  }, []);
+
+  // 授权流程由 Rust 后台线程持有，界面消失时必须显式取消：无论是关闭弹窗、
+  // 切换到结果状态，还是离开账户页，否则后台要等满超时才能再次发起授权。
+  const pendingLoginId =
+    dialog?.kind === 'login' && dialog.phase === 'waiting'
+      ? dialog.start.loginId
+      : null;
+
+  useEffect(() => {
+    if (!pendingLoginId) return;
+    return () => {
+      void cancelLogin(pendingLoginId);
+    };
+  }, [pendingLoginId, cancelLogin]);
+
+  // 授权失败只在账户页提示。进入页面时从干净的提示开始，
+  // 之前离场后才返回的失败结果不会作为旧错误显示出来。
+  useEffect(() => {
+    clearLoginError();
+  }, [clearLoginError]);
 
   // 授权在 Rust 后台线程完成；这里只接收脱敏状态并更新对话框。
   useEffect(() => {
@@ -194,12 +224,21 @@ export default function AccountsPanel() {
   }, [desktop]);
 
   const startAdd = async (platform: DialogPlatform) => {
+    const attempt = startAttemptRef.current + 1;
+    startAttemptRef.current = attempt;
+    // 重试时先收起上一次的失败提示，结果出来后再按需展示。
+    clearLoginError();
     setStarting(true);
     const name = draftName.trim() || undefined;
     const start =
       platform === 'bailian'
         ? await beginBailianLogin(undefined, name)
         : await beginLogin(undefined, name);
+    if (attempt !== startAttemptRef.current) {
+      // 弹窗在请求返回前已关闭：授权流程不该在后台继续等待。
+      if (start) void cancelLogin(start.loginId);
+      return;
+    }
     setStarting(false);
     if (!start) {
       setDialog(null);
@@ -217,11 +256,18 @@ export default function AccountsPanel() {
   };
 
   const startReauth = async (account: AccountState) => {
+    const attempt = startAttemptRef.current + 1;
+    startAttemptRef.current = attempt;
+    clearLoginError();
     const platform: DialogPlatform = account.platform === 'bailian' ? 'bailian' : 'codex';
     const start =
       platform === 'bailian'
         ? await beginBailianLogin(account.accountId)
         : await beginLogin(account.accountId);
+    if (attempt !== startAttemptRef.current) {
+      if (start) void cancelLogin(start.loginId);
+      return;
+    }
     if (!start) return;
     setDialog({
       kind: 'login',
@@ -235,9 +281,10 @@ export default function AccountsPanel() {
   };
 
   const closeDialog = () => {
-    if (dialog?.kind === 'login' && dialog.phase === 'waiting') {
-      void cancelLogin(dialog.start.loginId);
-    }
+    // 作废尚未返回的启动请求；已在等待的登录由 pendingLoginId 的清理逻辑取消。
+    startAttemptRef.current += 1;
+    // 请求若在关闭后才失败，不会再走回 startAdd 的复位分支。
+    setStarting(false);
     setDialog(null);
   };
 
@@ -294,6 +341,12 @@ export default function AccountsPanel() {
 
   return (
     <section>
+      {/* 发起授权失败只属于账户页：错误留在本页，不占用其他页面的全局提示条。 */}
+      {loginError ? (
+        <p className={`${styles.noticeDanger} ${styles.accountNotice}`} role="alert">
+          {loginError}
+        </p>
+      ) : null}
       <div className={styles.platformStack}>
         {groups.map((group) => (
           <section className={styles.platformPanel} key={group.platform}>
@@ -570,7 +623,7 @@ export default function AccountsPanel() {
                       <button
                         type="button"
                         className={styles.buttonGhost}
-                        onClick={() => setDialog(null)}
+                        onClick={closeDialog}
                       >
                         取消
                       </button>
