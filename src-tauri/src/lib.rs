@@ -7,6 +7,8 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tauri::Manager;
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_notification::NotificationExt;
 
 use state::{LoginStartPayload, PersistedState, Preferences, StateStore};
 
@@ -89,6 +91,46 @@ fn remove_account(
     store.remove_account(&account_id)
 }
 
+/// 修改开机自启：先写入系统登录项，确认系统实际状态后才回写偏好。
+/// 失败直接返回错误，不把本地开关改成未生效的值。
+#[tauri::command]
+fn set_auto_launch(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, Arc<StateStore>>,
+    enabled: bool,
+) -> Result<PersistedState, String> {
+    let autolaunch = app.autolaunch();
+    if enabled {
+        autolaunch
+            .enable()
+            .map_err(|err| format!("启用开机自启失败：{err}"))?;
+    } else {
+        autolaunch
+            .disable()
+            .map_err(|err| format!("关闭开机自启失败：{err}"))?;
+    }
+
+    let actual = autolaunch
+        .is_enabled()
+        .map_err(|err| format!("读取开机自启状态失败：{err}"))?;
+    if actual != enabled {
+        return Err("系统未接受开机自启设置，请检查登录项权限。".to_string());
+    }
+    store.set_auto_launch_preference(actual)
+}
+
+/// 设置页的显式测试入口，用于确认系统通知是否可用。
+/// 桌面端没有应用内授权弹窗；通知是否展示由系统通知设置决定。
+#[tauri::command]
+fn send_test_notification(app: tauri::AppHandle) -> Result<(), String> {
+    app.notification()
+        .builder()
+        .title("Token Refill · 测试通知")
+        .body("如果你看到这条通知，说明系统通知已经可用。")
+        .show()
+        .map_err(|err| format!("发送测试通知失败：{err}"))
+}
+
 /// 仅允许打开 HTTPS 授权地址，避免把任意输入交给系统 shell。
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
@@ -121,6 +163,11 @@ fn open_external_url(url: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             fs::create_dir_all(&data_dir)?;
@@ -129,6 +176,13 @@ pub fn run() {
                 data_dir.join("state.json"),
             ));
             app.manage(Arc::clone(&store));
+
+            // 自启以系统登录项为准：启动时回写实际状态，避免本地开关与系统不一致。
+            match app.autolaunch().is_enabled() {
+                Ok(actual) => store.reconcile_auto_launch(actual),
+                Err(err) => eprintln!("读取开机自启状态失败：{err}"),
+            }
+
             state::start_scheduler(store);
             Ok(())
         })
@@ -141,7 +195,9 @@ pub fn run() {
             cancel_account_login,
             rename_account,
             remove_account,
-            open_external_url
+            open_external_url,
+            send_test_notification,
+            set_auto_launch
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Token Refill");

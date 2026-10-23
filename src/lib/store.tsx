@@ -17,6 +17,7 @@ import {
   refreshUsage,
   removeAccount as removeAccountCommand,
   renameAccount as renameAccountCommand,
+  setAutoLaunch as setAutoLaunchCommand,
   updatePreferences,
   type AppState,
   type LoginStart,
@@ -35,6 +36,7 @@ interface AppStateContextValue {
   cancelLogin: (loginId: string) => Promise<void>;
   renameAccount: (accountId: string, displayName: string) => Promise<boolean>;
   removeAccount: (accountId: string) => Promise<boolean>;
+  setAutoLaunch: (enabled: boolean) => Promise<boolean>;
   openExternal: (url: string) => Promise<void>;
 }
 
@@ -207,6 +209,22 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [desktop, applyState],
   );
 
+  const setAutoLaunch = useCallback(
+    async (enabled: boolean) => {
+      if (!desktop) return false;
+      try {
+        const next = await setAutoLaunchCommand(enabled);
+        applyState(next);
+        setError(null);
+        return true;
+      } catch (err) {
+        setError(errorMessage(err));
+        return false;
+      }
+    },
+    [desktop, applyState],
+  );
+
   const openExternal = useCallback(
     async (url: string) => {
       if (!desktop) return;
@@ -231,6 +249,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       cancelLogin,
       renameAccount,
       removeAccount,
+      setAutoLaunch,
       openExternal,
     }),
     [
@@ -244,6 +263,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       cancelLogin,
       renameAccount,
       removeAccount,
+      setAutoLaunch,
       openExternal,
     ],
   );

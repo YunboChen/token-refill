@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import { Info } from '@phosphor-icons/react';
-import type { Preferences } from '../lib/desktop';
+import { sendTestNotification, type Preferences } from '../lib/desktop';
 import {
   loadTheme,
   saveTheme,
@@ -18,11 +18,13 @@ function Toggle({
   onChange,
   label,
   hint,
+  disabled,
 }: {
   checked: boolean;
   onChange: (next: boolean) => void;
   label: string;
   hint?: string;
+  disabled?: boolean;
 }) {
   const id = useId();
   const labelId = `${id}-label`;
@@ -43,6 +45,7 @@ function Toggle({
           className={styles.switchInput}
           checked={checked}
           onChange={(event) => onChange(event.target.checked)}
+          disabled={disabled}
           aria-labelledby={labelId}
           aria-describedby={hint ? hintId : undefined}
         />
@@ -56,11 +59,16 @@ function Toggle({
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
+type TestState = 'idle' | 'sending' | 'sent' | 'error';
+
 export default function SettingsPanel() {
-  const { state, savePreferences } = useAppState();
+  const { state, savePreferences, setAutoLaunch, desktop } = useAppState();
   const [prefs, setPrefs] = useState<Preferences>(state.preferences);
   const [theme, setTheme] = useState<ThemePref>(loadTheme);
   const [saveState, setSaveState] = useState<SaveState>('idle');
+  const [testState, setTestState] = useState<TestState>('idle');
+  const [autoLaunchBusy, setAutoLaunchBusy] = useState(false);
+  const [autoLaunchError, setAutoLaunchError] = useState<string | null>(null);
   const dirty = useRef(false);
   const latestPrefs = useRef(prefs);
   latestPrefs.current = prefs;
@@ -109,13 +117,36 @@ export default function SettingsPanel() {
     applyTheme(next);
   }
 
+  async function changeAutoLaunch(next: boolean) {
+    if (!desktop || autoLaunchBusy) return;
+    setAutoLaunchBusy(true);
+    setAutoLaunchError(null);
+    const ok = await setAutoLaunch(next);
+    setAutoLaunchBusy(false);
+    if (!ok) {
+      setAutoLaunchError('系统未接受开机自启设置，请检查登录项权限。');
+      return;
+    }
+    // 立即反映系统实际状态；这不是普通偏好改动，不标记 dirty。
+    setPrefs((prev) => ({ ...prev, autoLaunchEnabled: next }));
+  }
+
+  function testNotification() {
+    if (!desktop || testState === 'sending') return;
+    setTestState('sending');
+    void sendTestNotification().then(
+      () => setTestState('sent'),
+      () => setTestState('error'),
+    );
+  }
+
   return (
     <section>
       <div className={styles.draftBanner}>
         <Info size={15} className={styles.draftIcon} aria-hidden />
         <span className={styles.draftTag}>本机</span>
         <p className={styles.draftText}>
-          刷新间隔与提醒阈值保存到本机 Rust 状态；通知发送与开机自启尚未接入系统权限，暂不生效。
+          设置保存到本机 Rust 状态；三类提醒走系统通知，开机自启写入系统登录项。
         </p>
         {saveState === 'saving' ? (
           <span className={styles.saveState}>保存中…</span>
@@ -173,7 +204,7 @@ export default function SettingsPanel() {
           checked={prefs.lowQuotaEnabled}
           onChange={(next) => update({ lowQuotaEnabled: next })}
           label="低额度提醒"
-          hint="仅在能可靠获得或计算剩余比例时适用，总览中的剩余额度环会同步标记。"
+          hint="剩余比例低于阈值时通过系统通知提醒，同一额度周期只提醒一次；总览中的剩余额度环会同步标记。"
         />
         <div
           className={styles.stackRow}
@@ -214,9 +245,37 @@ export default function SettingsPanel() {
           label="重置或恢复提醒"
           hint="默认关闭；仅在查询确认新周期后提示，不根据本地倒计时宣称恢复。"
         />
+        <div className={styles.settingRowStatic}>
+          <div className={styles.settingText}>
+            <span className={styles.settingLabel}>系统通知</span>
+            <span className={styles.settingHint}>
+              提醒通过 macOS 系统通知发送，桌面端没有应用内授权弹窗。若未显示，请在“系统设置 →
+              通知”中允许 Token Refill（开发模式下来源可能显示为 Terminal）。
+            </span>
+            {testState === 'sent' ? (
+              <span className={styles.settingHint} role="status">
+                已请求发送；未出现请检查系统通知设置。
+              </span>
+            ) : null}
+            {testState === 'error' ? (
+              <span className={styles.settingHint} role="status" data-danger="true">
+                发送失败，请稍后重试。
+              </span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className={styles.testButton}
+            onClick={testNotification}
+            disabled={!desktop || testState === 'sending'}
+            title={desktop ? '发送一条测试通知' : '浏览器预览无法调用 Rust'}
+          >
+            {testState === 'sending' ? '发送中…' : '发送测试通知'}
+          </button>
+        </div>
       </section>
       <p className={`${styles.settingHint} ${styles.groupNote}`}>
-        系统尚未接入通知权限，以上提醒暂不会实际发送。
+        三类提醒均已接入系统通知。
       </p>
 
       <h2 id="settings-system" className={styles.groupTitle}>系统</h2>
@@ -255,10 +314,26 @@ export default function SettingsPanel() {
         </div>
         <Toggle
           checked={prefs.autoLaunchEnabled}
-          onChange={(next) => update({ autoLaunchEnabled: next })}
+          onChange={(next) => void changeAutoLaunch(next)}
           label="开机自启"
-          hint="默认关闭；接入后以系统实际状态为准，设置失败会如实反馈。"
+          hint={
+            !desktop
+              ? '浏览器预览无法修改系统登录项。'
+              : autoLaunchBusy
+                ? '正在写入系统登录项…'
+                : '默认关闭；写入系统登录项，设置失败会如实反馈。'
+          }
+          disabled={!desktop || autoLaunchBusy}
         />
+        {autoLaunchError ? (
+          <p
+            className={`${styles.settingHint} ${styles.groupNote}`}
+            data-danger="true"
+            role="status"
+          >
+            {autoLaunchError}
+          </p>
+        ) : null}
       </section>
     </section>
   );
