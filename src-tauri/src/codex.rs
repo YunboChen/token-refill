@@ -431,6 +431,7 @@ impl AppServer {
         if let Some(codex_home) = codex_home {
             command.env("CODEX_HOME", codex_home);
         }
+        crate::proxy::apply_to_command(&mut command);
         let mut child = command.spawn().map_err(io_error)?;
 
         let stdin = child

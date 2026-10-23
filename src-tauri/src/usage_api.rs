@@ -49,17 +49,19 @@ impl HttpError {
     }
 }
 
-fn agent(timeout: Duration) -> ureq::Agent {
-    ureq::Agent::config_builder()
+fn agent(url: &str, timeout: Duration) -> ureq::Agent {
+    let mut config = ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
-        .user_agent(concat!("TokenRefill/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .into()
+        .user_agent(concat!("TokenRefill/", env!("CARGO_PKG_VERSION")));
+    if let Some(proxy) = crate::proxy::ureq_proxy_for(url) {
+        config = config.proxy(Some(proxy));
+    }
+    config.build().into()
 }
 
 /// 发起带 Bearer 认证的 JSON GET 请求。
 pub fn get_json(url: &str, api_key: &str, timeout: Duration) -> Result<Value, HttpError> {
-    let request = agent(timeout)
+    let request = agent(url, timeout)
         .get(url)
         .header("Accept", "application/json")
         .header("Authorization", format!("Bearer {api_key}"));

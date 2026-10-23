@@ -25,7 +25,12 @@ export interface Preferences {
   authExpiredEnabled: boolean;
   resetNoticeEnabled: boolean;
   autoLaunchEnabled: boolean;
+  /** system：跟随系统；none：直连；manual：使用 proxyUrl。 */
+  proxyMode: ProxyMode;
+  proxyUrl: string | null;
 }
+
+export type ProxyMode = 'system' | 'none' | 'manual';
 
 export interface QueryError {
   code: string;

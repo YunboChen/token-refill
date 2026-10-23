@@ -1,63 +1,277 @@
-//! 系统代理检测。
+//! 全局代理设置与系统代理检测。
 //!
-//! 只用系统公开配置为子进程补齐代理环境变量，不修改系统设置：
-//! - Windows：当前用户的 Internet Settings（`ProxyEnable` / `ProxyServer` /
-//!   `ProxyOverride`）；
-//! - macOS：`scutil --proxy`；
-//! - 其他平台：不主动探测，沿用进程已有的代理环境变量。
+//! 用户在设置页选择三种模式：跟随系统、不走代理、指定代理。该设置统一作用于
+//! 应用发起的 HTTP 请求，以及需要通过环境变量配置代理的子进程（`agy`、
+//! Codex app-server）。
 //!
-//! 环境变量优先级高于系统设置：只要用户已经设置了 `HTTP_PROXY` /
-//! `HTTPS_PROXY` / `ALL_PROXY`（大小写均可），就不再覆盖。PAC / 自动配置脚本
-//! 无法安全地转换成代理地址，这里不做解析。
+//! - Windows：读取当前用户 Internet Settings 的 `ProxyEnable` / `ProxyServer`
+//!   / `ProxyOverride`；
+//! - macOS：读取 `scutil --proxy`；
+//! - 其他平台：不主动探测系统设置。
+//!
+//! 跟随系统时，进程已有的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 优先；
+//! 不走代理时会从子进程环境中移除这些变量；指定代理覆盖已有环境变量。
+//! PAC / 自动配置脚本无法安全地转换成代理地址，这里不做解析。
 
 use std::process::Command;
+use std::sync::{LazyLock, RwLock};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SystemProxy {
+use serde::{Deserialize, Serialize};
+use url::{Host, Url};
+
+const LOCAL_NO_PROXY: &str = "localhost,127.0.0.1,::1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProxyMode {
+    #[default]
+    System,
+    #[serde(rename = "none")]
+    Direct,
+    Manual,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct Settings {
+    mode: ProxyMode,
+    manual_url: Option<String>,
+}
+
+static SETTINGS: LazyLock<RwLock<Settings>> = LazyLock::new(|| RwLock::new(Settings::default()));
+
+fn store() -> &'static RwLock<Settings> {
+    &SETTINGS
+}
+
+/// 由状态层在启动与偏好变更后调用。
+pub fn configure(mode: ProxyMode, manual_url: Option<String>) {
+    let mut settings = store()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *settings = Settings { mode, manual_url };
+}
+
+fn current() -> Settings {
+    store()
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+/// 解析后的代理。`None` 表示直连。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedProxy {
     pub http: Option<String>,
     pub https: Option<String>,
     pub no_proxy: Option<String>,
 }
 
-impl SystemProxy {
-    /// 读取当前系统代理；未启用或读取失败时返回 `None`。
-    pub fn detect() -> Option<Self> {
-        platform::detect().filter(|proxy| proxy.http.is_some() || proxy.https.is_some())
+impl ResolvedProxy {
+    fn from_url(url: String) -> Self {
+        Self {
+            http: Some(url.clone()),
+            https: Some(url),
+            no_proxy: Some(LOCAL_NO_PROXY.to_string()),
+        }
     }
+}
 
-    /// 把系统代理写进子进程环境，已存在的环境变量保持原样。
-    pub fn apply_to_command(&self, command: &mut Command) {
-        if env_present("ALL_PROXY") {
-            return;
+/// 当前设置解析出的代理；直连或没有可用代理时返回 `None`。
+pub fn resolve() -> Option<ResolvedProxy> {
+    let settings = current();
+    match settings.mode {
+        ProxyMode::Direct => None,
+        ProxyMode::Manual => settings
+            .manual_url
+            .as_deref()
+            .and_then(|url| normalize_proxy_url(url).ok())
+            .map(ResolvedProxy::from_url),
+        ProxyMode::System => system_proxy(),
+    }
+}
+
+/// 给子进程写入代理环境变量。`agy`、Codex app-server 等外部 CLI 都走这里。
+pub fn apply_to_command(command: &mut Command) {
+    apply_settings(&current(), command);
+}
+
+fn apply_settings(settings: &Settings, command: &mut Command) {
+    match settings.mode {
+        ProxyMode::Direct => remove_proxy_env(command),
+        ProxyMode::Manual => {
+            let Some(url) = settings
+                .manual_url
+                .as_deref()
+                .and_then(|url| normalize_proxy_url(url).ok())
+            else {
+                return;
+            };
+            remove_proxy_env(command);
+            set_proxy_env(command, "HTTP_PROXY", &url);
+            set_proxy_env(command, "HTTPS_PROXY", &url);
+            set_proxy_env(command, "NO_PROXY", LOCAL_NO_PROXY);
         }
-        if !env_present("HTTPS_PROXY") {
-            if let Some(proxy) = self.https.as_ref().or(self.http.as_ref()) {
-                command.env("HTTPS_PROXY", proxy);
+        ProxyMode::System => {
+            // 已有环境变量优先，避免覆盖用户显式配置。
+            if env_var("ALL_PROXY").is_some()
+                || env_var("HTTP_PROXY").is_some()
+                || env_var("HTTPS_PROXY").is_some()
+            {
+                return;
             }
-        }
-        if !env_present("HTTP_PROXY") {
-            if let Some(proxy) = self.http.as_ref().or(self.https.as_ref()) {
-                command.env("HTTP_PROXY", proxy);
+            let Some(proxy) = detect_os() else {
+                return;
+            };
+            if let Some(https) = proxy.https.as_ref().or(proxy.http.as_ref()) {
+                set_proxy_env(command, "HTTPS_PROXY", https);
             }
-        }
-        if !env_present("NO_PROXY") {
-            if let Some(no_proxy) = &self.no_proxy {
-                command.env("NO_PROXY", no_proxy);
+            if let Some(http) = proxy.http.as_ref().or(proxy.https.as_ref()) {
+                set_proxy_env(command, "HTTP_PROXY", http);
+            }
+            if let Some(no_proxy) = &proxy.no_proxy {
+                set_proxy_env(command, "NO_PROXY", no_proxy);
             }
         }
     }
 }
 
-fn env_present(name: &str) -> bool {
-    if std::env::var_os(name).is_some() {
-        return true;
+/// 为 ureq 请求选择代理。回环地址与命中 NO_PROXY 的目标保持直连。
+pub fn ureq_proxy_for(url: &str) -> Option<ureq::Proxy> {
+    let proxy = resolve()?;
+    let target = Url::parse(url).ok()?;
+    let host = target.host_str()?;
+    if is_loopback_host(target.host()?) || bypasses_proxy(host, proxy.no_proxy.as_deref()) {
+        return None;
     }
-    // Unix 上大小写是两个不同的变量；Windows 的查找本身不区分大小写。
+    let proxy_url = if target.scheme() == "http" {
+        proxy.http.as_ref().or(proxy.https.as_ref())
+    } else {
+        proxy.https.as_ref().or(proxy.http.as_ref())
+    }?;
+    ureq::Proxy::new(proxy_url).ok()
+}
+
+fn is_loopback_host(host: Host<&str>) -> bool {
+    match host {
+        Host::Ipv4(address) => address.is_loopback(),
+        Host::Ipv6(address) => address.is_loopback(),
+        Host::Domain(domain) => {
+            let domain = domain.to_ascii_lowercase();
+            domain == "localhost" || domain.ends_with(".localhost")
+        }
+    }
+}
+
+fn bypasses_proxy(host: &str, no_proxy: Option<&str>) -> bool {
+    let Some(no_proxy) = no_proxy else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    no_proxy.split(',').any(|entry| {
+        let entry = entry.trim().to_ascii_lowercase();
+        if entry.is_empty() {
+            return false;
+        }
+        if entry == "*" {
+            return true;
+        }
+        if entry.eq_ignore_ascii_case("<local>") {
+            return is_loopback_host(Host::Domain(host.as_str()));
+        }
+        // Windows 的 `127.*` / `192.168.*` 形式。
+        if let Some(prefix) = entry.strip_suffix('*') {
+            return host.starts_with(prefix);
+        }
+        let entry = entry.trim_start_matches('.');
+        host == entry || host.ends_with(&format!(".{entry}"))
+    })
+}
+
+/// 校验并规范化“指定代理”地址；不接受用户名密码，避免把凭据写入状态文件。
+pub fn normalize_proxy_url(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("指定代理时需要填写代理地址。".to_string());
+    }
+    let url = Url::parse(trimmed)
+        .map_err(|_| "代理地址格式不正确，例如 http://127.0.0.1:7890。".to_string())?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("代理地址只支持 http:// 或 https://。".to_string());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("代理地址不能包含用户名或密码。".to_string());
+    }
+    if url.host().is_none() {
+        return Err("代理地址缺少主机名。".to_string());
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err("代理地址不能包含查询参数或片段。".to_string());
+    }
+    if url.path() != "/" && !url.path().is_empty() {
+        return Err("代理地址不能包含路径。".to_string());
+    }
+    Ok(format!("{}://{}", url.scheme(), url.authority()))
+}
+
+fn env_var(name: &str) -> Option<String> {
+    let read = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    };
+    if let Some(value) = read(name) {
+        return Some(value);
+    }
+    // Windows 的变量查找本身不区分大小写；Unix 需要单独检查。
     #[cfg(not(windows))]
-    if std::env::var_os(name.to_ascii_lowercase()).is_some() {
-        return true;
+    if let Some(value) = read(&name.to_ascii_lowercase()) {
+        return Some(value);
     }
-    false
+    None
+}
+
+fn set_proxy_env(command: &mut Command, name: &str, value: &str) {
+    command.env(name, value);
+    #[cfg(not(windows))]
+    command.env(name.to_ascii_lowercase(), value);
+}
+
+fn remove_proxy_env(command: &mut Command) {
+    for name in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"] {
+        command.env_remove(name);
+        #[cfg(not(windows))]
+        command.env_remove(name.to_ascii_lowercase());
+    }
+}
+
+/// 跟随系统：环境变量优先，其次读取系统设置。
+fn system_proxy() -> Option<ResolvedProxy> {
+    if let Some(all) = env_var("ALL_PROXY") {
+        return Some(ResolvedProxy {
+            http: Some(all.clone()),
+            https: Some(all),
+            no_proxy: env_var("NO_PROXY"),
+        });
+    }
+
+    let http = env_var("HTTP_PROXY");
+    let https = env_var("HTTPS_PROXY");
+    if http.is_none() && https.is_none() {
+        return detect_os();
+    }
+
+    let no_proxy = env_var("NO_PROXY");
+    let http = http.or_else(|| https.clone());
+    let https = https.or_else(|| http.clone());
+    Some(ResolvedProxy {
+        http,
+        https,
+        no_proxy,
+    })
+}
+
+fn detect_os() -> Option<ResolvedProxy> {
+    platform::detect()
 }
 
 /// Windows 的 `ProxyServer` 有两种写法：`host:port` 或
@@ -75,7 +289,7 @@ fn parse_proxy_server(raw: &str) -> (Option<String>, Option<String>) {
             let Some((key, value)) = part.split_once('=') else {
                 continue;
             };
-            let value = normalize_proxy(value);
+            let value = normalize_proxy_value(value);
             match key.trim().to_ascii_lowercase().as_str() {
                 "http" => http = value,
                 "https" => https = value,
@@ -86,12 +300,12 @@ fn parse_proxy_server(raw: &str) -> (Option<String>, Option<String>) {
         }
         (http, https)
     } else {
-        let value = normalize_proxy(raw);
+        let value = normalize_proxy_value(raw);
         (value.clone(), value)
     }
 }
 
-fn normalize_proxy(raw: &str) -> Option<String> {
+fn normalize_proxy_value(raw: &str) -> Option<String> {
     let raw = raw.trim();
     if raw.is_empty() {
         return None;
@@ -148,7 +362,7 @@ fn parse_no_proxy(raw: &str) -> Option<String> {
 
 #[cfg(windows)]
 mod platform {
-    use super::{parse_no_proxy, parse_proxy_server, SystemProxy};
+    use super::{parse_no_proxy, parse_proxy_server, ResolvedProxy};
     use windows_sys::Win32::System::Registry::{
         RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
     };
@@ -165,7 +379,6 @@ mod platform {
         let mut kind = 0u32;
         let mut size = 0u32;
 
-        // 第一次只取所需字节数；pvData 传空不会读取内容。
         let status = unsafe {
             RegGetValueW(
                 HKEY_CURRENT_USER,
@@ -227,7 +440,7 @@ mod platform {
         (status == 0).then_some(data)
     }
 
-    pub(super) fn detect() -> Option<SystemProxy> {
+    pub(super) fn detect() -> Option<ResolvedProxy> {
         if read_dword("ProxyEnable") != Some(1) {
             return None;
         }
@@ -236,7 +449,7 @@ mod platform {
         if http.is_none() && https.is_none() {
             return None;
         }
-        Some(SystemProxy {
+        Some(ResolvedProxy {
             http,
             https,
             no_proxy: read_string("ProxyOverride").and_then(|value| parse_no_proxy(&value)),
@@ -246,7 +459,7 @@ mod platform {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::SystemProxy;
+    use super::ResolvedProxy;
 
     fn build(host: Option<String>, port: Option<u16>) -> Option<String> {
         let host = host?;
@@ -254,7 +467,7 @@ mod platform {
         Some(format!("http://{host}:{port}"))
     }
 
-    pub(super) fn detect() -> Option<SystemProxy> {
+    pub(super) fn detect() -> Option<ResolvedProxy> {
         let output = std::process::Command::new("/usr/sbin/scutil")
             .arg("--proxy")
             .output()
@@ -315,7 +528,7 @@ mod platform {
         if http.is_none() && https.is_none() {
             return None;
         }
-        Some(SystemProxy {
+        Some(ResolvedProxy {
             http,
             https,
             no_proxy: (!exceptions.is_empty()).then(|| exceptions.join(",")),
@@ -325,9 +538,9 @@ mod platform {
 
 #[cfg(not(any(windows, target_os = "macos")))]
 mod platform {
-    use super::SystemProxy;
+    use super::ResolvedProxy;
 
-    pub(super) fn detect() -> Option<SystemProxy> {
+    pub(super) fn detect() -> Option<ResolvedProxy> {
         None
     }
 }
@@ -365,21 +578,39 @@ mod tests {
     }
 
     #[test]
+    fn manual_proxy_url_is_normalized_and_credentials_are_rejected() {
+        assert_eq!(
+            normalize_proxy_url(" 127.0.0.1:7890 ").unwrap_err(),
+            "代理地址格式不正确，例如 http://127.0.0.1:7890。"
+        );
+        assert_eq!(
+            normalize_proxy_url("http://127.0.0.1:7890/").unwrap(),
+            "http://127.0.0.1:7890"
+        );
+        assert!(normalize_proxy_url("https://proxy.example.com:8443").is_ok());
+        assert!(normalize_proxy_url("socks5://127.0.0.1:1080").is_err());
+        assert!(normalize_proxy_url("http://user:pass@127.0.0.1:7890").is_err());
+        assert!(normalize_proxy_url("http://127.0.0.1:7890/path").is_err());
+    }
+
+    #[test]
+    fn no_proxy_matching_covers_suffix_and_wildcards() {
+        assert!(bypasses_proxy("relay.example.com", Some(".example.com")));
+        assert!(bypasses_proxy("api.example.com", Some("example.com")));
+        assert!(bypasses_proxy("127.0.0.1", Some("127.*")));
+        assert!(bypasses_proxy("192.168.1.5", Some("192.168.*")));
+        assert!(!bypasses_proxy("opencode.ai", Some(".example.com")));
+        assert!(!bypasses_proxy("opencode.ai", None));
+    }
+
+    #[test]
     fn proxy_is_injected_when_no_env_override_exists() {
-        if env_present("ALL_PROXY")
-            || env_present("HTTPS_PROXY")
-            || env_present("HTTP_PROXY")
-            || env_present("NO_PROXY")
-        {
-            return;
-        }
-        let proxy = SystemProxy {
-            http: Some("http://127.0.0.1:7890".to_string()),
-            https: Some("http://127.0.0.1:7890".to_string()),
-            no_proxy: Some("localhost,127.0.0.1".to_string()),
+        let settings = Settings {
+            mode: ProxyMode::Manual,
+            manual_url: Some("http://127.0.0.1:7890".to_string()),
         };
         let mut command = Command::new("agy");
-        proxy.apply_to_command(&mut command);
+        apply_settings(&settings, &mut command);
 
         let envs: std::collections::HashMap<String, String> = command
             .get_envs()
@@ -395,12 +626,27 @@ mod tests {
             Some("http://127.0.0.1:7890")
         );
         assert_eq!(
-            envs.get("HTTP_PROXY").map(String::as_str),
-            Some("http://127.0.0.1:7890")
-        );
-        assert_eq!(
             envs.get("NO_PROXY").map(String::as_str),
-            Some("localhost,127.0.0.1")
+            Some(LOCAL_NO_PROXY)
         );
+    }
+
+    #[test]
+    fn direct_mode_removes_inherited_proxy_env() {
+        let settings = Settings {
+            mode: ProxyMode::Direct,
+            manual_url: None,
+        };
+        let mut command = Command::new("agy");
+        apply_settings(&settings, &mut command);
+
+        let removed: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().to_string())
+            .collect();
+        assert!(removed.iter().any(|name| name == "HTTPS_PROXY"));
+        assert!(removed.iter().any(|name| name == "HTTP_PROXY"));
+        assert!(removed.iter().any(|name| name == "ALL_PROXY"));
     }
 }

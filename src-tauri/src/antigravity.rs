@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 use semver::Version;
 use serde_json::Value;
 
-use crate::proxy::SystemProxy;
 use crate::quota::{now_epoch, parse_epoch};
 use crate::usage_api::ProviderError;
 
@@ -49,14 +48,11 @@ pub struct AntigravityWindow {
 
 pub fn read_usage() -> Result<AntigravityUsage, ProviderError> {
     let binary = find_agy_binary()?;
-    // 每轮刷新读取一次系统代理；系统设置变化后无需重启应用。
-    let proxy = SystemProxy::detect();
-    ensure_supported_version(&binary, proxy.as_ref())?;
+    ensure_supported_version(&binary)?;
     let output = run(
         &binary,
         &["-p", "/usage", "--output-format", "json"],
         QUERY_TIMEOUT,
-        proxy.as_ref(),
     )?;
     if output.auth_required {
         return Err(auth_error());
@@ -204,12 +200,7 @@ fn read_capped(reader: impl Read) -> Vec<u8> {
 
 /// 在超时内运行 CLI。`agy` 未登录时会打印登录链接并等待 60 秒，
 /// 因此边读 stderr 边检测认证提示，命中后立即结束进程，避免每轮刷新都空等。
-fn run(
-    binary: &Path,
-    args: &[&str],
-    timeout: Duration,
-    proxy: Option<&SystemProxy>,
-) -> Result<ProcessOutput, ProviderError> {
+fn run(binary: &Path, args: &[&str], timeout: Duration) -> Result<ProcessOutput, ProviderError> {
     let mut command = Command::new(binary);
     command
         .args(args)
@@ -218,9 +209,7 @@ fn run(
         .stderr(Stdio::piped())
         // 查询额度不应触发 CLI 自更新。
         .env("AGY_CLI_DISABLE_AUTO_UPDATE", "true");
-    if let Some(proxy) = proxy {
-        proxy.apply_to_command(&mut command);
-    }
+    crate::proxy::apply_to_command(&mut command);
 
     let mut child = command.spawn().map_err(|_| {
         ProviderError::new(
@@ -310,11 +299,8 @@ fn parse_version(text: &str) -> Option<Version> {
         .find_map(|token| Version::parse(token).ok())
 }
 
-fn ensure_supported_version(
-    binary: &Path,
-    proxy: Option<&SystemProxy>,
-) -> Result<(), ProviderError> {
-    let output = run(binary, &["--version"], VERSION_TIMEOUT, proxy)?;
+fn ensure_supported_version(binary: &Path) -> Result<(), ProviderError> {
+    let output = run(binary, &["--version"], VERSION_TIMEOUT)?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let version = parse_version(&stdout).or_else(|| parse_version(&stderr));

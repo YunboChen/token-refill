@@ -84,11 +84,13 @@ fn map_request_error(error: ureq::Error) -> String {
 /// 读取最新正式 Release 并与当前版本比较。
 pub fn check_for_update() -> Result<UpdateStatus, String> {
     let url = format!("https://api.github.com/repos/{RELEASES_REPO}/releases/latest");
-    let config = ureq::Agent::config_builder()
+    let mut config = ureq::Agent::config_builder()
         .timeout_global(Some(REQUEST_TIMEOUT))
-        .user_agent(concat!("TokenRefill/", env!("CARGO_PKG_VERSION")))
-        .build();
-    let agent: ureq::Agent = config.into();
+        .user_agent(concat!("TokenRefill/", env!("CARGO_PKG_VERSION")));
+    if let Some(proxy) = crate::proxy::ureq_proxy_for(&url) {
+        config = config.proxy(Some(proxy));
+    }
+    let agent: ureq::Agent = config.build().into();
 
     let mut response = agent
         .get(&url)

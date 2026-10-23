@@ -45,7 +45,9 @@ pnpm tauri dev
 - **百炼**：应用打开阿里云百炼控制台登录页，登录成功后控制台会话令牌通过 `127.0.0.1` 回环地址直接交给 Rust，写入应用数据目录下的 `bailian-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 继承 `%APPDATA%` 的按用户 ACL）。令牌不进入前端状态、事件或日志，也不会修改 `bl` CLI 或其他工具的配置。一次授权同时查询 Token Plan 与 Coding Plan。Token Plan 会读取订阅档位（Lite / Essential / Standard / Pro）；账号提示优先使用控制台返回的昵称，昵称为数字时回退为脱敏 UID（控制台令牌接口拿不到阿里云登录名）。Coding Plan 未订阅时接口返回空列表，应用显示为数据缺口；Token Plan 对未订阅账户的返回尚未验证，不据此推断为零额度。
 - **OpenCode Go**：在 OpenCode 控制台复制 Go / Go Plus 的 API Key，粘贴到添加账户弹窗。应用先用 `GET https://opencode.ai/zen/go/v1/usage` 验证一次，再写入 `api-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600）。展示 5 小时、每周与订阅月三个窗口；订阅月按购买日滚动，不推算天数。403 表示该 Key 未开通 Go 订阅。
 - **Command Code**：使用 Provider API Key（通常以 `user_` 开头），访问 CLI 同款 `/alpha/billing/*` 与 `/alpha/usage/summary` 接口。展示 5 小时、每周滚动窗口与订阅月额度；月度窗口以“已用 + 剩余”推导上限，订阅接口不可用时仍保留滚动窗口并标注能力缺口。
-- **Antigravity**：需要本机已安装并登录 Antigravity CLI（`agy` ≥ 1.1.11）。应用调用官方打印模式 `agy -p /usage --output-format json`，按模型分组展示每周 / 5 小时剩余比例；不读取 agy 的钥匙串、令牌文件或浏览器会话，也不修改其登录状态。找不到 CLI 时可用 `AGY_BIN` 指定路径；低于 1.1.11 时应用会拒绝查询，避免旧版把 `/usage` 当作提示词消耗额度。查询前会动态读取系统代理（Windows 的 Internet Settings、macOS 的 `scutil --proxy`），仅在进程未设置 `HTTP(S)_PROXY` 时把代理注入 `agy` 子进程；PAC/自动配置脚本不解析。
+- **Antigravity**：需要本机已安装并登录 Antigravity CLI（`agy` ≥ 1.1.11）。应用调用官方打印模式 `agy -p /usage --output-format json`，按模型分组展示每周 / 5 小时剩余比例；不读取 agy 的钥匙串、令牌文件或浏览器会话，也不修改其登录状态。找不到 CLI 时可用 `AGY_BIN` 指定路径；低于 1.1.11 时应用会拒绝查询，避免旧版把 `/usage` 当作提示词消耗额度。
+
+网络代理在“设置 → 网络代理”统一配置，三种模式：**跟随系统**（Windows 读取 Internet Settings，macOS 读取 `scutil --proxy`；进程环境变量优先）、**不走代理**（直连）、**指定代理**（手动填写 `http://host:port`）。该设置作用于应用的全部 HTTPS 额度查询、版本检查，以及 `agy`、Codex app-server 等外置 CLI；指定代理不支持 PAC，且不能包含用户名或密码。
 
 百炼额度通过百炼控制台网关读取，依赖控制台会话，不能使用推理 API Key 替代。会话过期后账户页会提示重新授权。
 

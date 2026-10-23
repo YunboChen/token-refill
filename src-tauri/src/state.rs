@@ -27,6 +27,7 @@ use crate::bailian::{
 use crate::codex::{self, CodexIdentity, CodexUsage, UsageError};
 use crate::commandcode::{self, CommandCodeUsage};
 use crate::opencode::{self, OpencodeUsage};
+use crate::proxy::{self, ProxyMode};
 use crate::usage_api::ProviderError;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -69,6 +70,12 @@ pub struct Preferences {
     pub auth_expired_enabled: bool,
     pub reset_notice_enabled: bool,
     pub auto_launch_enabled: bool,
+    /// 网络代理模式；旧状态文件缺省为跟随系统。
+    #[serde(default)]
+    pub proxy_mode: ProxyMode,
+    /// 指定代理地址；仅在 `proxy_mode = manual` 时生效。
+    #[serde(default)]
+    pub proxy_url: Option<String>,
 }
 
 impl Default for Preferences {
@@ -82,6 +89,8 @@ impl Default for Preferences {
             auth_expired_enabled: true,
             reset_notice_enabled: false,
             auto_launch_enabled: false,
+            proxy_mode: ProxyMode::System,
+            proxy_url: None,
         }
     }
 }
@@ -102,6 +111,13 @@ impl Preferences {
             return Err(format!(
                 "低额度阈值需在 {LOW_QUOTA_MIN}% 到 {LOW_QUOTA_MAX}% 之间"
             ));
+        }
+        if self.proxy_mode == ProxyMode::Manual {
+            let url = self
+                .proxy_url
+                .as_deref()
+                .ok_or_else(|| "指定代理时需要填写代理地址。".to_string())?;
+            proxy::normalize_proxy_url(url)?;
         }
         Ok(())
     }
@@ -1519,6 +1535,10 @@ pub struct StateStore {
 impl StateStore {
     pub fn load(app: AppHandle, path: PathBuf) -> Self {
         let state = load_state(&path);
+        proxy::configure(
+            state.preferences.proxy_mode,
+            state.preferences.proxy_url.clone(),
+        );
         let parent = path.parent();
         let profiles_dir = parent
             .map(|parent| parent.join(PROFILES_DIR_NAME))
@@ -1703,9 +1723,24 @@ impl StateStore {
     }
 
     pub fn update_preferences(&self, preferences: Preferences) -> Result<PersistedState, String> {
-        preferences.validate()?;
-        let next = preferences_for_update(&self.snapshot().preferences, preferences);
-        self.update_strict(|state| state.preferences = next)
+        let mut next = preferences_for_update(&self.snapshot().preferences, preferences);
+        next.validate()?;
+        if next.proxy_mode == ProxyMode::Manual {
+            next.proxy_url = Some(proxy::normalize_proxy_url(
+                next.proxy_url.as_deref().unwrap_or(""),
+            )?);
+        } else {
+            next.proxy_url = next
+                .proxy_url
+                .map(|url| url.trim().to_string())
+                .filter(|url| !url.is_empty());
+        }
+        let state = self.update_strict(|state| state.preferences = next)?;
+        proxy::configure(
+            state.preferences.proxy_mode,
+            state.preferences.proxy_url.clone(),
+        );
+        Ok(state)
     }
 
     /// 自启设置已由系统确认生效后，回写偏好并返回新状态。
@@ -3276,6 +3311,14 @@ mod tests {
 
         prefs.low_quota_threshold = 100;
         assert!(prefs.validate().is_err());
+
+        prefs.low_quota_threshold = 20;
+        prefs.proxy_mode = ProxyMode::Manual;
+        assert!(prefs.validate().is_err());
+        prefs.proxy_url = Some("127.0.0.1:7890".to_string());
+        assert!(prefs.validate().is_err());
+        prefs.proxy_url = Some("http://127.0.0.1:7890".to_string());
+        assert!(prefs.validate().is_ok());
     }
 
     #[test]
