@@ -41,9 +41,15 @@ export interface QueryState {
 export interface QuotaWindow {
   windowId: string;
   sourceWindowId: string;
+  /** 平台侧窗口名（如“订阅月”）；为空时按持续时间展示。 */
+  windowName: string | null;
+  /** 原始计量单位，例如 percent / calls。 */
   unit: string;
   usedPercent: number | null;
   remainingPercent: number | null;
+  /** 平台提供的绝对值；没有时只展示比例。 */
+  usedAmount: number | null;
+  totalAmount: number | null;
   windowDurationMins: number | null;
   resetsAtEpoch: number | null;
 }
@@ -66,6 +72,8 @@ export interface ProductState {
   kind: string;
   displayName: string;
   planTier: string | null;
+  /** null 表示尚未确认；false 表示平台确认未开通。 */
+  active: boolean | null;
   snapshot: QuotaSnapshot | null;
   query: QueryState;
 }
@@ -124,12 +132,23 @@ export function onAppStateChanged(
   return listen<AppState>(APP_STATE_EVENT, (event) => handler(event.payload));
 }
 
-/** 发起官方浏览器授权；authUrl 由 Codex app-server 返回，令牌不经过前端。 */
+/** 发起 Codex 官方浏览器授权；authUrl 由 app-server 返回，令牌不经过前端。 */
 export function beginAccountLogin(
   accountId?: string,
   displayName?: string,
 ): Promise<LoginStart> {
   return invoke<LoginStart>('begin_account_login', {
+    accountId: accountId ?? null,
+    displayName: displayName ?? null,
+  });
+}
+
+/** 发起百炼控制台浏览器授权；令牌通过本机回环地址直接交给 Rust。 */
+export function beginBailianLogin(
+  accountId?: string,
+  displayName?: string,
+): Promise<LoginStart> {
+  return invoke<LoginStart>('begin_bailian_login', {
     accountId: accountId ?? null,
     displayName: displayName ?? null,
   });

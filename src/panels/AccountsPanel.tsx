@@ -15,6 +15,7 @@ import {
   type AccountState,
   type AuthState,
   type LoginStart,
+  type ProductState,
 } from '../lib/desktop';
 import { groupAccountsByPlatform, pendingPlatforms } from '../lib/platforms';
 import { useAppState } from '../lib/store';
@@ -27,25 +28,38 @@ const AUTH_LABELS: Record<AuthState, string> = {
   'needs-reauth': '需要重新授权',
 };
 
+type DialogPlatform = 'codex' | 'bailian';
+
+const PLATFORM_CHOICES: {
+  key: DialogPlatform;
+  name: string;
+  hint: string;
+  note: string;
+}[] = [
+  {
+    key: 'codex',
+    name: 'Codex',
+    hint: 'ChatGPT 订阅 · 官方浏览器授权',
+    note: '接下来会打开系统浏览器完成 Codex 官方授权。每个账户使用独立授权目录，不会读取或修改本机 Codex 的默认登录。',
+  },
+  {
+    key: 'bailian',
+    name: '百炼',
+    hint: 'Token Plan · Coding Plan · 阿里云控制台',
+    note: '接下来会打开阿里云百炼控制台登录页。登录成功后，控制台会话令牌会通过本机回环地址直接交给应用，不经过前端，也不会写入外部工具的配置。',
+  },
+];
+
 type DialogState =
-  | { kind: 'add-form' }
+  | { kind: 'add-form'; platform: DialogPlatform }
   | {
       kind: 'login';
+      platform: DialogPlatform;
       mode: 'add' | 'reauth';
       start: LoginStart;
       phase: 'waiting' | 'succeeded' | 'failed' | 'canceled';
       message: string | null;
     };
-
-function latestSnapshotEpoch(account: {
-  products: { snapshot: { checkedAtEpoch: number } | null }[];
-}): number | null {
-  return account.products.reduce<number | null>((latest, product) => {
-    const current = product.snapshot?.checkedAtEpoch ?? null;
-    if (current === null) return latest;
-    return latest === null ? current : Math.max(latest, current);
-  }, null);
-}
 
 function checkedAtLabel(epoch: number | null): string {
   if (epoch === null) return '尚未获取额度';
@@ -56,11 +70,16 @@ function checkedAtLabel(epoch: number | null): string {
   })}`;
 }
 
-function planLabel(account: AccountState): string | null {
-  const plan = account.products.find((product) => product.kind === 'codex-subscription')
-    ?.planTier;
-  if (!plan) return null;
-  return plan[0].toUpperCase() + plan.slice(1);
+function planTierLabel(tier: string): string {
+  return tier[0].toUpperCase() + tier.slice(1);
+}
+
+function planStateLabel(product: ProductState): string {
+  if (product.active === false) return '未开通';
+  if (product.query.refreshing) return '查询中…';
+  if (product.snapshot) return checkedAtLabel(product.snapshot.checkedAtEpoch);
+  if (product.query.lastError) return '查询失败';
+  return '待查询';
 }
 
 export default function AccountsPanel() {
@@ -70,6 +89,7 @@ export default function AccountsPanel() {
     desktop,
     refresh,
     beginLogin,
+    beginBailianLogin,
     cancelLogin,
     renameAccount,
     removeAccount,
@@ -116,23 +136,39 @@ export default function AccountsPanel() {
     };
   }, [desktop]);
 
-  const startAdd = async () => {
+  const startAdd = async (platform: DialogPlatform) => {
     setStarting(true);
-    const start = await beginLogin(undefined, draftName.trim() || undefined);
+    const name = draftName.trim() || undefined;
+    const start =
+      platform === 'bailian'
+        ? await beginBailianLogin(undefined, name)
+        : await beginLogin(undefined, name);
     setStarting(false);
     if (!start) {
       setDialog(null);
       return;
     }
-    setDialog({ kind: 'login', mode: 'add', start, phase: 'waiting', message: null });
+    setDialog({
+      kind: 'login',
+      platform,
+      mode: 'add',
+      start,
+      phase: 'waiting',
+      message: null,
+    });
     void openExternal(start.authUrl);
   };
 
   const startReauth = async (account: AccountState) => {
-    const start = await beginLogin(account.accountId);
+    const platform: DialogPlatform = account.platform === 'bailian' ? 'bailian' : 'codex';
+    const start =
+      platform === 'bailian'
+        ? await beginBailianLogin(account.accountId)
+        : await beginLogin(account.accountId);
     if (!start) return;
     setDialog({
       kind: 'login',
+      platform,
       mode: 'reauth',
       start,
       phase: 'waiting',
@@ -162,10 +198,15 @@ export default function AccountsPanel() {
   const groups = groupAccountsByPlatform(state.accounts);
   const unavailable = pendingPlatforms();
 
-  const openAddDialog = () => {
+  const openAddDialog = (platform: DialogPlatform = 'codex') => {
     setDraftName('');
-    setDialog({ kind: 'add-form' });
+    setDialog({ kind: 'add-form', platform });
   };
+
+  const dialogPlatform =
+    dialog?.kind === 'add-form' ? dialog.platform : dialog?.platform ?? 'codex';
+  const choice =
+    PLATFORM_CHOICES.find((item) => item.key === dialogPlatform) ?? PLATFORM_CHOICES[0];
 
   return (
     <section>
@@ -176,17 +217,17 @@ export default function AccountsPanel() {
           </span>
           <p className={styles.emptyTitle}>还没有接入账户</p>
           <p className={styles.usageNote}>
-            添加账户后，每个账户会使用独立的官方授权目录，互不影响。
+            添加账户后，每个账户会使用独立的授权副本，互不影响。
           </p>
           <button
             type="button"
             className={styles.button}
-            onClick={openAddDialog}
+            onClick={() => openAddDialog()}
             disabled={!desktop}
-            title={desktop ? '添加 Codex 账户' : '浏览器预览无法发起授权'}
+            title={desktop ? '添加账户' : '浏览器预览无法发起授权'}
           >
             <Plus size={15} weight="bold" aria-hidden />
-            添加 Codex 账户
+            添加账户
           </button>
         </div>
       ) : null}
@@ -207,7 +248,9 @@ export default function AccountsPanel() {
                   <button
                     type="button"
                     className={styles.platformAddButton}
-                    onClick={openAddDialog}
+                    onClick={() =>
+                      openAddDialog(group.platform === 'bailian' ? 'bailian' : 'codex')
+                    }
                     disabled={!desktop}
                     title={
                       desktop
@@ -224,7 +267,12 @@ export default function AccountsPanel() {
             {group.accounts.map((account) => {
               const managed = account.source === 'managed';
               const busy = account.products.some((product) => product.query.refreshing);
-              const plan = planLabel(account);
+              // 只列已开通的套餐；尚未确认（active === null）的也先展示。
+              // 若平台确认全部未开通，则保留列表并标记为“未开通”。
+              const activated = account.products.filter(
+                (product) => product.active !== false,
+              );
+              const plans = activated.length > 0 ? activated : account.products;
               return (
                 <div className={styles.accountRow} key={account.accountId}>
                   <div className={styles.accountRowHead}>
@@ -237,7 +285,6 @@ export default function AccountsPanel() {
                         <span className={styles.authDot} aria-hidden="true" />
                         {AUTH_LABELS[account.authState]}
                       </span>
-                      {plan ? <span className={styles.planTag}>{plan}</span> : null}
                     </div>
                     <div className={styles.accountActions}>
                       <button
@@ -296,14 +343,34 @@ export default function AccountsPanel() {
                     </div>
                   </div>
                   <p className={styles.accountMeta}>
-                    {managed ? '独立授权' : '本机登录态'}
+                    {account.platform === 'bailian'
+                      ? '控制台授权'
+                      : managed
+                        ? '独立授权'
+                        : '本机登录态'}
                     {account.identityHint ? ` · ${account.identityHint}` : ''}
                   </p>
-                  <p className={styles.accountMeta}>
-                    {account.products.map((product) => product.displayName).join('、')}
-                    {' · '}
-                    {checkedAtLabel(latestSnapshotEpoch(account))}
-                  </p>
+                  <div className={styles.planList}>
+                    {plans.map((product) => (
+                      <div
+                        className={styles.planRow}
+                        key={product.productId}
+                        data-inactive={product.active === false || undefined}
+                      >
+                        <span className={styles.planRowName}>
+                          {product.displayName}
+                        </span>
+                        {product.planTier ? (
+                          <span className={styles.planTag}>
+                            {planTierLabel(product.planTier)}
+                          </span>
+                        ) : null}
+                        <span className={styles.planRowState}>
+                          {planStateLabel(product)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
 
                   {renaming?.accountId === account.accountId ? (
                     <form
@@ -339,8 +406,8 @@ export default function AccountsPanel() {
                   {confirming === account.accountId ? (
                     <div className={styles.inlineConfirm}>
                       <span className={styles.usageNote}>
-                        移除后本应用会删除该账户的独立授权目录；本机 Codex
-                        登录不受影响。
+                        移除后本应用会删除该账户在本地的授权副本；
+                        外部工具与百炼账号的登录状态不受影响。
                       </span>
                       <div className={styles.inlineConfirmActions}>
                         <button
@@ -430,18 +497,40 @@ export default function AccountsPanel() {
 
                 {dialog.kind === 'add-form' ? (
                   <>
-                    <h2 id="account-dialog-title">添加 Codex 账户</h2>
-                    <p className={styles.usageNote}>
-                      接下来会打开系统浏览器完成官方授权。每个账户使用独立授权目录，
-                      不会读取或修改本机 Codex 的默认登录。
-                    </p>
+                    <h2 id="account-dialog-title">添加账户</h2>
+                    <div
+                      className={styles.platformPicker}
+                      role="group"
+                      aria-label="选择平台"
+                    >
+                      {PLATFORM_CHOICES.map((item) => (
+                        <button
+                          type="button"
+                          key={item.key}
+                          className={styles.platformPick}
+                          data-active={dialog.platform === item.key || undefined}
+                          aria-pressed={dialog.platform === item.key}
+                          onClick={() =>
+                            setDialog({ kind: 'add-form', platform: item.key })
+                          }
+                        >
+                          <span className={styles.platformPickName}>{item.name}</span>
+                          <span className={styles.platformPickHint}>{item.hint}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <p className={styles.usageNote}>{choice.note}</p>
                     <label className={styles.field}>
                       <span className={styles.fieldLabel}>账户名称（可选）</span>
                       <input
                         className={styles.textInput}
                         value={draftName}
                         onChange={(event) => setDraftName(event.target.value)}
-                        placeholder="留空则使用授权后的脱敏邮箱"
+                        placeholder={
+                          dialog.platform === 'bailian'
+                            ? '留空则显示为“百炼账户”'
+                            : '留空则使用授权后的脱敏邮箱'
+                        }
                         maxLength={60}
                         autoFocus
                       />
@@ -457,10 +546,14 @@ export default function AccountsPanel() {
                       <button
                         type="button"
                         className={styles.button}
-                        onClick={() => void startAdd()}
+                        onClick={() => void startAdd(dialog.platform)}
                         disabled={starting}
                       >
-                        {starting ? '正在启动…' : '前往浏览器授权'}
+                        {starting
+                          ? '正在启动…'
+                          : dialog.platform === 'bailian'
+                            ? '前往阿里云授权'
+                            : '前往浏览器授权'}
                       </button>
                     </div>
                   </>
@@ -475,15 +568,17 @@ export default function AccountsPanel() {
                             ? '已取消授权'
                             : dialog.mode === 'reauth'
                               ? '重新授权'
-                              : '在浏览器中完成授权'}
+                              : dialog.platform === 'bailian'
+                                ? '登录阿里云百炼'
+                                : '在浏览器中完成授权'}
                     </h2>
 
                     {dialog.phase === 'waiting' ? (
                       <>
                         <p className={styles.usageNote}>
-                          已打开系统浏览器。请登录要接入的 ChatGPT 账户并确认授权。
-                          如果浏览器已登录其他账户，请先切换账户或使用无痕窗口。
-                          等待期间请保持本应用运行。
+                          {dialog.platform === 'bailian'
+                            ? '已打开系统浏览器。请登录要接入的阿里云账号并确认授权；控制台会话令牌会通过本机回环地址直接交给应用。等待期间请保持本应用运行。'
+                            : '已打开系统浏览器。请登录要接入的 ChatGPT 账户并确认授权。如果浏览器已登录其他账户，请先切换账户或使用无痕窗口。等待期间请保持本应用运行。'}
                         </p>
                         <p className={styles.authUrl}>{dialog.start.authUrl}</p>
                         <p className={styles.loginStatus}>等待授权完成…</p>

@@ -18,6 +18,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
 
+use crate::bailian::{
+    self, BailianError, BailianReadout, CodingPlanUsage, CodingPlanWindow, TokenPlanSubscription,
+    TokenPlanUsage,
+};
 use crate::codex::{self, CodexIdentity, CodexUsage, UsageError};
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -25,6 +29,8 @@ pub const STATE_EVENT: &str = "app-state-changed";
 pub const LOGIN_EVENT: &str = "account-login-changed";
 pub const DEFAULT_ACCOUNT_ID: &str = "codex-local";
 pub const DEFAULT_PRODUCT_ID: &str = "codex-subscription";
+pub const BAILIAN_TOKEN_PLAN_ID: &str = "bailian-token-plan";
+pub const BAILIAN_CODING_PLAN_ID: &str = "bailian-coding-plan";
 
 /// 与前端设置页的可选项保持一致；后端在这里再次校验，不信任前端传入值。
 pub const REFRESH_OPTIONS: [i64; 5] = [1, 5, 15, 30, 60];
@@ -36,6 +42,7 @@ const SCHEDULER_TICK: Duration = Duration::from_secs(5);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 const DISPLAY_NAME_MAX_CHARS: usize = 60;
 const PROFILES_DIR_NAME: &str = "codex-profiles";
+const BAILIAN_PROFILES_DIR_NAME: &str = "bailian-profiles";
 static ACCOUNT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 // ---------- 脱敏状态模型 ----------
@@ -117,11 +124,20 @@ pub struct QuotaWindow {
     pub window_id: String,
     /// 平台返回的原始窗口标识（Codex 为 primary / secondary）。
     pub source_window_id: String,
+    /// 平台侧窗口名称（如“订阅月”）；缺失时前端按持续时间展示。
+    #[serde(default)]
+    pub window_name: Option<String>,
+    /// 计量单位，保留平台原始口径，例如 percent / calls。
     pub unit: String,
     /// 协议口径。缺失表示平台未提供，不能用 0 代替。
     pub used_percent: Option<i64>,
     /// 派生展示值。缺失表示无法可靠计算。
     pub remaining_percent: Option<i64>,
+    /// 平台提供的绝对值；缺失时只展示比例，不推算数量。
+    #[serde(default)]
+    pub used_amount: Option<i64>,
+    #[serde(default)]
+    pub total_amount: Option<i64>,
     pub window_duration_mins: Option<i64>,
     pub resets_at_epoch: Option<i64>,
 }
@@ -151,6 +167,10 @@ pub struct ProductState {
     pub kind: String,
     pub display_name: String,
     pub plan_tier: Option<String>,
+    /// 平台是否确认用户已开通该类套餐；`None` 表示尚未确认或无法判断。
+    /// 账户页据此只列出实际开通的套餐。
+    #[serde(default)]
+    pub active: Option<bool>,
     pub snapshot: Option<QuotaSnapshot>,
     pub query: QueryState,
 }
@@ -245,6 +265,7 @@ pub fn default_state() -> PersistedState {
                 kind: "codex-subscription".to_string(),
                 display_name: "Codex 订阅".to_string(),
                 plan_tier: None,
+                active: None,
                 snapshot: None,
                 query: QueryState::default(),
             }],
@@ -263,13 +284,13 @@ fn epoch_now() -> i64 {
         .unwrap_or_default()
 }
 
-fn new_account_id() -> String {
+fn new_account_id(prefix: &str) -> String {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or_default();
     let sequence = ACCOUNT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!("codex-{millis}-{sequence}")
+    format!("{prefix}-{millis}-{sequence}")
 }
 
 /// 账户标识会参与目录名拼接，因此只允许安全字符，避免路径逃逸。
@@ -322,9 +343,12 @@ fn snapshot_from_usage(usage: &CodexUsage) -> QuotaSnapshot {
                     QuotaWindow {
                         window_id: format!("{}-{index}", window.role),
                         source_window_id: window.role.clone(),
+                        window_name: None,
                         unit: "percent".to_string(),
                         used_percent: Some(window.used_percent),
                         remaining_percent: Some(window.remaining_percent),
+                        used_amount: None,
+                        total_amount: None,
                         window_duration_mins: window.window_duration_mins,
                         resets_at_epoch: window.resets_at_epoch,
                     }
@@ -361,9 +385,298 @@ fn is_codex_product(product: &ProductState) -> bool {
     product.kind == "codex-subscription"
 }
 
+fn is_bailian_product(product: &ProductState) -> bool {
+    matches!(
+        product.kind.as_str(),
+        "bailian-token-plan" | "bailian-coding-plan"
+    )
+}
+
+/// 调度与提醒需要覆盖所有已接入的产品；未识别平台不参与自动刷新。
+fn is_refreshable_product(product: &ProductState) -> bool {
+    is_codex_product(product) || is_bailian_product(product)
+}
+
+fn is_supported_platform(platform: &str) -> bool {
+    matches!(platform, "codex" | "bailian")
+}
+
+fn bailian_products() -> Vec<ProductState> {
+    vec![
+        ProductState {
+            product_id: BAILIAN_TOKEN_PLAN_ID.to_string(),
+            kind: BAILIAN_TOKEN_PLAN_ID.to_string(),
+            display_name: "Token Plan".to_string(),
+            plan_tier: None,
+            active: None,
+            snapshot: None,
+            query: QueryState::default(),
+        },
+        ProductState {
+            product_id: BAILIAN_CODING_PLAN_ID.to_string(),
+            kind: BAILIAN_CODING_PLAN_ID.to_string(),
+            display_name: "Coding Plan".to_string(),
+            plan_tier: None,
+            active: None,
+            snapshot: None,
+            query: QueryState::default(),
+        },
+    ]
+}
+
+fn clamp_percent(value: i64) -> i64 {
+    value.clamp(0, 100)
+}
+
+fn token_plan_snapshot(
+    usage: &TokenPlanUsage,
+    subscription: Option<&TokenPlanSubscription>,
+    checked_at: i64,
+) -> QuotaSnapshot {
+    let mut capability_gaps = Vec::new();
+    match subscription {
+        Some(subscription) if subscription.active && subscription.spec_code.is_some() => {}
+        Some(subscription) if subscription.active => {
+            capability_gaps.push("平台未返回 Token Plan 档位".to_string());
+        }
+        Some(_) => capability_gaps.push("未找到有效的 Token Plan 订阅".to_string()),
+        None => capability_gaps.push("未能读取 Token Plan 订阅信息".to_string()),
+    }
+    if usage.used_percent.is_none() {
+        capability_gaps.push("平台未返回 Token Plan 使用比例".to_string());
+    }
+    if usage.resets_at_epoch.is_none() {
+        capability_gaps.push("平台未返回 Token Plan 重置时间".to_string());
+    }
+    let window = QuotaWindow {
+        window_id: "token-plan-month".to_string(),
+        source_window_id: "per1Month".to_string(),
+        window_name: Some("订阅月".to_string()),
+        unit: "percent".to_string(),
+        used_percent: usage.used_percent,
+        remaining_percent: usage.used_percent.map(|used| clamp_percent(100 - used)),
+        used_amount: None,
+        total_amount: None,
+        // 订阅月按购买日滚动，不能固定成 30 天。
+        window_duration_mins: None,
+        resets_at_epoch: usage.resets_at_epoch,
+    };
+    QuotaSnapshot {
+        checked_at_epoch: checked_at,
+        groups: vec![QuotaGroup {
+            limit_id: Some("token-plan".to_string()),
+            limit_name: None,
+            plan_type: None,
+            windows: vec![window],
+        }],
+        capability_gaps,
+    }
+}
+
+fn coding_window_snapshot(
+    window_id: &str,
+    source_window_id: &str,
+    window_name: &str,
+    window_duration_mins: Option<i64>,
+    window: &CodingPlanWindow,
+    capability_gaps: &mut Vec<String>,
+) -> QuotaWindow {
+    let total = window.total.filter(|total| *total > 0);
+    let used = window.used;
+    if used.is_none() || total.is_none() {
+        capability_gaps.push(format!("平台未返回{window_name}的完整额度"));
+    }
+    let used_percent = match (used, total) {
+        (Some(used), Some(total)) => Some(clamp_percent(
+            ((used as f64 / total as f64) * 100.0).round() as i64,
+        )),
+        _ => None,
+    };
+    QuotaWindow {
+        window_id: window_id.to_string(),
+        source_window_id: source_window_id.to_string(),
+        window_name: Some(window_name.to_string()),
+        unit: "calls".to_string(),
+        used_percent,
+        remaining_percent: used_percent.map(|used| clamp_percent(100 - used)),
+        used_amount: used,
+        total_amount: total,
+        window_duration_mins,
+        resets_at_epoch: window.resets_at_epoch,
+    }
+}
+
+fn coding_plan_snapshot(usage: &CodingPlanUsage, checked_at: i64) -> QuotaSnapshot {
+    if !usage.found {
+        return QuotaSnapshot {
+            checked_at_epoch: checked_at,
+            groups: Vec::new(),
+            capability_gaps: vec!["未找到有效的 Coding Plan 订阅".to_string()],
+        };
+    }
+    let mut capability_gaps = Vec::new();
+    let windows = vec![
+        coding_window_snapshot(
+            "coding-5h",
+            "per5Hour",
+            "5 小时",
+            Some(300),
+            &usage.per_5_hour,
+            &mut capability_gaps,
+        ),
+        coding_window_snapshot(
+            "coding-week",
+            "perWeek",
+            "1 周",
+            Some(10_080),
+            &usage.per_week,
+            &mut capability_gaps,
+        ),
+        coding_window_snapshot(
+            "coding-month",
+            "perBillMonth",
+            "订阅月",
+            None,
+            &usage.per_bill_month,
+            &mut capability_gaps,
+        ),
+    ];
+    QuotaSnapshot {
+        checked_at_epoch: checked_at,
+        groups: vec![QuotaGroup {
+            limit_id: Some("coding-plan".to_string()),
+            limit_name: None,
+            plan_type: usage.instance_type.clone(),
+            windows,
+        }],
+        capability_gaps,
+    }
+}
+
+/// 把一次百炼查询结果写入对应产品。某一类失败只影响该产品，
+/// 两个接口都判定授权失效时才把账户标为需要重新授权。
+fn apply_bailian_readout(
+    state: &mut PersistedState,
+    account_id: &str,
+    readout: &BailianReadout,
+    now: i64,
+) {
+    let Some(account) = account_mut(state, account_id) else {
+        return;
+    };
+    let mut any_auth_failed = false;
+    let mut any_success = false;
+
+    for product in account
+        .products
+        .iter_mut()
+        .filter(|p| is_bailian_product(p))
+    {
+        let result = match product.kind.as_str() {
+            "bailian-token-plan" => readout.token_plan.as_ref().map(|usage| {
+                let subscription = readout.token_plan_subscription.as_ref();
+                let plan_tier = subscription
+                    .filter(|subscription| subscription.active)
+                    .and_then(|subscription| subscription.spec_code.clone());
+                let active = subscription.map(|subscription| subscription.active);
+                (
+                    token_plan_snapshot(usage, subscription, readout.checked_at_epoch),
+                    plan_tier,
+                    active,
+                )
+            }),
+            "bailian-coding-plan" => readout.coding_plan.as_ref().map(|usage| {
+                let plan_tier = usage.instance_type.as_ref().map(|value| value.to_string());
+                (
+                    coding_plan_snapshot(usage, readout.checked_at_epoch),
+                    plan_tier,
+                    Some(usage.found),
+                )
+            }),
+            _ => continue,
+        };
+        product.query.refreshing = false;
+        product.query.last_attempt_epoch = Some(now);
+        match result {
+            Ok((snapshot, plan_tier, active)) => {
+                if let Some(plan_tier) = plan_tier {
+                    product.plan_tier = Some(plan_tier);
+                }
+                // 订阅接口失败（active=None）时保留上一次确认的状态。
+                if active.is_some() {
+                    product.active = active;
+                }
+                product.snapshot = Some(snapshot);
+                product.query.last_error = None;
+                any_success = true;
+            }
+            Err(error) => {
+                if error.is_auth_error() {
+                    any_auth_failed = true;
+                }
+                product.query.last_error = Some(QueryError {
+                    code: error.code.clone(),
+                    message: error.message.clone(),
+                });
+            }
+        }
+    }
+
+    if let Some(identity) = &readout.identity {
+        if account.display_name == "百炼账户" {
+            // 新账户未指定名称时，优先使用控制台返回的真实昵称；纯数字 UID
+            // 不作为账户名，避免把一个长数字当成用户名。
+            if let Some(nickname) = identity.nickname() {
+                account.display_name = nickname.to_string();
+            }
+        }
+        if let Some(hint) = identity.hint() {
+            account.identity_hint = Some(hint);
+        }
+    }
+    // 只要有一类套餐读到数据，就说明控制台会话仍有效；只有两类都失败时
+    // 才按“需要重新授权”处理，避免单个接口的权限差异误伤整个账户。
+    if any_success {
+        account.auth_state = AuthState::Ok;
+    } else if any_auth_failed {
+        account.auth_state = AuthState::NeedsReauth;
+    }
+}
+
+/// 读取凭证或网络层失败会同时影响该账户的两类套餐；保留上次成功快照。
+fn apply_bailian_error(
+    state: &mut PersistedState,
+    account_id: &str,
+    error: &BailianError,
+    now: i64,
+) {
+    let Some(account) = account_mut(state, account_id) else {
+        return;
+    };
+    if error.is_auth_error() {
+        account.auth_state = AuthState::NeedsReauth;
+    }
+    for product in account
+        .products
+        .iter_mut()
+        .filter(|p| is_bailian_product(p))
+    {
+        product.query.refreshing = false;
+        product.query.last_attempt_epoch = Some(now);
+        product.query.last_error = Some(QueryError {
+            code: error.code.clone(),
+            message: error.message.clone(),
+        });
+    }
+}
+
 fn mark_refreshing(state: &mut PersistedState, account_id: &str, now: i64) {
     if let Some(account) = account_mut(state, account_id) {
-        for product in account.products.iter_mut().filter(|p| is_codex_product(p)) {
+        for product in account
+            .products
+            .iter_mut()
+            .filter(|p| is_refreshable_product(p))
+        {
             product.query.refreshing = true;
             product.query.last_attempt_epoch = Some(now);
         }
@@ -407,6 +720,7 @@ fn apply_success(
     account.auth_state = AuthState::Ok;
     for product in account.products.iter_mut().filter(|p| is_codex_product(p)) {
         product.plan_tier = plan_tier.clone();
+        product.active = Some(true);
         product.snapshot = Some(snapshot.clone());
         product.query.refreshing = false;
         product.query.last_attempt_epoch = Some(checked_at);
@@ -472,6 +786,7 @@ fn apply_login_success(
             account.identity_hint = Some(hint);
         }
         for product in account.products.iter_mut().filter(|p| is_codex_product(p)) {
+            product.active = Some(true);
             if let Some(plan_tier) = plan_tier.clone() {
                 product.plan_tier = Some(plan_tier);
             }
@@ -500,6 +815,7 @@ fn apply_login_success(
             kind: "codex-subscription".to_string(),
             display_name: "Codex 订阅".to_string(),
             plan_tier,
+            active: Some(true),
             snapshot,
             query: QueryState {
                 refreshing: false,
@@ -523,6 +839,7 @@ pub struct LowQuotaNotice {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuthExpiredNotice {
     pub account_name: String,
+    pub platform: String,
     pub source: AccountSource,
 }
 
@@ -543,6 +860,7 @@ fn auth_expired_notice(
         .find(|account| account.account_id == account_id)?;
     (account.auth_state == AuthState::NeedsReauth).then(|| AuthExpiredNotice {
         account_name: account.display_name.clone(),
+        platform: account.platform.clone(),
         source: account.source,
     })
 }
@@ -579,7 +897,17 @@ fn low_quota_notices(state: &mut PersistedState, account_id: &str) -> Vec<LowQuo
             return Vec::new();
         };
         let mut candidates = Vec::new();
-        for product in account.products.iter().filter(|p| is_codex_product(p)) {
+        let multi_product = account
+            .products
+            .iter()
+            .filter(|p| is_refreshable_product(p))
+            .count()
+            > 1;
+        for product in account
+            .products
+            .iter()
+            .filter(|p| is_refreshable_product(p))
+        {
             let Some(snapshot) = &product.snapshot else {
                 continue;
             };
@@ -588,11 +916,20 @@ fn low_quota_notices(state: &mut PersistedState, account_id: &str) -> Vec<LowQuo
                     let Some(remaining) = window.remaining_percent else {
                         continue;
                     };
+                    let base_label = window
+                        .window_name
+                        .clone()
+                        .unwrap_or_else(|| window_label(window.window_duration_mins));
+                    let label = if multi_product {
+                        format!("{} · {base_label}", product.display_name)
+                    } else {
+                        base_label
+                    };
                     candidates.push((
                         reminder_key(account_id, &product.product_id, &window.window_id),
                         remaining,
                         window.resets_at_epoch,
-                        window.window_duration_mins,
+                        label,
                     ));
                 }
             }
@@ -601,7 +938,7 @@ fn low_quota_notices(state: &mut PersistedState, account_id: &str) -> Vec<LowQuo
     };
 
     let mut notices = Vec::new();
-    for (key, remaining, resets_at, duration_mins) in candidates {
+    for (key, remaining, resets_at, label) in candidates {
         let mark = state.reminders.low_quota.get(&key).cloned();
         if remaining <= threshold {
             let already_notified = match (&mark, resets_at) {
@@ -619,7 +956,7 @@ fn low_quota_notices(state: &mut PersistedState, account_id: &str) -> Vec<LowQuo
                 );
                 notices.push(LowQuotaNotice {
                     account_name: account_name.clone(),
-                    window_label: window_label(duration_mins),
+                    window_label: label,
                     remaining_percent: remaining,
                     threshold,
                 });
@@ -651,7 +988,11 @@ fn window_resets(state: &PersistedState, account_id: &str) -> HashMap<String, i6
         return HashMap::new();
     };
     let mut resets = HashMap::new();
-    for product in account.products.iter().filter(|p| is_codex_product(p)) {
+    for product in account
+        .products
+        .iter()
+        .filter(|p| is_refreshable_product(p))
+    {
         let Some(snapshot) = &product.snapshot else {
             continue;
         };
@@ -689,7 +1030,17 @@ fn collect_reset_notices(
     };
 
     let mut notices = Vec::new();
-    for product in account.products.iter().filter(|p| is_codex_product(p)) {
+    let multi_product = account
+        .products
+        .iter()
+        .filter(|p| is_refreshable_product(p))
+        .count()
+        > 1;
+    for product in account
+        .products
+        .iter()
+        .filter(|p| is_refreshable_product(p))
+    {
         let Some(snapshot) = &product.snapshot else {
             continue;
         };
@@ -704,9 +1055,18 @@ fn collect_reset_notices(
                     continue;
                 };
                 if new_reset > old_reset && old_reset <= checked_at && new_reset > checked_at {
+                    let base_label = window
+                        .window_name
+                        .clone()
+                        .unwrap_or_else(|| window_label(window.window_duration_mins));
+                    let label = if multi_product {
+                        format!("{} · {base_label}", product.display_name)
+                    } else {
+                        base_label
+                    };
                     notices.push(ResetNotice {
                         account_name: account.display_name.clone(),
-                        window_label: window_label(window.window_duration_mins),
+                        window_label: label,
                         remaining_percent: window.remaining_percent,
                     });
                 }
@@ -726,13 +1086,13 @@ fn clear_reminder_marks(state: &mut PersistedState, account_id: &str) {
 }
 
 fn is_account_due(account: &AccountState, refresh_minutes: i64, now: i64) -> bool {
-    if account.platform != "codex" {
+    if !is_supported_platform(&account.platform) {
         return false;
     }
     account
         .products
         .iter()
-        .filter(|p| is_codex_product(p))
+        .filter(|p| is_refreshable_product(p))
         .any(|product| {
             if product.query.refreshing {
                 return false;
@@ -852,6 +1212,7 @@ pub struct StateStore {
     inner: Mutex<PersistedState>,
     path: PathBuf,
     profiles_dir: PathBuf,
+    bailian_dir: PathBuf,
     app: AppHandle,
     in_flight: Mutex<HashSet<String>>,
     logins: Mutex<HashMap<String, PendingLogin>>,
@@ -861,14 +1222,18 @@ pub struct StateStore {
 impl StateStore {
     pub fn load(app: AppHandle, path: PathBuf) -> Self {
         let state = load_state(&path);
-        let profiles_dir = path
-            .parent()
+        let parent = path.parent();
+        let profiles_dir = parent
             .map(|parent| parent.join(PROFILES_DIR_NAME))
             .unwrap_or_else(|| PathBuf::from(PROFILES_DIR_NAME));
+        let bailian_dir = parent
+            .map(|parent| parent.join(BAILIAN_PROFILES_DIR_NAME))
+            .unwrap_or_else(|| PathBuf::from(BAILIAN_PROFILES_DIR_NAME));
         Self {
             inner: Mutex::new(state),
             path,
             profiles_dir,
+            bailian_dir,
             app,
             in_flight: Mutex::new(HashSet::new()),
             logins: Mutex::new(HashMap::new()),
@@ -921,9 +1286,9 @@ impl StateStore {
     }
 
     fn notify_auth_expired(&self, notice: &AuthExpiredNotice) {
-        let action = match notice.source {
-            AccountSource::Local => "请重新登录本机 Codex CLI 后再刷新。",
-            AccountSource::Managed => "请打开 Token Refill 重新授权。",
+        let action = match (notice.platform.as_str(), notice.source) {
+            ("codex", AccountSource::Local) => "请重新登录本机 Codex CLI 后再刷新。",
+            _ => "请打开 Token Refill 重新授权。",
         };
         self.show_notification(
             "授权失效提醒",
@@ -948,6 +1313,25 @@ impl StateStore {
                 .map(|account| account.auth_state == AuthState::NeedsReauth)
                 .unwrap_or(true);
             apply_error(state, account_id, error, now, identity_update);
+            notice = auth_expired_notice(state, account_id, was_reauth);
+        });
+        if let Some(notice) = notice {
+            self.notify_auth_expired(&notice);
+        }
+    }
+
+    /// 百炼查询失败：只记录对应产品的错误并保留上次成功快照；
+    /// 授权失效时与 Codex 一样按状态跃迁提醒一次。
+    fn apply_bailian_refresh_error(&self, account_id: &str, error: &BailianError, now: i64) {
+        let mut notice = None;
+        self.update_soft(|state| {
+            let was_reauth = state
+                .accounts
+                .iter()
+                .find(|account| account.account_id == account_id)
+                .map(|account| account.auth_state == AuthState::NeedsReauth)
+                .unwrap_or(true);
+            apply_bailian_error(state, account_id, error, now);
             notice = auth_expired_notice(state, account_id, was_reauth);
         });
         if let Some(notice) = notice {
@@ -1019,6 +1403,13 @@ impl StateStore {
         Some(self.profiles_dir.join(account_id))
     }
 
+    fn private_bailian_dir(&self, account_id: &str) -> Option<PathBuf> {
+        if !is_valid_account_id(account_id) {
+            return None;
+        }
+        Some(self.bailian_dir.join(account_id))
+    }
+
     /// 发起官方浏览器授权。新账户授权成功后加入列表；重新授权复用原账户记录。
     pub fn begin_login(
         self: &Arc<Self>,
@@ -1040,7 +1431,7 @@ impl StateStore {
                 }
                 (id, false)
             }
-            None => (new_account_id(), true),
+            None => (new_account_id("codex"), true),
         };
 
         {
@@ -1119,6 +1510,153 @@ impl StateStore {
             .ok_or_else(|| "未找到等待中的授权流程".to_string())?;
         pending.cancel.store(true, Ordering::SeqCst);
         Ok(())
+    }
+
+    /// 发起百炼控制台浏览器授权。新账户成功后加入列表；重新授权复用原账户。
+    /// 令牌只写入应用私有目录，事件与状态里都只有流程标识与结果。
+    pub fn begin_bailian_login(
+        self: &Arc<Self>,
+        account_id: Option<String>,
+        display_name: Option<String>,
+    ) -> Result<LoginStartPayload, String> {
+        let state = self.snapshot();
+        let (target_id, is_new) = match account_id {
+            Some(id) => {
+                let account = state
+                    .accounts
+                    .iter()
+                    .find(|account| account.account_id == id)
+                    .ok_or_else(|| format!("未知账户：{id}"))?;
+                if account.platform != "bailian" {
+                    return Err("该账户不是百炼账户。".to_string());
+                }
+                if account.source != AccountSource::Managed {
+                    return Err("该百炼账户不能重新授权。".to_string());
+                }
+                (id, false)
+            }
+            None => (new_account_id("bailian"), true),
+        };
+
+        {
+            // 同一时间只允许一个授权流程，避免多个回环监听同时等待。
+            let logins = lock(&self.logins);
+            if let Some(pending) = logins.values().next() {
+                if pending.account_id == target_id {
+                    return Err("该账户正在等待授权，请先完成或取消当前登录。".to_string());
+                }
+                return Err("已有其他账户的授权流程进行中，请先完成或取消。".to_string());
+            }
+        }
+
+        let profile = self
+            .private_bailian_dir(&target_id)
+            .ok_or_else(|| "账户标识无效".to_string())?;
+        ensure_private_dir(&profile)?;
+
+        let session = bailian::begin_console_login().map_err(|error| error.message)?;
+        let auth_url = session.auth_url.clone();
+        let login_id = session.login_id.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        lock(&self.logins).insert(
+            login_id.clone(),
+            PendingLogin {
+                account_id: target_id.clone(),
+                cancel: Arc::clone(&cancel),
+            },
+        );
+
+        let store = Arc::clone(self);
+        let thread_account_id = target_id.clone();
+        let thread_login_id = login_id.clone();
+        let requested_name = display_name.filter(|name| !name.trim().is_empty());
+        thread::spawn(move || {
+            let outcome = session.wait_for_token(&cancel, LOGIN_TIMEOUT);
+            lock(&store.logins).remove(&thread_login_id);
+            match outcome {
+                Ok(token) => match bailian::save_credentials(&profile, &token) {
+                    Ok(()) => {
+                        store.finish_bailian_login(&thread_account_id, requested_name.as_deref());
+                        store.emit_login_event(
+                            &thread_login_id,
+                            &thread_account_id,
+                            "succeeded",
+                            None,
+                        );
+                        let _ = store.request_refresh(Some(&thread_account_id));
+                    }
+                    Err(message) => {
+                        if is_new {
+                            let _ = fs::remove_dir_all(&profile);
+                        }
+                        store.emit_login_event(
+                            &thread_login_id,
+                            &thread_account_id,
+                            "failed",
+                            Some(message),
+                        );
+                    }
+                },
+                Err(error) => {
+                    if is_new {
+                        let _ = fs::remove_dir_all(&profile);
+                    }
+                    let status = if error.code == "canceled" {
+                        "canceled"
+                    } else {
+                        "failed"
+                    };
+                    store.emit_login_event(
+                        &thread_login_id,
+                        &thread_account_id,
+                        status,
+                        Some(error.message),
+                    );
+                }
+            }
+        });
+
+        Ok(LoginStartPayload {
+            login_id,
+            account_id: target_id,
+            auth_url,
+        })
+    }
+
+    fn finish_bailian_login(&self, account_id: &str, requested_name: Option<&str>) {
+        let requested_name = requested_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string);
+        self.update_soft(|state| {
+            if let Some(account) = account_mut(state, account_id) {
+                account.auth_state = AuthState::Unknown;
+                account.source = AccountSource::Managed;
+                if let Some(name) = &requested_name {
+                    account.display_name = name.clone();
+                }
+                // 兼容旧状态：确保两类产品都存在，不覆盖已有快照。
+                for product in bailian_products() {
+                    if !account
+                        .products
+                        .iter()
+                        .any(|existing| existing.product_id == product.product_id)
+                    {
+                        account.products.push(product);
+                    }
+                }
+                return;
+            }
+            state.accounts.push(AccountState {
+                account_id: account_id.to_string(),
+                platform: "bailian".to_string(),
+                display_name: requested_name.unwrap_or_else(|| "百炼账户".to_string()),
+                auth_state: AuthState::Unknown,
+                source: AccountSource::Managed,
+                identity_hint: None,
+                products: bailian_products(),
+            });
+        });
     }
 
     fn finish_login(
@@ -1227,6 +1765,12 @@ impl StateStore {
         if account.source != AccountSource::Managed {
             return Err("本机 Codex 账户不能移除；它跟随本机 CLI 登录态。".to_string());
         }
+        let profile = match account.platform.as_str() {
+            "codex" => self.private_profile_dir(account_id),
+            "bailian" => self.private_bailian_dir(account_id),
+            _ => None,
+        }
+        .ok_or_else(|| "账户标识无效".to_string())?;
         {
             let logins = lock(&self.logins);
             if logins
@@ -1237,9 +1781,6 @@ impl StateStore {
             }
         }
 
-        let profile = self
-            .private_profile_dir(account_id)
-            .ok_or_else(|| "账户标识无效".to_string())?;
         if profile.exists() {
             fs::remove_dir_all(&profile).map_err(|err| format!("删除账户授权目录失败：{err}"))?;
         }
@@ -1265,7 +1806,27 @@ impl StateStore {
         }
     }
 
-    /// 手动刷新入口。`account_id` 为空时刷新全部 Codex 账户；
+    fn account_platform(&self, account_id: &str) -> Option<String> {
+        self.snapshot()
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)
+            .map(|account| account.platform.clone())
+    }
+
+    fn bailian_profile_dir_for(&self, account_id: &str) -> Option<PathBuf> {
+        let state = self.snapshot();
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)?;
+        if account.platform != "bailian" || account.source != AccountSource::Managed {
+            return None;
+        }
+        self.private_bailian_dir(account_id)
+    }
+
+    /// 手动刷新入口。`account_id` 为空时刷新全部已接入账户；
     /// 同一账户已有在途请求时直接复用，不重复启动查询。
     pub fn request_refresh(self: &Arc<Self>, account_id: Option<&str>) -> Result<(), String> {
         let now = epoch_now();
@@ -1284,7 +1845,7 @@ impl StateStore {
             None => state
                 .accounts
                 .iter()
-                .filter(|account| account.platform == "codex")
+                .filter(|account| is_supported_platform(&account.platform))
                 .map(|account| account.account_id.clone())
                 .collect(),
         };
@@ -1322,56 +1883,104 @@ impl StateStore {
 fn spawn_refresh(store: Arc<StateStore>, account_id: String) {
     // 查询在独立线程执行，命令立即返回；UI 通过事件收到 refreshing 与结果。
     thread::spawn(move || {
-        let Some(home) = store.profile_home_for(&account_id) else {
+        match store.account_platform(&account_id).as_deref() {
+            Some("codex") => refresh_codex(&store, &account_id),
+            Some("bailian") => refresh_bailian(&store, &account_id),
             // 账户在排队期间被移除：不发起查询，也不回写旧任务。
-            store.update_soft(|state| clear_refreshing(state, &account_id));
-            lock(&store.in_flight).remove(&account_id);
-            return;
-        };
-        let result = codex::read_usage(home.as_deref());
-        // 重新授权期间旧凭证的查询结果可能晚到；丢弃它，避免覆盖授权后的新状态。
-        if store.has_pending_login(&account_id) {
-            store.update_soft(|state| clear_refreshing(state, &account_id));
-            lock(&store.in_flight).remove(&account_id);
-            return;
+            _ => {
+                store.update_soft(|state| clear_refreshing(state, &account_id));
+            }
         }
-        let finished_at = epoch_now();
-        match result {
-            Ok(readout) => {
-                let identity_update = readout.identity_checked.then_some(readout.identity);
-                match readout.usage {
-                    Ok(usage) => {
-                        // 提醒判断与快照写入放在同一次状态更新里，避免并发刷新
-                        // 各自看到旧去重记录而重复提醒；重置判断需要旧快照作为基线，
-                        // 因此必须在覆盖快照前取一次。
-                        let mut low_notices = Vec::new();
-                        let mut reset_notices = Vec::new();
-                        store.update_soft(|state| {
-                            let previous_resets = window_resets(state, &account_id);
-                            apply_success(state, &account_id, usage, identity_update);
-                            low_notices = low_quota_notices(state, &account_id);
-                            reset_notices =
-                                collect_reset_notices(state, &account_id, &previous_resets);
-                        });
-                        for notice in &low_notices {
-                            store.notify_low_quota(notice);
-                        }
-                        for notice in &reset_notices {
-                            store.notify_reset(notice);
-                        }
+        lock(&store.in_flight).remove(&account_id);
+    });
+}
+
+fn refresh_codex(store: &Arc<StateStore>, account_id: &str) {
+    let Some(home) = store.profile_home_for(account_id) else {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    };
+    let result = codex::read_usage(home.as_deref());
+    // 重新授权期间旧凭证的查询结果可能晚到；丢弃它，避免覆盖授权后的新状态。
+    if store.has_pending_login(account_id) {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    }
+    let finished_at = epoch_now();
+    match result {
+        Ok(readout) => {
+            let identity_update = readout.identity_checked.then_some(readout.identity);
+            match readout.usage {
+                Ok(usage) => {
+                    // 提醒判断与快照写入放在同一次状态更新里，避免并发刷新
+                    // 各自看到旧去重记录而重复提醒；重置判断需要旧快照作为基线，
+                    // 因此必须在覆盖快照前取一次。
+                    let mut low_notices = Vec::new();
+                    let mut reset_notices = Vec::new();
+                    store.update_soft(|state| {
+                        let previous_resets = window_resets(state, account_id);
+                        apply_success(state, account_id, usage, identity_update);
+                        low_notices = low_quota_notices(state, account_id);
+                        reset_notices = collect_reset_notices(state, account_id, &previous_resets);
+                    });
+                    for notice in &low_notices {
+                        store.notify_low_quota(notice);
                     }
-                    Err(error) => {
-                        store.apply_refresh_error(&account_id, error, finished_at, identity_update);
+                    for notice in &reset_notices {
+                        store.notify_reset(notice);
                     }
                 }
-            }
-            Err(error) => {
-                store.apply_refresh_error(&account_id, error, finished_at, None);
+                Err(error) => {
+                    store.apply_refresh_error(account_id, error, finished_at, identity_update);
+                }
             }
         }
-        let mut in_flight = lock(&store.in_flight);
-        in_flight.remove(&account_id);
+        Err(error) => {
+            store.apply_refresh_error(account_id, error, finished_at, None);
+        }
+    }
+}
+
+fn refresh_bailian(store: &Arc<StateStore>, account_id: &str) {
+    let Some(profile) = store.bailian_profile_dir_for(account_id) else {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    };
+    let credentials = bailian::load_credentials(&profile);
+    if store.has_pending_login(account_id) {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    }
+    let finished_at = epoch_now();
+    let credentials = match credentials {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            store.apply_bailian_refresh_error(account_id, &error, finished_at);
+            return;
+        }
+    };
+
+    let readout = bailian::read_usage(&credentials.access_token);
+    // 重新授权期间旧凭证的查询结果可能晚到；丢弃它。
+    if store.has_pending_login(account_id) {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    }
+
+    let mut low_notices = Vec::new();
+    let mut reset_notices = Vec::new();
+    store.update_soft(|state| {
+        let previous_resets = window_resets(state, account_id);
+        apply_bailian_readout(state, account_id, &readout, finished_at);
+        low_notices = low_quota_notices(state, account_id);
+        reset_notices = collect_reset_notices(state, account_id, &previous_resets);
     });
+    for notice in &low_notices {
+        store.notify_low_quota(notice);
+    }
+    for notice in &reset_notices {
+        store.notify_reset(notice);
+    }
 }
 
 pub fn start_scheduler(store: Arc<StateStore>) {
@@ -2292,5 +2901,227 @@ mod tests {
             .any(|entry| entry.file_name().to_string_lossy().contains(".corrupt-"));
         assert!(backup_exists);
         fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    fn bailian_account(id: &str) -> AccountState {
+        AccountState {
+            account_id: id.to_string(),
+            platform: "bailian".to_string(),
+            display_name: "百炼测试账户".to_string(),
+            auth_state: AuthState::Unknown,
+            source: AccountSource::Managed,
+            identity_hint: None,
+            products: bailian_products(),
+        }
+    }
+
+    fn bailian_readout() -> BailianReadout {
+        BailianReadout {
+            checked_at_epoch: 1_790_000_000,
+            token_plan: Ok(TokenPlanUsage {
+                used_percent: Some(5),
+                resets_at_epoch: Some(1_795_363_200),
+            }),
+            coding_plan: Ok(CodingPlanUsage {
+                found: true,
+                instance_type: Some("pro".to_string()),
+                per_5_hour: CodingPlanWindow {
+                    used: Some(0),
+                    total: Some(6_000),
+                    resets_at_epoch: Some(1_792_739_314),
+                },
+                per_week: CodingPlanWindow {
+                    used: Some(1),
+                    total: Some(45_000),
+                    resets_at_epoch: Some(1_792_944_000),
+                },
+                per_bill_month: CodingPlanWindow {
+                    used: Some(1),
+                    total: Some(90_000),
+                    resets_at_epoch: Some(1_794_412_800),
+                },
+            }),
+            token_plan_subscription: Some(TokenPlanSubscription {
+                active: true,
+                spec_code: Some("standard".to_string()),
+                status: Some("VALID".to_string()),
+                remaining_days: Some(30),
+                end_time_epoch: Some(1_795_363_200),
+            }),
+            identity: Some(crate::bailian::AccountIdentity {
+                uid: Some("1679446554858477".to_string()),
+                nick_name: Some("1679446554858477".to_string()),
+            }),
+        }
+    }
+
+    #[test]
+    fn bailian_readout_populates_both_plan_products() {
+        let mut state = default_state();
+        state.accounts.push(bailian_account("bailian-1"));
+
+        apply_bailian_readout(&mut state, "bailian-1", &bailian_readout(), 1_790_000_100);
+
+        let account = &state.accounts[1];
+        assert_eq!(account.auth_state, AuthState::Ok);
+        assert_eq!(account.identity_hint.as_deref(), Some("UID ***8477"));
+        assert_eq!(account.products.len(), 2);
+
+        let token_plan = &account.products[0];
+        assert_eq!(token_plan.active, Some(true));
+        assert_eq!(token_plan.plan_tier.as_deref(), Some("standard"));
+        let token_window = &token_plan.snapshot.as_ref().unwrap().groups[0].windows[0];
+        assert_eq!(token_window.unit, "percent");
+        assert_eq!(token_window.used_percent, Some(5));
+        assert_eq!(token_window.remaining_percent, Some(95));
+        assert_eq!(token_window.window_name.as_deref(), Some("订阅月"));
+
+        let coding_plan = &account.products[1];
+        assert_eq!(coding_plan.active, Some(true));
+        assert_eq!(coding_plan.plan_tier.as_deref(), Some("pro"));
+        let coding_windows = &coding_plan.snapshot.as_ref().unwrap().groups[0].windows;
+        assert_eq!(coding_windows.len(), 3);
+        assert_eq!(coding_windows[1].unit, "calls");
+        assert_eq!(coding_windows[1].used_amount, Some(1));
+        assert_eq!(coding_windows[1].total_amount, Some(45_000));
+        assert_eq!(coding_windows[1].window_duration_mins, Some(10_080));
+        assert!(coding_windows[1].remaining_percent.is_some());
+    }
+
+    #[test]
+    fn bailian_default_account_name_is_replaced_by_a_real_nickname() {
+        let mut state = default_state();
+        let mut account = bailian_account("bailian-1");
+        account.display_name = "百炼账户".to_string();
+        state.accounts.push(account);
+        let mut readout = bailian_readout();
+        readout.identity = Some(crate::bailian::AccountIdentity {
+            uid: Some("1679446554858477".to_string()),
+            nick_name: Some("rainbow217".to_string()),
+        });
+
+        apply_bailian_readout(&mut state, "bailian-1", &readout, 1_790_000_100);
+
+        assert_eq!(state.accounts[1].display_name, "rainbow217");
+    }
+
+    #[test]
+    fn bailian_nickname_is_preferred_over_masked_uid() {
+        let mut state = default_state();
+        state.accounts.push(bailian_account("bailian-1"));
+        let mut readout = bailian_readout();
+        readout.identity = Some(crate::bailian::AccountIdentity {
+            uid: Some("1679446554858477".to_string()),
+            nick_name: Some("rainbow217".to_string()),
+        });
+
+        apply_bailian_readout(&mut state, "bailian-1", &readout, 1_790_000_100);
+
+        assert_eq!(
+            state.accounts[1].identity_hint.as_deref(),
+            Some("rainbow217")
+        );
+    }
+
+    #[test]
+    fn bailian_inactive_token_plan_subscription_is_a_capability_gap() {
+        let mut state = default_state();
+        state.accounts.push(bailian_account("bailian-1"));
+        let mut readout = bailian_readout();
+        readout.token_plan_subscription = Some(TokenPlanSubscription {
+            active: false,
+            status: Some("EXPIRED".to_string()),
+            ..TokenPlanSubscription::default()
+        });
+
+        apply_bailian_readout(&mut state, "bailian-1", &readout, 1_790_000_100);
+
+        let token_plan = &state.accounts[1].products[0];
+        assert_eq!(token_plan.active, Some(false));
+        assert_eq!(token_plan.plan_tier, None);
+        assert!(token_plan
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .capability_gaps
+            .contains(&"未找到有效的 Token Plan 订阅".to_string()));
+    }
+
+    #[test]
+    fn bailian_auth_error_marks_account_but_keeps_last_snapshot() {
+        let mut state = default_state();
+        state.accounts.push(bailian_account("bailian-1"));
+        apply_bailian_readout(&mut state, "bailian-1", &bailian_readout(), 1_790_000_100);
+
+        let mut readout = bailian_readout();
+        readout.token_plan = Err(BailianError {
+            code: "auth-expired".to_string(),
+            message: "会话已失效".to_string(),
+        });
+        readout.coding_plan = Err(BailianError {
+            code: "auth-expired".to_string(),
+            message: "会话已失效".to_string(),
+        });
+        apply_bailian_readout(&mut state, "bailian-1", &readout, 1_790_000_200);
+
+        let account = &state.accounts[1];
+        assert_eq!(account.auth_state, AuthState::NeedsReauth);
+        assert!(account.products[0].snapshot.is_some());
+        assert_eq!(
+            account.products[0].query.last_error.as_ref().unwrap().code,
+            "auth-expired"
+        );
+    }
+
+    #[test]
+    fn bailian_one_successful_plan_keeps_the_account_authorized() {
+        let mut state = default_state();
+        state.accounts.push(bailian_account("bailian-1"));
+        let mut readout = bailian_readout();
+        readout.coding_plan = Err(BailianError {
+            code: "auth-expired".to_string(),
+            message: "该类套餐不可读".to_string(),
+        });
+
+        apply_bailian_readout(&mut state, "bailian-1", &readout, 1_790_000_100);
+
+        let account = &state.accounts[1];
+        assert_eq!(account.auth_state, AuthState::Ok);
+        assert!(account.products[0].snapshot.is_some());
+        assert!(account.products[1].query.last_error.is_some());
+    }
+
+    #[test]
+    fn bailian_account_without_snapshot_is_due_immediately() {
+        let account = bailian_account("bailian-1");
+        assert!(is_account_due(&account, 5, 1_790_000_000));
+
+        let mut state = default_state();
+        state.accounts.push(account);
+        apply_bailian_readout(&mut state, "bailian-1", &bailian_readout(), 1_790_000_000);
+        let account = &state.accounts[1];
+        assert!(!is_account_due(account, 5, 1_790_000_100));
+        assert!(is_account_due(account, 5, 1_790_000_400));
+    }
+
+    #[test]
+    fn bailian_coding_plan_without_subscription_is_a_capability_gap_not_an_error() {
+        let mut state = default_state();
+        state.accounts.push(bailian_account("bailian-1"));
+        let mut readout = bailian_readout();
+        readout.coding_plan = Ok(CodingPlanUsage::default());
+
+        apply_bailian_readout(&mut state, "bailian-1", &readout, 1_790_000_100);
+
+        let coding_plan = &state.accounts[1].products[1];
+        assert_eq!(coding_plan.active, Some(false));
+        assert!(coding_plan.query.last_error.is_none());
+        let snapshot = coding_plan.snapshot.as_ref().unwrap();
+        assert!(snapshot.groups.is_empty());
+        assert_eq!(
+            snapshot.capability_gaps,
+            vec!["未找到有效的 Coding Plan 订阅"]
+        );
+        assert_eq!(state.accounts[1].auth_state, AuthState::Ok);
     }
 }
