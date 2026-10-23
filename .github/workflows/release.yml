@@ -94,12 +94,28 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # 规避 tauri#15315：Node 版 CLI 下 libuv 会给继承的 fd 0 打上 close-on-exec，
+      # actool 启动时 stdin 已关闭，其助手 ibtoold 崩溃，.icon 也就编不出 Assets.car。
+      # cargo-tauri 不经过 libuv，行为正常；用官方预编译二进制，避免在 CI 里现场编译 CLI。
+      - name: Install native tauri CLI
+        shell: bash
+        run: |
+          version=$(node -p "require('./node_modules/@tauri-apps/cli/package.json').version")
+          url="https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v${version}/cargo-tauri-aarch64-apple-darwin.zip"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/cargo-tauri.zip" "$url"
+          unzip -q "$RUNNER_TEMP/cargo-tauri.zip" -d "$RUNNER_TEMP/cargo-tauri"
+          bin=$(find "$RUNNER_TEMP/cargo-tauri" -type f -name cargo-tauri | head -1)
+          chmod +x "$bin"
+          echo "$(dirname "$bin")" >> "$GITHUB_PATH"
+
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # 未接入 Apple Developer 证书，显式使用 ad-hoc 签名，产物可直接构建但不能通过公证。
           APPLE_SIGNING_IDENTITY: "-"
         with:
+          # 用 cargo tauri 而不是 pnpm tauri，见上面 tauri#15315 的说明。
+          tauriScript: cargo tauri
           # tag 推送时沿用该 tag；手动触发时按 app version 生成 vX.Y.Z。
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
           releaseName: Token Refill v__VERSION__
