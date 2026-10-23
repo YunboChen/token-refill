@@ -24,6 +24,8 @@ import {
   accountPlatformGroups,
   pendingPlatforms,
 } from '../lib/platforms';
+import { planTierLabel, sourceLabel } from '../lib/format';
+import { useDialogA11y } from '../lib/useDialogA11y';
 import { useAppState } from '../lib/store';
 import PlatformHeading from '../components/PlatformHeading';
 import styles from '../App.module.css';
@@ -36,8 +38,7 @@ const AUTH_LABELS: Record<AuthState, string> = {
 
 type DialogPlatform = 'codex' | 'bailian';
 
-const PLATFORM_CHOICES: {
-  key: DialogPlatform;
+interface PlatformChoice {
   /** 添加位与弹窗标题共用，中英文混排的间距在这里一次写清 */
   addLabel: string;
   /** 标题下方一行，说明平台与授权方式 */
@@ -46,9 +47,18 @@ const PLATFORM_CHOICES: {
   steps: { title: string; text: string }[];
   /** 输入框下方的隐私说明，用一句话收住授权边界 */
   note: string;
-}[] = [
-  {
-    key: 'codex',
+  /** 账户名称输入框的占位文案 */
+  namePlaceholder: string;
+  /** 添加弹窗主按钮的文案 */
+  authorizeLabel: string;
+  /** 等待授权时的标题 */
+  waitingTitle: string;
+  /** 等待授权时的说明 */
+  waitingText: string;
+}
+
+const PLATFORM_CHOICES: Record<DialogPlatform, PlatformChoice> = {
+  codex: {
     addLabel: '添加 Codex 账户',
     subtitle: 'ChatGPT 订阅 · 官方浏览器授权',
     steps: [
@@ -62,9 +72,13 @@ const PLATFORM_CHOICES: {
       },
     ],
     note: '授权在本机完成，不读取或修改本机 Codex 的默认登录。',
+    namePlaceholder: '留空则使用授权后的脱敏邮箱',
+    authorizeLabel: '前往浏览器授权',
+    waitingTitle: '在浏览器中完成授权',
+    waitingText:
+      '请登录要接入的 ChatGPT 账户并确认授权。如果浏览器已登录其他账户，请先切换账户或使用无痕窗口。',
   },
-  {
-    key: 'bailian',
+  bailian: {
     addLabel: '添加百炼账户',
     subtitle: '阿里云 · Token Plan / Coding Plan',
     steps: [
@@ -78,14 +92,25 @@ const PLATFORM_CHOICES: {
       },
     ],
     note: '授权信息仅在本机接收，不经过前端，也不写入外部工具的配置。',
+    namePlaceholder: '留空则显示为“百炼账户”',
+    authorizeLabel: '前往阿里云授权',
+    waitingTitle: '登录阿里云百炼',
+    waitingText:
+      '请登录要接入的阿里云账号并确认授权，控制台会话令牌会通过本机回环地址直接交给应用。',
   },
-];
+};
+
+const DIALOG_PLATFORMS = Object.keys(PLATFORM_CHOICES) as DialogPlatform[];
+
+function isDialogPlatform(platform: string): platform is DialogPlatform {
+  return (DIALOG_PLATFORMS as string[]).includes(platform);
+}
 
 /** 添加入口文案；未知平台退回通用文案，只在平台已开放接入时使用。 */
 function addAccountLabel(platform: string): string {
-  return (
-    PLATFORM_CHOICES.find((item) => item.key === platform)?.addLabel ?? '添加账户'
-  );
+  return isDialogPlatform(platform)
+    ? PLATFORM_CHOICES[platform].addLabel
+    : '添加账户';
 }
 
 type DialogState =
@@ -108,10 +133,6 @@ function checkedAtLabel(epoch: number | null): string {
     minute: '2-digit',
     second: '2-digit',
   })}`;
-}
-
-function planTierLabel(tier: string): string {
-  return tier[0].toUpperCase() + tier.slice(1);
 }
 
 function planStateLabel(product: ProductState): string {
@@ -159,6 +180,16 @@ export default function AccountsPanel() {
   const [starting, setStarting] = useState(false);
   // 改名与移除都在弹窗里确认，提交期间锁住按钮避免重复请求。
   const [acting, setActing] = useState(false);
+
+  // 平台与登录命令的映射集中一处：新增平台时 Record 会强制补齐，
+  // 不再在 startAdd / startReauth 里写平台三元表达式。
+  const loginCommands: Record<
+    DialogPlatform,
+    (accountId?: string, displayName?: string) => Promise<LoginStart | null>
+  > = {
+    codex: beginLogin,
+    bailian: beginBailianLogin,
+  };
 
   // 每次发起授权递增。弹窗在启动请求返回前关闭、或整个面板卸载时，
   // 晚到的结果按过期处理并立刻取消，不在 Rust 侧留下等待中的流程。
@@ -223,6 +254,21 @@ export default function AccountsPanel() {
     };
   }, [desktop]);
 
+  const closeDialog = () => {
+    // 作废尚未返回的启动请求；已在等待的登录由 pendingLoginId 的清理逻辑取消。
+    startAttemptRef.current += 1;
+    // 请求若在关闭后才失败，不会再走回 startAdd 的复位分支。
+    setStarting(false);
+    setDialog(null);
+  };
+
+  // Esc 关闭、焦点圈定与关闭后的焦点归还；内容切到结果页时重新落定焦点。
+  const { dialogRef, captureTrigger } = useDialogA11y(
+    dialog !== null,
+    dialog ? `${dialog.kind}:${'phase' in dialog ? dialog.phase : ''}` : '',
+    closeDialog,
+  );
+
   const startAdd = async (platform: DialogPlatform) => {
     const attempt = startAttemptRef.current + 1;
     startAttemptRef.current = attempt;
@@ -230,10 +276,7 @@ export default function AccountsPanel() {
     clearLoginError();
     setStarting(true);
     const name = draftName.trim() || undefined;
-    const start =
-      platform === 'bailian'
-        ? await beginBailianLogin(undefined, name)
-        : await beginLogin(undefined, name);
+    const start = await loginCommands[platform](undefined, name);
     if (attempt !== startAttemptRef.current) {
       // 弹窗在请求返回前已关闭：授权流程不该在后台继续等待。
       if (start) void cancelLogin(start.loginId);
@@ -255,15 +298,18 @@ export default function AccountsPanel() {
     void openExternal(start.authUrl);
   };
 
-  const startReauth = async (account: AccountState) => {
+  const startReauth = async (
+    account: AccountState,
+    trigger: HTMLElement | null,
+  ) => {
     const attempt = startAttemptRef.current + 1;
     startAttemptRef.current = attempt;
     clearLoginError();
-    const platform: DialogPlatform = account.platform === 'bailian' ? 'bailian' : 'codex';
-    const start =
-      platform === 'bailian'
-        ? await beginBailianLogin(account.accountId)
-        : await beginLogin(account.accountId);
+    if (!isDialogPlatform(account.platform)) return;
+    // 焦点还原记住入口按钮，而不是稍后可能被 autoFocus 抢走的输入框。
+    captureTrigger(trigger);
+    const platform = account.platform;
+    const start = await loginCommands[platform](account.accountId);
     if (attempt !== startAttemptRef.current) {
       if (start) void cancelLogin(start.loginId);
       return;
@@ -278,14 +324,6 @@ export default function AccountsPanel() {
       message: null,
     });
     void openExternal(start.authUrl);
-  };
-
-  const closeDialog = () => {
-    // 作废尚未返回的启动请求；已在等待的登录由 pendingLoginId 的清理逻辑取消。
-    startAttemptRef.current += 1;
-    // 请求若在关闭后才失败，不会再走回 startAdd 的复位分支。
-    setStarting(false);
-    setDialog(null);
   };
 
   const saveRename = async () => {
@@ -306,8 +344,12 @@ export default function AccountsPanel() {
     if (ok) setDialog(null);
   };
 
-  const openRenameDialog = (account: AccountState) => {
+  const openRenameDialog = (
+    account: AccountState,
+    trigger: HTMLElement | null,
+  ) => {
     setActing(false);
+    captureTrigger(trigger);
     setDialog({
       kind: 'rename',
       accountId: account.accountId,
@@ -315,8 +357,12 @@ export default function AccountsPanel() {
     });
   };
 
-  const openRemoveDialog = (account: AccountState) => {
+  const openRemoveDialog = (
+    account: AccountState,
+    trigger: HTMLElement | null,
+  ) => {
     setActing(false);
+    captureTrigger(trigger);
     setDialog({
       kind: 'remove',
       accountId: account.accountId,
@@ -327,17 +373,30 @@ export default function AccountsPanel() {
   const groups = accountPlatformGroups(state.accounts);
   const unavailable = pendingPlatforms();
 
-  const openAddDialog = (platform: DialogPlatform) => {
+  const openAddDialog = (
+    platform: DialogPlatform,
+    trigger: HTMLElement | null,
+  ) => {
+    captureTrigger(trigger);
     setDraftName('');
     setDialog({ kind: 'add-form', platform });
   };
 
+  // 分组平台是普通字符串，入口处收窄一次；未登记平台的添加位不会渲染。
+  const openAddForPlatform = (
+    platform: string,
+    trigger: HTMLElement | null,
+  ) => {
+    if (!isDialogPlatform(platform)) return;
+    openAddDialog(platform, trigger);
+  };
+
   // 平台由入口决定：从哪个平台分组点进来，就只给哪个平台添加账户，
   // 弹窗内不再提供切换，避免加到别的分组里。
-  const dialogPlatform =
-    dialog && 'platform' in dialog ? dialog.platform : null;
   const choice =
-    PLATFORM_CHOICES.find((item) => item.key === dialogPlatform) ?? PLATFORM_CHOICES[0];
+    dialog && 'platform' in dialog
+      ? PLATFORM_CHOICES[dialog.platform]
+      : PLATFORM_CHOICES.codex;
 
   return (
     <section>
@@ -349,7 +408,7 @@ export default function AccountsPanel() {
       ) : null}
       <div className={styles.platformStack}>
         {groups.map((group) => (
-          <section className={styles.platformPanel} key={group.platform}>
+          <section className={styles.platformGroup} key={group.platform}>
             <div className={styles.platformSectionHead}>
               <PlatformHeading
                 active
@@ -390,11 +449,7 @@ export default function AccountsPanel() {
                           </span>
                         </div>
                         <p className={styles.accountMeta}>
-                          {account.platform === 'bailian'
-                            ? '控制台授权'
-                            : managed
-                              ? '独立授权'
-                              : '本机登录态'}
+                          {sourceLabel(account)}
                           {account.identityHint ? ` · ${account.identityHint}` : ''}
                         </p>
                       </div>
@@ -459,7 +514,7 @@ export default function AccountsPanel() {
                           <button
                             type="button"
                             className={styles.miniButton}
-                            onClick={() => void startReauth(account)}
+                            onClick={(event) => void startReauth(account, event.currentTarget)}
                             disabled={!desktop}
                             aria-label="重新授权"
                             title="重新授权"
@@ -469,7 +524,7 @@ export default function AccountsPanel() {
                           <button
                             type="button"
                             className={styles.miniButton}
-                            onClick={() => openRenameDialog(account)}
+                            onClick={(event) => openRenameDialog(account, event.currentTarget)}
                             disabled={!desktop}
                             aria-label="重命名"
                             title="重命名"
@@ -479,7 +534,7 @@ export default function AccountsPanel() {
                           <button
                             type="button"
                             className={styles.miniButton}
-                            onClick={() => openRemoveDialog(account)}
+                            onClick={(event) => openRemoveDialog(account, event.currentTarget)}
                             disabled={!desktop}
                             aria-label="移除账户"
                             title="移除账户"
@@ -495,13 +550,11 @@ export default function AccountsPanel() {
               })}
 
               {/* 添加位补在网格末尾：单账户时也能撑满一行，不必回到页头找入口 */}
-              {group.meta.available ? (
+              {group.meta.available && isDialogPlatform(group.platform) ? (
                 <button
                   type="button"
                   className={styles.accountAddTile}
-                  onClick={() =>
-                    openAddDialog(group.platform === 'bailian' ? 'bailian' : 'codex')
-                  }
+                  onClick={(event) => openAddForPlatform(group.platform, event.currentTarget)}
                   disabled={!desktop}
                   title={
                     desktop
@@ -522,7 +575,7 @@ export default function AccountsPanel() {
         ))}
 
         {unavailable.map((meta) => (
-          <section className={styles.platformSection} key={meta.key}>
+          <section className={styles.platformGroup} key={meta.key}>
             <div className={styles.platformSectionHead}>
               <PlatformHeading
                 platform={meta.key}
@@ -556,6 +609,8 @@ export default function AccountsPanel() {
               }}
             >
               <m.div
+                ref={dialogRef}
+                tabIndex={-1}
                 className={styles.dialog}
                 role="dialog"
                 aria-modal="true"
@@ -606,11 +661,7 @@ export default function AccountsPanel() {
                           className={styles.textInput}
                           value={draftName}
                           onChange={(event) => setDraftName(event.target.value)}
-                          placeholder={
-                            dialog.platform === 'bailian'
-                              ? '留空则显示为“百炼账户”'
-                              : '留空则使用授权后的脱敏邮箱'
-                          }
+                          placeholder={choice.namePlaceholder}
                           maxLength={60}
                         />
                       </label>
@@ -637,9 +688,7 @@ export default function AccountsPanel() {
                           '正在启动…'
                         ) : (
                           <>
-                            {dialog.platform === 'bailian'
-                              ? '前往阿里云授权'
-                              : '前往浏览器授权'}
+                            {choice.authorizeLabel}
                             <ArrowSquareOut size={13} aria-hidden />
                           </>
                         )}
@@ -726,20 +775,14 @@ export default function AccountsPanel() {
                               ? '已取消授权'
                               : dialog.mode === 'reauth'
                                 ? '重新授权'
-                                : dialog.platform === 'bailian'
-                                  ? '登录阿里云百炼'
-                                  : '在浏览器中完成授权'}
+                                : choice.waitingTitle}
                       </h2>
                       <p className={styles.dialogSubtitle}>{choice.subtitle}</p>
                     </header>
 
                     {dialog.phase === 'waiting' ? (
                       <>
-                        <p className={styles.usageNote}>
-                          {dialog.platform === 'bailian'
-                            ? '请登录要接入的阿里云账号并确认授权，控制台会话令牌会通过本机回环地址直接交给应用。'
-                            : '请登录要接入的 ChatGPT 账户并确认授权。如果浏览器已登录其他账户，请先切换账户或使用无痕窗口。'}
-                        </p>
+                        <p className={styles.usageNote}>{choice.waitingText}</p>
                         <div className={styles.authBlock}>
                           <span className={styles.fieldLabel}>授权链接</span>
                           <p className={styles.authUrl}>{dialog.start.authUrl}</p>

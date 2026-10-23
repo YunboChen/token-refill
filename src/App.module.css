@@ -1432,18 +1432,8 @@
   gap: 26px;
 }
 
+/* 单个平台分组：总览、账户与待接入平台共用，不再按页面拆成多个同义类。 */
 .platformGroup {
-  min-width: 0;
-}
-
-/* 账户页：平台只保留一行分组标题，账户卡直接落在画布上。
-   少一层容器后，页面的视觉重心完全交给账户卡本身。 */
-.platformPanel {
-  min-width: 0;
-}
-
-/* 待接入平台与已接入平台共用同一套标题样式 */
-.platformSection {
   min-width: 0;
 }
 
@@ -1850,53 +1840,6 @@
   line-height: 1.65;
 }
 
-/* 待接入平台：一行的页脚说明，不再单独占一块卡片 */
-.upcoming {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 4px;
-}
-
-.upcomingBadge {
-  display: grid;
-  flex-shrink: 0;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-control);
-  color: var(--muted);
-  background: var(--sunken);
-}
-
-.upcomingBadge .platformLogo {
-  width: 17px;
-  height: 17px;
-}
-
-.upcomingNote {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.upcomingName {
-  margin-right: 6px;
-  color: var(--text);
-  font-weight: 600;
-}
-
-.upcomingStatus {
-  flex-shrink: 0;
-  color: var(--muted);
-  font-size: 11.5px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
 /* 授权状态：语义圆点 + 文字的轻量标签，颜色只在异常态出现 */
 .authStatus {
   display: inline-flex;
@@ -2050,6 +1993,11 @@
   border-radius: var(--radius-card);
   background: var(--surface);
   box-shadow: 0 18px 60px rgb(0 0 0 / 28%);
+}
+
+/* 弹窗容器由脚本聚焦以承接 Esc/Tab 与读屏标题；焦点环只给内部控件。 */
+.dialog:focus {
+  outline: none;
 }
 
 .dialog h2 {

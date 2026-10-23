@@ -13,6 +13,7 @@ import {
   type RelayOrigin,
   type SkippedConfig,
 } from '../lib/desktop';
+import { clockLabel, durationLabel, resetLabel } from '../lib/format';
 import { useAppState } from '../lib/store';
 import styles from '../App.module.css';
 
@@ -45,34 +46,9 @@ function formatUsd(value: number | null): string {
   return `$${value.toFixed(2)}`;
 }
 
-function durationLabel(mins: number | null): string {
-  if (mins === null) return '';
-  if (mins < 60) return `${mins} 分钟`;
-  if (mins < 1440) return `${Math.round(mins / 60)} 小时`;
-  if (mins === 10080) return '1 周';
-  return `${Math.round(mins / 1440)} 天`;
-}
-
-function windowLabel(window: KeyQuotaWindow): string {
+function relayWindowLabel(window: KeyQuotaWindow): string {
   const duration = durationLabel(window.durationMins);
   return duration ? `${duration}窗口` : window.windowId;
-}
-
-function resetLabel(epoch: number | null): string {
-  if (epoch === null) return '重置时间未知';
-  const date = new Date(epoch * 1000);
-  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const now = new Date();
-  if (date.toDateString() === now.toDateString()) return `重置于 ${time}`;
-  return `重置于 ${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
-}
-
-function clockLabel(epoch: number): string {
-  return new Date(epoch * 1000).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
 }
 
 function expiryLabel(epoch: number | null): string {
@@ -259,7 +235,7 @@ function RelayCard({
               {quota.windows.map((item) => (
                 <div className={styles.relayWindow} key={item.windowId}>
                   <div className={styles.relayWindowHead}>
-                    <span>{windowLabel(item)}</span>
+                    <span>{relayWindowLabel(item)}</span>
                     <span className={styles.quotaMeta}>
                       {item.limitUsd !== null
                         ? `${formatUsd(item.remainingUsd)} / ${formatUsd(item.limitUsd)}`
@@ -274,7 +250,7 @@ function RelayCard({
                       className={styles.relayBar}
                       data-low={item.remainingPercent <= threshold || undefined}
                       role="progressbar"
-                      aria-label={`${windowLabel(item)}剩余额度比例`}
+                      aria-label={`${relayWindowLabel(item)}剩余额度比例`}
                       aria-valuemin={0}
                       aria-valuemax={100}
                       aria-valuenow={item.remainingPercent}
