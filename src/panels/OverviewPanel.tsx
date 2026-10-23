@@ -6,8 +6,8 @@ import { useAppState } from '../lib/store';
 import PlatformHeading from '../components/PlatformHeading';
 import styles from '../App.module.css';
 
-const RING_SIZE = 64;
-const RING_STROKE = 5;
+const RING_SIZE = 58;
+const RING_STROKE = 4.5;
 const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 

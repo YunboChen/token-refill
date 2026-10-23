@@ -1,9 +1,9 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import {
+  ArrowUp,
   Gauge,
   GearSix,
-  Info,
   PlugsIcon,
   UsersThree,
   type Icon,
@@ -20,17 +20,16 @@ import styles from './App.module.css';
 
 type PanelKey = 'overview' | 'accounts' | 'relay' | 'settings';
 
-/* 侧栏底部的说明文案：只在悬浮/聚焦 tip 图标时出现 */
-const LOCAL_ONLY_NOTE =
-  '本地运行。本机账户沿用 Codex CLI 登录态；独立账户通过官方浏览器授权，各自使用隔离的本地授权目录，令牌不在界面中展示。';
-
-const PANELS: {
+interface PanelDef {
   key: PanelKey;
   label: string;
   Icon: Icon;
   title: string;
   subtitle: string;
-}[] = [
+}
+
+/* 菜单按使用顺序平铺；底部只留版本信息与数据来源说明。 */
+const PANELS: PanelDef[] = [
   {
     key: 'overview',
     label: '总览',
@@ -67,12 +66,31 @@ export default function App() {
   const { error, update, openExternal } = useAppState();
   const desktop = isTauri();
   const current = PANELS.find((panel) => panel.key === active) ?? PANELS[0];
-  const activeIndex = Math.max(0, PANELS.findIndex((panel) => panel.key === active));
   // 启动检查只在有正式新版本时提示；设置页仍可手动重新检查。
-  const updateNotice =
+  // 侧栏页脚只放一个轻量入口，详细状态仍在设置页。
+  const updateAvailable =
     update?.updateAvailable && update.releaseUrl
       ? { version: update.latestVersion, url: update.releaseUrl }
       : null;
+
+  const renderNavItem = (panel: PanelDef) => (
+    <button
+      key={panel.key}
+      type="button"
+      role="tab"
+      id={`tab-${panel.key}`}
+      aria-selected={active === panel.key}
+      aria-controls={`panel-${panel.key}`}
+      className={styles.navItem}
+      data-active={active === panel.key || undefined}
+      onClick={() => setActive(panel.key)}
+    >
+      <span className={styles.navLabel}>
+        <panel.Icon size={17} className={styles.navIcon} aria-hidden />
+        <span className={styles.navText}>{panel.label}</span>
+      </span>
+    </button>
+  );
 
   // 标题栏形态按平台区分：macOS 是 Overlay（红绿灯浮在内容上），
   // Windows 用系统标题栏。取不到平台时保持 macOS 布局，浏览器预览不受影响。
@@ -107,46 +125,29 @@ export default function App() {
 
         <nav
           className={styles.nav}
-          style={{ '--nav-index': activeIndex } as CSSProperties}
-          aria-label="管理窗口分区"
+          aria-label="主导航"
           role="tablist"
           aria-orientation="vertical"
         >
-          <span className={styles.navPill} aria-hidden="true" />
-          {PANELS.map((panel) => (
-            <button
-              key={panel.key}
-              type="button"
-              role="tab"
-              id={`tab-${panel.key}`}
-              aria-selected={active === panel.key}
-              aria-controls={`panel-${panel.key}`}
-              className={styles.navItem}
-              data-active={active === panel.key || undefined}
-              onClick={() => setActive(panel.key)}
-            >
-              <span className={styles.navLabel}>
-                <panel.Icon size={18} className={styles.navIcon} aria-hidden />
-                <span className={styles.navText}>{panel.label}</span>
-              </span>
-            </button>
-          ))}
+          {PANELS.map(renderNavItem)}
         </nav>
 
-        {/* 侧栏底部：版本号 + 数据来源说明 tip，悬浮或键盘聚焦时展开 */}
+        {/* 侧栏底部：版本号 + 可选的升级入口。分隔线只负责分隔导航与应用信息。
+            版本号与导航图标同一条左缘；有新版本时入口落在右侧。 */}
         <div className={styles.sidebarFoot}>
-          <span className={styles.version}>Token Refill v{appVersion}</span>
-          <button
-            type="button"
-            className={styles.tipTrigger}
-            aria-label="数据来源说明"
-            aria-describedby="local-only-tip"
-          >
-            <Info size={14} aria-hidden />
-          </button>
-          <span role="tooltip" id="local-only-tip" className={styles.tooltip}>
-            {LOCAL_ONLY_NOTE}
-          </span>
+          <span className={styles.version}>v{appVersion}</span>
+          {updateAvailable ? (
+            <button
+              type="button"
+              className={styles.updateChip}
+              onClick={() => void openExternal(updateAvailable.url)}
+              title={`发现新版本 v${updateAvailable.version}，前往下载页`}
+              aria-label={`发现新版本 v${updateAvailable.version}，前往下载页`}
+            >
+              <ArrowUp size={11} weight="bold" aria-hidden />
+              v{updateAvailable.version}
+            </button>
+          ) : null}
         </div>
       </aside>
 
@@ -164,20 +165,6 @@ export default function App() {
         </header>
 
         <div className={styles.mainScroll}>
-          {updateNotice ? (
-            <div className={styles.noticeUpdate} role="status">
-              <span className={styles.noticeUpdateText}>
-                发现新版本 v{updateNotice.version}，当前 v{appVersion}。
-              </span>
-              <button
-                type="button"
-                className={styles.noticeUpdateAction}
-                onClick={() => void openExternal(updateNotice.url)}
-              >
-                前往下载
-              </button>
-            </div>
-          ) : null}
           {error ? (
             <p className={`${styles.noticeDanger} ${styles.globalNotice}`} role="alert">
               {error}

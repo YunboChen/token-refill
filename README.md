@@ -117,7 +117,7 @@ src/
   lib/desktop.ts      带类型的 Rust 状态与命令入口
   lib/store.tsx       统一状态订阅、刷新与偏好保存
   lib/prefs.ts        主题与默认偏好
-  panels/             总览、账户、设置
+  panels/             总览、账户、中转站、设置
   assets/logo.png     页头品牌标志
   main.tsx            React 与 Motion 入口
 src-tauri/
