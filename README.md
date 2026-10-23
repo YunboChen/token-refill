@@ -141,6 +141,8 @@ xattr -dr com.apple.quarantine "/Applications/Token Refill.app"
 
 macOS 26 的自适应图标依赖 runner 上的 Xcode 26 `actool`；runner 版本更低时会按上文跳过 `Assets.car`，产物退回平图图标，构建不会失败。
 
+CI 打包刻意走 `cargo tauri` 而不是 `pnpm tauri`：Node 版 CLI 下 libuv 会把继承来的 fd 0 标记为 close-on-exec，`actool` 启动时 stdin 已关闭，其 helper `ibtoold` 崩溃，`.icon` 就编不出 `Assets.car`（[tauri#15315](https://github.com/tauri-apps/tauri/issues/15315)）。`cargo-tauri` 不经过 libuv，所以正常。上游修复 PR 合并并升级 CLI 后，可以改回 `pnpm tauri` 并删掉 workflow 里的安装步骤。
+
 Windows 暂未进入构建矩阵：`src-tauri/src/codex.rs` 的 `is_executable` 无条件使用 `std::os::unix::fs::PermissionsExt`，Codex CLI 查找也只处理 Unix 路径，Windows 上无法编译。适配后给 workflow 加一条 `windows-latest` 矩阵即可。
 
 ## 当前范围
