@@ -4,6 +4,7 @@ import { AnimatePresence, m } from 'motion/react';
 import {
   ArrowClockwise,
   ArrowSquareOut,
+  CheckCircle,
   CircleNotch,
   LinkSimple,
   LockSimple,
@@ -718,9 +719,22 @@ export default function AccountsPanel() {
                       </>
                     ) : dialog.phase === 'succeeded' ? (
                       <>
-                        <p className={styles.usageNote}>
-                          账户已接入，额度数据会在后台刷新后显示。
-                        </p>
+                        <div className={styles.dialogSuccess}>
+                          <CheckCircle
+                            size={18}
+                            weight="fill"
+                            className={styles.dialogSuccessIcon}
+                            aria-hidden
+                          />
+                          <div className={styles.dialogSuccessBody}>
+                            <p className={styles.dialogSuccessTitle}>
+                              账户已成功接入。
+                            </p>
+                            <p className={styles.dialogSuccessText}>
+                              额度数据正在后台刷新，稍后将自动显示。
+                            </p>
+                          </div>
+                        </div>
                         <div className={styles.dialogActions}>
                           <button
                             type="button"

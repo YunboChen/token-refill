@@ -1899,6 +1899,43 @@
   line-height: 1.55;
 }
 
+/* 授权成功：结论与后续动作收进一块凹陷状态区，
+   层级低于弹窗标题，避免看起来像第二个标题 */
+.dialogSuccess {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+}
+
+.dialogSuccessIcon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--ok);
+}
+
+.dialogSuccessBody {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.dialogSuccessTitle {
+  margin: 0;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.dialogSuccessText {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 /* 授权流程：编号圆点加竖向连线，把授权过程讲成一条路径。
    容器本身不加底色，弹窗里只保留输入框这一处凹陷。 */
 .dialogSteps {
