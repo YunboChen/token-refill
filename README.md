@@ -130,7 +130,7 @@ public/               浏览器标签图标、Web manifest
 
 ## 发布
 
-打包由 [.github/workflows/release.yml](./.github/workflows/release.yml) 在 GitHub Actions 上完成，当前只产出 macOS 通用包（Apple Silicon + Intel 的 `.dmg`）。
+打包由 [.github/workflows/release.yml](./.github/workflows/release.yml) 在 GitHub Actions 上完成：macOS 通用包（Apple Silicon + Intel 的 `.dmg`）与 Windows x64 安装包（`.msi`、`-setup.exe`）。
 
 发版步骤：
 
@@ -148,7 +148,7 @@ public/               浏览器标签图标、Web manifest
    git push origin v0.2.0
    ```
 
-CI 会先跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），再打通用包，成功后把 `.dmg` 挂到一个 **draft Release** 上，确认无误后手动发布。tag 与 `tauri.conf.json` / `package.json` / `Cargo.toml` 任一处版本不一致时构建直接失败，避免出现版本号对不上的安装包。
+CI 会先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS 通用包与 Windows x64 包：macOS 用 `cargo tauri` + ad-hoc 签名，Windows 用 MSVC 工具链构建 MSI/NSIS 并先跑一遍 `pnpm test:rust`。两类产物都挂到同一个 **draft Release**，确认无误后手动发布。tag 与 `tauri.conf.json` / `package.json` / `Cargo.toml` 任一处版本不一致时构建直接失败，避免出现版本号对不上的安装包。
 
 也可以在 Actions 页面手动触发 `release`，此时按当前 `tauri.conf.json` 版本创建 `vX.Y.Z` 草稿。
 
@@ -164,7 +164,7 @@ xattr -dr com.apple.quarantine "/Applications/Token Refill.app"
 
 macOS 26 的自适应图标依赖 runner 上的 Xcode 26 `actool`；runner 版本更低时会按上文跳过 `Assets.car`，产物退回平图图标，构建不会失败。
 
-Windows 兼容层已实现（CLI 查找、授权链接、数据目录、标题栏），本机已用 MSVC 目标完成 `cargo check`、`cargo test` 与真实 CLI 握手验证。release workflow 目前只构建 macOS 通用包；Windows 安装包（MSI/NSIS）尚未纳入 CI，也未做安装与卸载验收。给 workflow 增加 `windows-latest` 矩阵并选用 MSVC 工具链即可产出安装包。
+Windows 安装包（MSI/NSIS）由 `build-windows` job 用 MSVC 工具链构建，当前未配置 Authenticode 证书，首次运行会出现 SmartScreen 提示；接入代码签名证书后可在该 job 补充签名步骤。Windows 包的安装与卸载验收仍未完成。
 
 ## 当前范围
 

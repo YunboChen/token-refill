@@ -28,7 +28,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       # tauri.conf.json 的 version 就是安装包版本；三处版本或 tag 不一致时直接失败，
@@ -80,7 +80,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
@@ -122,3 +122,46 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: --target universal-apple-darwin
+
+  build-windows:
+    name: build windows (x64)
+    needs: check
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # windows-latest 默认就是 stable-x86_64-pc-windows-msvc；
+      # 不要用 GNU 目标（缺 dlltool，且与本项目的 Windows 适配无关）。
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: windows
+
+      - run: pnpm install --frozen-lockfile
+
+      # Windows 专属分支（exe/cmd 查找、ShellExecuteW、10013 映射）只在 Windows 上编译执行；
+      # 这里同时跑方式与 macOS 一致的 --locked 测试。
+      - run: pnpm test:rust
+
+      # 未配置代码签名证书：产物未签名，首次运行会有 SmartScreen 提示。
+      # 用项目自带的 Node CLI（pnpm tauri），Windows 没有 macOS 的 actool/libuv 问题。
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: pnpm tauri
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: Token Refill v__VERSION__
+          releaseDraft: true
+          prerelease: false
+          args: --bundles msi,nsis

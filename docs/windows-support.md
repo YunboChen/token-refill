@@ -92,8 +92,9 @@ Windows 目标目录：
 
 - `bundle.targets: "all"` 在 Windows 上展开为 MSI 与 NSIS 两类安装包；图标沿用 `icons/icon.ico`，无需新增平台配置。
 - WebView2 安装策略保持 Tauri 默认（下载引导器，安装时需要联网）；Windows 11 通常已预装。
-- 代码签名与发布渠道未定，沿用 macOS 的「先不签名」思路需要在发布说明中写明 SmartScreen 提示。
-- 最低 Windows 版本、架构（x64 / arm64）与实际安装验收仍待确认。
+- Windows 安装包由 `.github/workflows/release.yml` 的 `build-windows` job（`windows-latest`、MSVC、Node 24）构建，与 macOS 通用包一起上传到同一个 draft Release；job 内先执行 `pnpm test:rust`。该 job 目前只通过 actionlint 静态校验，尚未在 GitHub Actions 实际跑过。
+- 代码签名与发布渠道未定：当前未配置 Authenticode 证书，产物未签名，首次运行会有 SmartScreen 提示，需要在发布说明中写明。
+- 最低 Windows 版本、架构（x64 / arm64）与实际安装验收仍待确认；当前 CI 只构建 x64。
 
 ## 9. 验证记录
 
@@ -102,7 +103,7 @@ Windows 目标目录：
 | 项目 | 结果 |
 | --- | --- |
 | `cargo check --all-targets` | 通过 |
-| `cargo test` | 30 项通过；仅 Unix 可跑的两个 Python 假 app-server 用例按平台跳过 |
+| `cargo test` | 30 项通过；合并 `origin/dev` 后全套 47 项通过。仅 Unix 可跑的两个 Python 假 app-server 用例按平台跳过 |
 | `cargo clippy --all-targets` | 仅 1 条既有告警（`apply_login_success` 参数 8 个，与本改动无关） |
 | `tsc --noEmit` + `vite build` | 通过 |
 | 真实 CLI 发现与握手 | 找到 `...\Programs\OpenAI\Codex\bin\codex.exe`；`initialize`、`account/read` 成功返回，未登录时额度请求返回 `auth-expired`，与 macOS 行为一致 |
@@ -110,10 +111,12 @@ Windows 目标目录：
 | `pnpm tauri dev` | Vite 监听 5173，Tauri 编译并启动应用窗口（`src-tauri` 使用 MSVC 目录级 override） |
 | 授权回调端口 | 修复前绑定 1455 返回 `10013`；把 1455–1457 加为管理员排除段后，真实 `LoginSession::start` 返回 `redirect_uri=127.0.0.1:1455` 的授权地址，取消流程正常 |
 | Windows 布局规则 | Chromium 中 `data-platform="windows"` 时安全区高度 44px → 10px，页面头贴顶 |
+| `release.yml` | `actionlint` 校验通过；Windows job 尚未在 GitHub Actions 实际运行 |
+| Windows 安装包构建 | 本机 `pnpm tauri build --bundles msi,nsis` 成功：MSI 3.61 MiB、NSIS 2.48 MiB（仅构建，未安装验证） |
 
 尚未验证：
 
-- MSI/NSIS 安装包构建、安装与卸载。
+- MSI/NSIS 安装包的安装、卸载与升级流程（构建已在本机通过）。
 - 已完成授权的账户在 Windows 上查询额度（本机 CLI 未登录，只验证到授权失效路径）。
 - 应用窗口的实际渲染与视觉细节（仅确认进程启动与状态写入，未截图窗口）。
 - Windows 10 具体小版本、arm64、长时间运行与休眠恢复。
