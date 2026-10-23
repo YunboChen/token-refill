@@ -1,5 +1,8 @@
 mod bailian;
 mod codex;
+mod discovery;
+pub mod quota;
+mod relay;
 mod state;
 mod update;
 
@@ -209,6 +212,57 @@ async fn check_for_update() -> Result<update::UpdateStatus, String> {
         .map_err(|err| format!("检查更新失败：{err}"))?
 }
 
+/// 自动识别上游（New API / Sub2API）并查询密钥额度。密钥只留在 Rust 内存。
+#[tauri::command]
+async fn relay_query(
+    store: tauri::State<'_, Arc<relay::RelayStore>>,
+    base_url: String,
+    api_key: String,
+) -> Result<relay::RelayAccount, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || store.query(&base_url, &api_key))
+        .await
+        .map_err(|err| format!("查询中转站额度失败：{err}"))?
+}
+
+/// 扫描 Claude Code / Codex 的本地配置，自动识别并登记可查询的密钥。
+#[tauri::command]
+async fn relay_discover(
+    store: tauri::State<'_, Arc<relay::RelayStore>>,
+) -> Result<relay::DiscoveryReport, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || store.discover())
+        .await
+        .map_err(|err| format!("扫描本地配置失败：{err}"))
+}
+
+#[tauri::command]
+async fn relay_refresh(
+    store: tauri::State<'_, Arc<relay::RelayStore>>,
+    id: String,
+) -> Result<relay::RelayAccount, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || store.refresh(&id))
+        .await
+        .map_err(|err| format!("刷新中转站额度失败：{err}"))?
+}
+
+#[tauri::command]
+fn relay_list(store: tauri::State<'_, Arc<relay::RelayStore>>) -> Vec<relay::RelayAccount> {
+    store.list()
+}
+
+#[tauri::command]
+async fn relay_remove(
+    store: tauri::State<'_, Arc<relay::RelayStore>>,
+    id: String,
+) -> Result<(), String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || store.remove(&id))
+        .await
+        .map_err(|err| format!("移除中转站账户失败：{err}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -225,6 +279,7 @@ pub fn run() {
                 data_dir.join("state.json"),
             ));
             app.manage(Arc::clone(&store));
+            app.manage(Arc::new(relay::RelayStore::default()));
 
             // 自启以系统登录项为准：启动时回写实际状态，避免本地开关与系统不一致。
             match app.autolaunch().is_enabled() {
@@ -248,7 +303,12 @@ pub fn run() {
             open_external_url,
             send_test_notification,
             set_auto_launch,
-            check_for_update
+            check_for_update,
+            relay_query,
+            relay_discover,
+            relay_refresh,
+            relay_list,
+            relay_remove
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Token Refill");
