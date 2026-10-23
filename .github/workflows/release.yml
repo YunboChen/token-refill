@@ -146,12 +146,25 @@ jobs:
 
       - run: pnpm test:rust
 
+  # 按架构分开构建，各自只出一个 dmg：
+  # universal 会把 arm64/x86_64 两套可执行文件塞进同一个 fat binary，安装包和 CI 编译成本都翻倍。
   build-macos:
-    name: build macos (universal)
+    name: build macos (${{ matrix.label }})
     needs: [prepare, check]
     if: needs.prepare.outputs.should_build == 'true'
     runs-on: macos-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            label: arm64
+          - target: x86_64-apple-darwin
+            label: x64
+    env:
+      # 未接入 Apple Developer 证书，显式使用 ad-hoc 签名，产物可直接构建但不能通过公证。
+      APPLE_SIGNING_IDENTITY: "-"
     steps:
       - uses: actions/checkout@v7
 
@@ -164,12 +177,12 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
-          key: universal
+          key: macos-${{ matrix.target }}
 
       - run: pnpm install --frozen-lockfile
 
@@ -180,27 +193,41 @@ jobs:
         shell: bash
         run: |
           version=$(node -p "require('./node_modules/@tauri-apps/cli/package.json').version")
-          url="https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v${version}/cargo-tauri-aarch64-apple-darwin.zip"
+          case "$(uname -m)" in
+            arm64) host=aarch64-apple-darwin ;;
+            *) host=x86_64-apple-darwin ;;
+          esac
+          url="https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v${version}/cargo-tauri-${host}.zip"
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/cargo-tauri.zip" "$url"
           unzip -q "$RUNNER_TEMP/cargo-tauri.zip" -d "$RUNNER_TEMP/cargo-tauri"
           bin=$(find "$RUNNER_TEMP/cargo-tauri" -type f -name cargo-tauri | head -1)
           chmod +x "$bin"
           echo "$(dirname "$bin")" >> "$GITHUB_PATH"
 
-      - uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 未接入 Apple Developer 证书，显式使用 ad-hoc 签名，产物可直接构建但不能通过公证。
-          APPLE_SIGNING_IDENTITY: "-"
+      # 用 cargo tauri 而不是 pnpm tauri，见上面 tauri#15315 的说明。
+      # 只打 dmg：安装包按架构各自独立，也不再附带 .app.tar.gz。
+      - name: Build dmg
+        shell: bash
+        run: |
+          version="${{ needs.prepare.outputs.version }}"
+          cargo tauri build --target "${{ matrix.target }}" --bundles dmg
+          mkdir -p output
+          dmg=$(ls src-tauri/target/"${{ matrix.target }}"/release/bundle/dmg/*.dmg 2>/dev/null | head -1) || true
+          if [ -z "$dmg" ]; then
+            echo "::error::dmg not found"
+            exit 1
+          fi
+          cp "$dmg" "output/Token.Refill_${version}_${{ matrix.label }}.dmg"
+          ls -lh output
+
+      # 产物先存成 workflow artifact，由 publish job 统一发到 release，
+      # 避免多个 job 并发创建同一个 draft release。
+      - uses: actions/upload-artifact@v7
         with:
-          # 用 cargo tauri 而不是 pnpm tauri，见上面 tauri#15315 的说明。
-          tauriScript: cargo tauri
-          # tag 推送时沿用该 tag；手动触发时按 app version 生成 vX.Y.Z。
-          tagName: ${{ needs.prepare.outputs.tag }}
-          releaseName: Token Refill v${{ needs.prepare.outputs.version }}
-          releaseDraft: true
-          prerelease: false
-          args: --target universal-apple-darwin
+          name: macos-${{ matrix.label }}
+          path: output/*.dmg
+          if-no-files-found: error
+          retention-days: 7
 
   build-windows:
     name: build windows (x64)
@@ -233,36 +260,54 @@ jobs:
       # 这里同时跑方式与 macOS 一致的 --locked 测试。
       - run: pnpm test:rust
 
-      # 产物一：免安装单文件 exe。--no-bundle 只产出可执行文件，不生成安装器。
-      # 依赖系统 WebView2（Win10/11 通常已预装），数据仍写入 %APPDATA%。
-      - name: Build portable exe
+      # 一次构建同时拿到两个产物（之前 --no-bundle 和 --bundles nsis 会各编一遍）：
+      #   产物一：免安装单文件 exe，依赖系统 WebView2（Win10/11 通常已预装），数据写入 %APPDATA%。
+      #   产物二：NSIS 安装器（.exe），不含 MSI。
+      # 未配置代码签名证书：两个产物均未签名，首次运行会有 SmartScreen 提示。
+      - name: Build portable exe and NSIS installer
         shell: pwsh
         run: |
-          pnpm tauri build --no-bundle
           $version = "${{ needs.prepare.outputs.version }}"
-          New-Item -ItemType Directory -Force portable | Out-Null
-          Copy-Item "src-tauri/target/release/token-refill.exe" "portable/Token.Refill_${version}_x64.exe"
+          pnpm tauri build --bundles nsis
+          New-Item -ItemType Directory -Force output | Out-Null
+          Copy-Item "src-tauri/target/release/token-refill.exe" "output/Token.Refill_${version}_x64.exe"
+          $setup = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          if (-not $setup) { throw "NSIS installer not found" }
+          Copy-Item $setup.FullName "output/Token.Refill_${version}_x64-setup.exe"
+          Get-ChildItem output | Format-Table Name, Length
 
-      # 产物二：NSIS 安装器（.exe）。不含 MSI。
-      # 未配置代码签名证书：两个产物均未签名，首次运行会有 SmartScreen 提示。
-      - uses: tauri-apps/tauri-action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v7
         with:
-          tauriScript: pnpm tauri
-          tagName: ${{ needs.prepare.outputs.tag }}
-          releaseName: Token Refill v${{ needs.prepare.outputs.version }}
-          releaseDraft: true
-          prerelease: false
-          args: --bundles nsis
+          name: windows
+          path: output/*.exe
+          if-no-files-found: error
+          retention-days: 7
 
-      # 把免安装 exe 追加到同一个 draft Release。tauri-action 只上传它自己构建的安装器。
+  # 所有平台的产物集中到一个 job 发布，避免多个 job 并发创建同一个 draft release。
+  publish:
+    name: publish draft release
+    needs: [prepare, check, build-macos, build-windows]
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
       - uses: softprops/action-gh-release@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          # tag 推送时沿用该 tag；手动触发时按 app version 生成 vX.Y.Z。
           tag_name: ${{ needs.prepare.outputs.tag }}
+          # 新建 tag 时钉在本次构建的提交上，避免落到仓库默认分支的最新提交。
+          target_commitish: ${{ github.sha }}
           name: Token Refill v${{ needs.prepare.outputs.version }}
           draft: true
           prerelease: false
-          files: portable/Token.Refill_${{ needs.prepare.outputs.version }}_x64.exe
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/macos-arm64/*.dmg
+            artifacts/macos-x64/*.dmg
+            artifacts/windows/*.exe
