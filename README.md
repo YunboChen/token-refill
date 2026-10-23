@@ -141,16 +141,15 @@ public/               浏览器标签图标、Web manifest
    cargo check --manifest-path src-tauri/Cargo.toml   # 同步 Cargo.lock
    ```
 
-2. 提交后打 tag 并推送：
+2. 提交并推送到 `dev`：
 
    ```sh
-   git tag v0.2.0
-   git push origin v0.2.0
+   git push origin dev
    ```
 
-CI 会先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS 通用包与 Windows x64 产物：macOS 用 `cargo tauri` + ad-hoc 签名；Windows 用 MSVC 工具链，先跑 `pnpm test:rust`，再用 `--no-bundle` 产出免安装 exe，最后用 `--bundles nsis` 产出安装器。两类产物都挂到同一个 **draft Release**，确认无误后手动发布。tag 与 `tauri.conf.json` / `package.json` / `Cargo.toml` 任一处版本不一致时构建直接失败，避免出现版本号对不上的安装包。
+`prepare` job 会对比这次推送前后的 `src-tauri/tauri.conf.json` 版本号：**只有版本号变化才继续构建**，版本未变时其余 job 全部跳过，不会重复生成或上传产物。也可以显式发版：推送 `v*` tag，或在 Actions 页面手动触发 `release`（手动触发不比较版本，总是构建）。
 
-也可以在 Actions 页面手动触发 `release`，此时按当前 `tauri.conf.json` 版本创建 `vX.Y.Z` 草稿。
+构建流程：先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS 通用包与 Windows x64 产物：macOS 用 `cargo tauri` + ad-hoc 签名；Windows 用 MSVC 工具链，先跑 `pnpm test:rust`，再用 `--no-bundle` 产出免安装 exe，最后用 `--bundles nsis` 产出安装器。两类产物都挂到同一个 **draft Release**（tag 为 `v<版本号>`），确认无误后手动发布。`tauri.conf.json` / `package.json` / `Cargo.toml` 三处版本不一致时构建直接失败；tag 推送还会校验 tag 与版本号一致。
 
 ### 签名状态
 
