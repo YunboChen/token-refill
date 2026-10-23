@@ -196,3 +196,84 @@ export function onAccountLoginChanged(
 ): Promise<UnlistenFn> {
   return listen<AccountLoginEvent>(ACCOUNT_LOGIN_EVENT, (event) => handler(event.payload));
 }
+
+// ---------- 中转站密钥额度（密钥只在 Rust 会话内存中）----------
+
+export type QuotaProvider = 'new-api' | 'sub2-api';
+export type QuotaMode = 'key' | 'subscription' | 'wallet' | 'unrestricted';
+
+export interface KeyQuotaWindow {
+  windowId: string;
+  durationMins: number | null;
+  limitUsd: number | null;
+  usedUsd: number | null;
+  remainingUsd: number | null;
+  remainingPercent: number | null;
+  resetsAtEpoch: number | null;
+}
+
+export interface AccountQuota {
+  usedUsd: number | null;
+  remainingUsd: number | null;
+}
+
+export interface KeyQuota {
+  provider: QuotaProvider;
+  mode: QuotaMode;
+  keyName: string | null;
+  planName: string | null;
+  valid: boolean;
+  unlimited: boolean;
+  limitUsd: number | null;
+  usedUsd: number | null;
+  remainingUsd: number | null;
+  account: AccountQuota | null;
+  expiresAtEpoch: number | null;
+  windows: KeyQuotaWindow[];
+  checkedAtEpoch: number;
+}
+
+export type RelayOrigin = 'manual' | 'claude-code' | 'codex';
+
+export interface RelayAccount {
+  id: string;
+  baseUrl: string;
+  origin: RelayOrigin;
+  provider: QuotaProvider;
+  quota: KeyQuota | null;
+  checkedAtEpoch: number | null;
+  lastError: string | null;
+}
+
+export interface SkippedConfig {
+  origin: RelayOrigin;
+  baseUrl: string;
+  reason: string;
+}
+
+export interface DiscoveryReport {
+  accounts: RelayAccount[];
+  skipped: SkippedConfig[];
+}
+
+/** 扫描 Claude Code / Codex 的本地配置并自动识别；密钥只留在 Rust 内存。 */
+export function discoverRelayAccounts(): Promise<DiscoveryReport> {
+  return invoke<DiscoveryReport>('relay_discover');
+}
+
+/** 自动识别 New API / Sub2API 并查询；密钥不写入前端状态或本地状态文件。 */
+export function queryRelayAccount(baseUrl: string, apiKey: string): Promise<RelayAccount> {
+  return invoke<RelayAccount>('relay_query', { baseUrl, apiKey });
+}
+
+export function refreshRelayAccount(id: string): Promise<RelayAccount> {
+  return invoke<RelayAccount>('relay_refresh', { id });
+}
+
+export function listRelayAccounts(): Promise<RelayAccount[]> {
+  return invoke<RelayAccount[]>('relay_list');
+}
+
+export function removeRelayAccount(id: string): Promise<void> {
+  return invoke<void>('relay_remove', { id });
+}

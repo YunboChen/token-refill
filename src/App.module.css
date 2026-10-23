@@ -284,6 +284,138 @@
   white-space: nowrap;
 }
 
+/* ---------- 中转站：识别表单、金额与额度条 ---------- */
+
+.providerTag {
+  padding: 2px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.relayForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.relayForm .field {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+
+.relaySummary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.relayAmount {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.relayBarWrap {
+  display: grid;
+  flex: 1 1 240px;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.relayBar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--sunken);
+}
+
+.relayBarFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-strong);
+  transition: width 400ms ease-out;
+}
+
+.relayBar[data-low] .relayBarFill {
+  background: var(--danger);
+}
+
+.relayScale {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.relayMetaLine {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.relayWindows {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.relayWindow {
+  display: grid;
+  gap: 6px;
+}
+
+.relayWindowHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.relayWindowHead .quotaMeta {
+  font-weight: 500;
+}
+
+.relaySkipped {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.relaySkipped ul {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.relaySkipped li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .spin {
   animation: spin 900ms linear infinite;
 }

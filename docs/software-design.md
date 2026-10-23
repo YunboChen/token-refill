@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | 前端界面 | 总览、账户、设置三页；读取统一状态并订阅变更事件 | `src/panels/` |
 | 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences`、账户授权/改名/移除命令与 `app-state-changed`、`account-login-changed` 事件 | `src/lib/desktop.ts`、`src/lib/store.tsx` |
-| 本地后端 | Rust 状态存储、后台刷新调度、Codex 适配器、中转网关密钥额度适配器（`src-tauri/src/quota/`）与独立授权目录协调 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/quota/` |
+| 本地后端 | Rust 状态存储、后台刷新调度、Codex 适配器、中转网关密钥额度适配器与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/quota/`、`src-tauri/src/discovery.rs` |
 | 桌面配置 | 窗口、构建、安全策略及打包配置 | `src-tauri/tauri.conf.json` |
 | 权限声明 | 窗口权限与事件监听权限 | `src-tauri/capabilities/` |
 
@@ -104,12 +104,18 @@ Windows 安装包与界面运行验收尚未完成，最低 Windows 版本待确
 
 ### 4.4 中转网关密钥额度适配器
 
-除首批平台外，Rust 侧已按同一原则实现两类只需 API Key 即可查询密钥实时额度的适配器，代码在 `src-tauri/src/quota/`（`newapi.rs`、`sub2api.rs`），尚未接入账户配置与界面：
+除首批平台外，Rust 侧已按同一原则实现两类只需 API Key 即可查询密钥实时额度的适配器，代码在 `src-tauri/src/quota/`（`newapi.rs`、`sub2api.rs`），并在“中转站”页提供自动识别与手动输入两种入口。密钥只在本次运行期间保存在 Rust 内存，识别失败时只返回来源与原因，不显示密钥：
 
 - **New API**：`GET /api/usage/token/`（Bearer）返回 `total_granted` / `total_used` / `total_available` / `unlimited_quota` / `expires_at`；额度单位为平台内部 quota，用公开接口 `GET /api/status` 的 `data.quota_per_unit` 换算美元，取不到时按上游默认 `500000` 兜底。密钥允许时额外返回 `user_quota`，作为账户额度展示。
 - **Sub2API**：`GET /v1/usage`（Bearer）按 `mode` 返回三种口径：`quota_limited` 为密钥总额度与 5h/1d/7d 限速窗口；`unrestricted` + `subscription` 为日/周/月用量与上限（`remaining = -1` 表示无限额度，日/月重置边界平台不提供，不推算）；`unrestricted` + `balance` 为钱包余额。
 
-两类适配器都只把规范化后的金额、窗口与到期时间交给调用方，密钥仅存在于 Rust 内存，不进入前端状态、日志或错误消息；错误信息不回显响应正文。服务地址仅允许 HTTPS，本机回环地址例外。真实服务端验证仍待用户提供自部署地址后进行。
+本地配置读取范围（`src-tauri/src/discovery.rs`）：
+
+- Claude Code：`$CLAUDE_CONFIG_DIR/settings.json` 或 `~/.claude/settings.json` 中 `env.ANTHROPIC_BASE_URL` 与 `env.ANTHROPIC_AUTH_TOKEN`（回退 `ANTHROPIC_API_KEY`）。
+- Codex：`$CODEX_HOME/config.toml` 或 `~/.codex/config.toml` 的 `[model_providers.<id>]`，只取 `base_url` 与 `env_key`/`experimental_bearer_token`；激活的 `model_provider` 排在最前。不读取 `auth.json` 等登录态凭证，也不执行配置中的命令。
+- 客户端 Base URL 末尾的 `/v1` 会被去掉后再拼接额度接口，避免 `/v1/v1/usage`。
+
+识别时依次请求 New API 与 Sub2API 的额度接口，成功即确定平台类型；都失败时在页面列出未识别的配置及原因，用户仍可手动填写地址与密钥。两类适配器都只把规范化后的金额、窗口与到期时间交给调用方，密钥仅存在于 Rust 内存，不进入前端状态、日志或错误消息；错误信息不回显响应正文。服务地址仅允许 HTTPS，本机回环地址例外。真实服务端验证仍待用户提供自部署地址后进行。
 
 ## 5. 数据设计待定项
 

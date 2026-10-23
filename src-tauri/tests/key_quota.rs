@@ -8,7 +8,7 @@ use std::thread;
 
 use token_refill_lib::quota::newapi::NewApiProvider;
 use token_refill_lib::quota::sub2api::Sub2ApiProvider;
-use token_refill_lib::quota::{KeyQuotaProvider, QuotaMode, QuotaProvider};
+use token_refill_lib::quota::{detect_and_fetch, KeyQuotaProvider, QuotaMode, QuotaProvider};
 
 const KEY: &str = "sk-test-key";
 
@@ -63,15 +63,15 @@ fn newapi_reads_quota_per_unit_and_authenticates_the_usage_request() {
         }
     }"#;
     let status = r#"{"success":true,"data":{"quota_per_unit":1000000}}"#;
-    let (base, requests) = serve(vec![(200, status), (200, usage)]);
+    let (base, requests) = serve(vec![(200, usage), (200, status)]);
 
     let quota = NewApiProvider::new(&base, KEY)
         .expect("构造 New API 客户端")
         .fetch_quota()
         .expect("查询 New API 额度");
 
-    let status_request = requests.recv().expect("收到状态请求");
     let usage_request = requests.recv().expect("收到额度请求");
+    let status_request = requests.recv().expect("收到状态请求");
     assert!(status_request.starts_with("GET /api/status "));
     assert!(usage_request.starts_with("GET /api/usage/token/ "));
     assert!(
@@ -104,7 +104,7 @@ fn sub2api_reads_key_quota_over_v1_usage() {
     }"#;
     let (base, requests) = serve(vec![(200, body)]);
 
-    let quota = Sub2ApiProvider::new(&base, KEY)
+    let quota = Sub2ApiProvider::new(&format!("{base}/v1"), KEY)
         .expect("构造 Sub2API 客户端")
         .fetch_quota()
         .expect("查询 Sub2API 额度");
@@ -156,4 +156,51 @@ fn empty_or_malformed_keys_are_rejected_before_any_request() {
     assert!(NewApiProvider::new("https://api.example.com", "  ").is_err());
     assert!(NewApiProvider::new("https://api.example.com", "sk-a b").is_err());
     assert!(NewApiProvider::new("https://api.example.com", "sk-a\nb").is_err());
+}
+
+#[test]
+fn detection_falls_back_to_sub2api_when_newapi_is_absent() {
+    let body = r#"{"mode":"quota_limited","isValid":true,
+        "quota":{"limit":5,"used":1,"remaining":4}}"#;
+    let (base, requests) = serve(vec![(404, "{}"), (200, body)]);
+
+    let detected = detect_and_fetch(&base, KEY).expect("识别 Sub2API");
+
+    assert_eq!(detected.provider, QuotaProvider::Sub2Api);
+    assert_eq!(detected.quota.mode, QuotaMode::Key);
+    assert_eq!(detected.quota.remaining_usd, Some(4.0));
+    assert!(requests
+        .recv()
+        .unwrap()
+        .starts_with("GET /api/usage/token/ "));
+    assert!(requests.recv().unwrap().starts_with("GET /v1/usage "));
+}
+
+#[test]
+fn detection_recognizes_newapi_first() {
+    let usage = r#"{"code":true,"data":{"name":"中转","total_granted":1000000,
+        "total_used":0,"total_available":1000000,"unlimited_quota":false}}"#;
+    let status = r#"{"success":true,"data":{"quota_per_unit":500000}}"#;
+    let (base, requests) = serve(vec![(200, usage), (200, status)]);
+
+    let detected = detect_and_fetch(&base, KEY).expect("识别 New API");
+
+    assert_eq!(detected.provider, QuotaProvider::NewApi);
+    assert_eq!(detected.quota.limit_usd, Some(2.0));
+    assert!(requests
+        .recv()
+        .unwrap()
+        .starts_with("GET /api/usage/token/ "));
+    assert!(requests.recv().unwrap().starts_with("GET /api/status "));
+}
+
+#[test]
+fn detection_error_lists_both_attempts_without_the_key() {
+    let (base, _requests) = serve(vec![(401, "{}"), (404, "{}")]);
+
+    let error = detect_and_fetch(&base, KEY).expect_err("两种接口都失败");
+
+    assert!(error.contains("New API"));
+    assert!(error.contains("Sub2API"));
+    assert!(!error.contains(KEY));
 }

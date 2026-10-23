@@ -1,16 +1,24 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
-import { Gauge, GearSix, Info, UsersThree, type Icon } from '@phosphor-icons/react';
+import {
+  Gauge,
+  GearSix,
+  Info,
+  PlugsIcon,
+  UsersThree,
+  type Icon,
+} from '@phosphor-icons/react';
 import { version as appVersion } from '../package.json';
 import logoWordmark from './assets/logo-text.png';
 import { getAppInfo } from './lib/desktop';
 import { useAppState } from './lib/store';
 import OverviewPanel from './panels/OverviewPanel';
 import AccountsPanel from './panels/AccountsPanel';
+import RelayPanel from './panels/RelayPanel';
 import SettingsPanel from './panels/SettingsPanel';
 import styles from './App.module.css';
 
-type PanelKey = 'overview' | 'accounts' | 'settings';
+type PanelKey = 'overview' | 'accounts' | 'relay' | 'settings';
 
 /* 侧栏底部的说明文案：只在悬浮/聚焦 tip 图标时出现 */
 const LOCAL_ONLY_NOTE =
@@ -36,6 +44,13 @@ const PANELS: {
     Icon: UsersThree,
     title: '账户',
     subtitle: '管理已接入的账户、授权状态与关联套餐。',
+  },
+  {
+    key: 'relay',
+    label: '中转站',
+    Icon: PlugsIcon,
+    title: '中转站额度',
+    subtitle: '自动读取 Claude Code / Codex 配置，也可手动填写地址与 API Key。',
   },
   {
     key: 'settings',
@@ -177,6 +192,7 @@ export default function App() {
           >
             {active === 'overview' ? <OverviewPanel desktop={desktop} /> : null}
             {active === 'accounts' ? <AccountsPanel /> : null}
+            {active === 'relay' ? <RelayPanel /> : null}
             {active === 'settings' ? <SettingsPanel /> : null}
           </div>
 

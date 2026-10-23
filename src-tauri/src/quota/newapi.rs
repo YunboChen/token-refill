@@ -29,6 +29,7 @@ impl KeyQuotaProvider for NewApiProvider {
     }
 
     fn fetch_quota(&self) -> Result<KeyQuota, String> {
+        let payload = self.endpoint.get_json_authenticated("/api/usage/token/")?;
         // 公开接口，失败时回退到上游默认换算比例，不影响额度查询本身。
         let quota_per_unit = self
             .endpoint
@@ -37,7 +38,6 @@ impl KeyQuotaProvider for NewApiProvider {
             .and_then(|status| quota_per_unit_from_status(&status))
             .unwrap_or_else(default_quota_per_unit);
 
-        let payload = self.endpoint.get_json_authenticated("/api/usage/token/")?;
         parse_usage(&payload, quota_per_unit, now_epoch())
     }
 }

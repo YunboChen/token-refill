@@ -19,6 +19,9 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use url::{Host, Url};
 
+use newapi::NewApiProvider;
+use sub2api::Sub2ApiProvider;
+
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESPONSE_BYTES: u64 = 256 * 1024;
 
@@ -97,6 +100,51 @@ pub trait KeyQuotaProvider {
     fn fetch_quota(&self) -> Result<KeyQuota, String>;
 }
 
+impl QuotaProvider {
+    pub fn label(self) -> &'static str {
+        match self {
+            QuotaProvider::NewApi => "New API",
+            QuotaProvider::Sub2Api => "Sub2API",
+        }
+    }
+}
+
+/// 自动识别结果：平台类型与对应的实时额度。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedQuota {
+    pub provider: QuotaProvider,
+    pub quota: KeyQuota,
+}
+
+/// 同一个 Base URL 下依次尝试两种额度接口，以实际响应判断上游类型，
+/// 不要求用户先选择平台。两种都失败时把各自的错误一并返回。
+pub fn detect_and_fetch(base_url: &str, api_key: &str) -> Result<DetectedQuota, String> {
+    let base_url = normalize_base_url(base_url)?;
+    let api_key = validate_api_key(api_key)?;
+
+    let mut failures = Vec::new();
+    for provider in [QuotaProvider::NewApi, QuotaProvider::Sub2Api] {
+        let result = match provider {
+            QuotaProvider::NewApi => {
+                NewApiProvider::new(&base_url, &api_key).and_then(|client| client.fetch_quota())
+            }
+            QuotaProvider::Sub2Api => {
+                Sub2ApiProvider::new(&base_url, &api_key).and_then(|client| client.fetch_quota())
+            }
+        };
+        match result {
+            Ok(quota) => return Ok(DetectedQuota { provider, quota }),
+            Err(message) => failures.push(format!("{}：{message}", provider.label())),
+        }
+    }
+
+    Err(format!(
+        "无法识别上游类型或密钥无效（{}）。",
+        failures.join("；")
+    ))
+}
+
 /// 校验后的服务地址与密钥。不实现 `Debug`，避免密钥被意外打印。
 #[derive(Clone)]
 pub(crate) struct Endpoint {
@@ -147,7 +195,7 @@ impl Endpoint {
 }
 
 /// 只接受 HTTPS；本机回环地址允许 HTTP，便于调试自部署服务。
-fn normalize_base_url(raw: &str) -> Result<String, String> {
+pub(crate) fn normalize_base_url(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("请先填写服务地址。".to_string());
@@ -170,7 +218,14 @@ fn normalize_base_url(raw: &str) -> Result<String, String> {
         _ => return Err("服务地址必须以 https:// 开头。".to_string()),
     }
 
-    Ok(url.as_str().trim_end_matches('/').to_string())
+    // 客户端配置通常把 Base URL 写成 `https://host/v1`；额度接口在站点根路径，
+    // 去掉末尾的 `/v1` 后再拼接，避免出现 `/v1/v1/usage`。
+    let base = url.as_str().trim_end_matches('/');
+    let base = base
+        .strip_suffix("/v1")
+        .filter(|value| !value.is_empty())
+        .unwrap_or(base);
+    Ok(base.to_string())
 }
 
 fn is_loopback(url: &Url) -> bool {
@@ -182,7 +237,7 @@ fn is_loopback(url: &Url) -> bool {
     }
 }
 
-fn validate_api_key(raw: &str) -> Result<String, String> {
+pub(crate) fn validate_api_key(raw: &str) -> Result<String, String> {
     let key = raw.trim();
     if key.is_empty() {
         return Err("请先填写 API Key。".to_string());
@@ -265,4 +320,54 @@ pub(crate) fn quota_per_unit_from_status(status: &Value) -> Option<f64> {
 
 pub(crate) fn default_quota_per_unit() -> f64 {
     DEFAULT_QUOTA_PER_UNIT
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_url_drops_client_v1_suffix() {
+        assert_eq!(
+            normalize_base_url("https://relay.example.com/v1").unwrap(),
+            "https://relay.example.com"
+        );
+        assert_eq!(
+            normalize_base_url("https://relay.example.com/v1/").unwrap(),
+            "https://relay.example.com"
+        );
+        assert_eq!(
+            normalize_base_url("https://relay.example.com/proxy/v1").unwrap(),
+            "https://relay.example.com/proxy"
+        );
+        assert_eq!(
+            normalize_base_url("https://relay.example.com").unwrap(),
+            "https://relay.example.com"
+        );
+    }
+
+    #[test]
+    fn loopback_http_allowed_but_remote_http_rejected() {
+        assert!(normalize_base_url("http://127.0.0.1:8080/v1").is_ok());
+        assert!(normalize_base_url("http://localhost:8080").is_ok());
+        assert!(normalize_base_url("http://relay.example.com").is_err());
+    }
+
+    #[test]
+    fn timestamps_accept_seconds_milliseconds_and_rfc3339() {
+        assert_eq!(
+            parse_epoch(&Value::from(1_790_000_000)),
+            Some(1_790_000_000)
+        );
+        assert_eq!(
+            parse_epoch(&Value::from(1_790_000_000_000_i64)),
+            Some(1_790_000_000)
+        );
+        assert_eq!(
+            parse_epoch(&Value::from("2026-10-23T08:00:00Z")),
+            Some(1_792_742_400)
+        );
+        assert_eq!(parse_epoch(&Value::from(0)), None);
+        assert_eq!(parse_epoch(&Value::from("not a time")), None);
+    }
 }
