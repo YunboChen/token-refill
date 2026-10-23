@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { AnimatePresence, m } from 'motion/react';
 import {
   ArrowClockwise,
   LinkSimple,
@@ -383,141 +385,156 @@ export default function AccountsPanel() {
         ))}
       </div>
 
-      {dialog ? (
-        <div
-          className={styles.dialogBackdrop}
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closeDialog();
-          }}
-        >
-          <div
-            className={styles.dialog}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="account-dialog-title"
-          >
-            <button
-              type="button"
-              className={styles.dialogClose}
-              onClick={closeDialog}
-              aria-label="关闭"
+      {/* 用 portal 挂到 body：面板容器带进场 transform，会成为 fixed 后代的包含块，
+          就地渲染会让蒙层只盖住内容区。 */}
+      {createPortal(
+        <AnimatePresence>
+          {dialog ? (
+            <m.div
+              className={styles.dialogBackdrop}
+              role="presentation"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.16, ease: 'easeOut' }}
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) closeDialog();
+              }}
             >
-              <X size={16} />
-            </button>
+              <m.div
+                className={styles.dialog}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="account-dialog-title"
+                initial={{ opacity: 0, scale: 0.96, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.98, y: 6 }}
+                transition={{ type: 'spring', stiffness: 460, damping: 34 }}
+              >
+                <button
+                  type="button"
+                  className={styles.dialogClose}
+                  onClick={closeDialog}
+                  aria-label="关闭"
+                >
+                  <X size={16} />
+                </button>
 
-            {dialog.kind === 'add-form' ? (
-              <>
-                <h2 id="account-dialog-title">添加 Codex 账户</h2>
-                <p className={styles.usageNote}>
-                  接下来会打开系统浏览器完成官方授权。每个账户使用独立授权目录，
-                  不会读取或修改本机 Codex 的默认登录。
-                </p>
-                <label className={styles.field}>
-                  <span className={styles.fieldLabel}>账户名称（可选）</span>
-                  <input
-                    className={styles.textInput}
-                    value={draftName}
-                    onChange={(event) => setDraftName(event.target.value)}
-                    placeholder="留空则使用授权后的脱敏邮箱"
-                    maxLength={60}
-                    autoFocus
-                  />
-                </label>
-                <div className={styles.dialogActions}>
-                  <button
-                    type="button"
-                    className={styles.buttonGhost}
-                    onClick={() => setDialog(null)}
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.button}
-                    onClick={() => void startAdd()}
-                    disabled={starting}
-                  >
-                    {starting ? '正在启动…' : '前往浏览器授权'}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <h2 id="account-dialog-title">
-                  {dialog.phase === 'succeeded'
-                    ? '授权完成'
-                    : dialog.phase === 'failed'
-                      ? '授权失败'
-                      : dialog.phase === 'canceled'
-                        ? '已取消授权'
-                        : dialog.mode === 'reauth'
-                          ? '重新授权'
-                          : '在浏览器中完成授权'}
-                </h2>
-
-                {dialog.phase === 'waiting' ? (
+                {dialog.kind === 'add-form' ? (
                   <>
+                    <h2 id="account-dialog-title">添加 Codex 账户</h2>
                     <p className={styles.usageNote}>
-                      已打开系统浏览器。请登录要接入的 ChatGPT 账户并确认授权。
-                      如果浏览器已登录其他账户，请先切换账户或使用无痕窗口。
-                      等待期间请保持本应用运行。
+                      接下来会打开系统浏览器完成官方授权。每个账户使用独立授权目录，
+                      不会读取或修改本机 Codex 的默认登录。
                     </p>
-                    <p className={styles.authUrl}>{dialog.start.authUrl}</p>
-                    <p className={styles.loginStatus}>等待授权完成…</p>
+                    <label className={styles.field}>
+                      <span className={styles.fieldLabel}>账户名称（可选）</span>
+                      <input
+                        className={styles.textInput}
+                        value={draftName}
+                        onChange={(event) => setDraftName(event.target.value)}
+                        placeholder="留空则使用授权后的脱敏邮箱"
+                        maxLength={60}
+                        autoFocus
+                      />
+                    </label>
                     <div className={styles.dialogActions}>
                       <button
                         type="button"
                         className={styles.buttonGhost}
-                        onClick={() => void openExternal(dialog.start.authUrl)}
+                        onClick={() => setDialog(null)}
                       >
-                        重新打开授权页面
+                        取消
                       </button>
-                      <button
-                        type="button"
-                        className={styles.buttonGhost}
-                        onClick={closeDialog}
-                      >
-                        取消授权
-                      </button>
-                    </div>
-                  </>
-                ) : dialog.phase === 'succeeded' ? (
-                  <>
-                    <p className={styles.noticeStale}>
-                      账户已接入，额度数据会在后台刷新后显示。
-                    </p>
-                    <div className={styles.dialogActions}>
                       <button
                         type="button"
                         className={styles.button}
-                        onClick={() => setDialog(null)}
+                        onClick={() => void startAdd()}
+                        disabled={starting}
                       >
-                        完成
+                        {starting ? '正在启动…' : '前往浏览器授权'}
                       </button>
                     </div>
                   </>
                 ) : (
                   <>
-                    <p className={styles.noticeDanger}>
-                      {dialog.message ?? '授权未完成，请重新尝试。'}
-                    </p>
-                    <div className={styles.dialogActions}>
-                      <button
-                        type="button"
-                        className={styles.buttonGhost}
-                        onClick={() => setDialog(null)}
-                      >
-                        关闭
-                      </button>
-                    </div>
+                    <h2 id="account-dialog-title">
+                      {dialog.phase === 'succeeded'
+                        ? '授权完成'
+                        : dialog.phase === 'failed'
+                          ? '授权失败'
+                          : dialog.phase === 'canceled'
+                            ? '已取消授权'
+                            : dialog.mode === 'reauth'
+                              ? '重新授权'
+                              : '在浏览器中完成授权'}
+                    </h2>
+
+                    {dialog.phase === 'waiting' ? (
+                      <>
+                        <p className={styles.usageNote}>
+                          已打开系统浏览器。请登录要接入的 ChatGPT 账户并确认授权。
+                          如果浏览器已登录其他账户，请先切换账户或使用无痕窗口。
+                          等待期间请保持本应用运行。
+                        </p>
+                        <p className={styles.authUrl}>{dialog.start.authUrl}</p>
+                        <p className={styles.loginStatus}>等待授权完成…</p>
+                        <div className={styles.dialogActions}>
+                          <button
+                            type="button"
+                            className={styles.buttonGhost}
+                            onClick={() => void openExternal(dialog.start.authUrl)}
+                          >
+                            重新打开授权页面
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.buttonGhost}
+                            onClick={closeDialog}
+                          >
+                            取消授权
+                          </button>
+                        </div>
+                      </>
+                    ) : dialog.phase === 'succeeded' ? (
+                      <>
+                        <p className={styles.noticeStale}>
+                          账户已接入，额度数据会在后台刷新后显示。
+                        </p>
+                        <div className={styles.dialogActions}>
+                          <button
+                            type="button"
+                            className={styles.button}
+                            onClick={() => setDialog(null)}
+                          >
+                            完成
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <p className={styles.noticeDanger}>
+                          {dialog.message ?? '授权未完成，请重新尝试。'}
+                        </p>
+                        <div className={styles.dialogActions}>
+                          <button
+                            type="button"
+                            className={styles.buttonGhost}
+                            onClick={() => setDialog(null)}
+                          >
+                            关闭
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
-              </>
-            )}
-          </div>
-        </div>
-      ) : null}
+              </m.div>
+            </m.div>
+          ) : null}
+        </AnimatePresence>,
+        document.body,
+      )}
     </section>
   );
 }

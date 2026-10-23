@@ -128,6 +128,44 @@ src-tauri/
 public/               浏览器标签图标、Web manifest
 ```
 
+## 发布
+
+打包由 [.github/workflows/release.yml](./.github/workflows/release.yml) 在 GitHub Actions 上完成，当前只产出 macOS 通用包（Apple Silicon + Intel 的 `.dmg`）。
+
+发版步骤：
+
+1. 把三处版本号改成同一个值，并重新生成 `Cargo.lock`：
+
+   ```sh
+   # package.json / src-tauri/tauri.conf.json 手动改
+   cargo check --manifest-path src-tauri/Cargo.toml   # 同步 Cargo.lock
+   ```
+
+2. 提交后打 tag 并推送：
+
+   ```sh
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+CI 会先跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），再打通用包，成功后把 `.dmg` 挂到一个 **draft Release** 上，确认无误后手动发布。tag 与 `tauri.conf.json` / `package.json` / `Cargo.toml` 任一处版本不一致时构建直接失败，避免出现版本号对不上的安装包。
+
+也可以在 Actions 页面手动触发 `release`，此时按当前 `tauri.conf.json` 版本创建 `vX.Y.Z` 草稿。
+
+### 签名状态
+
+当前未接入 Apple Developer 证书，产物是 ad-hoc 签名、未公证，其他 Mac 首次打开会提示"无法验证开发者"。可以右键 →「打开」，或先移除隔离属性：
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/Token Refill.app"
+```
+
+接入证书后，在仓库 Secrets 配置 `APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_SIGNING_IDENTITY`、`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`，tauri-action 会自动签名并公证；同时删除 workflow 里的 `APPLE_SIGNING_IDENTITY: "-"`。
+
+macOS 26 的自适应图标依赖 runner 上的 Xcode 26 `actool`；runner 版本更低时会按上文跳过 `Assets.car`，产物退回平图图标，构建不会失败。
+
+Windows 兼容层已实现（CLI 查找、授权链接、数据目录、标题栏），本机已用 MSVC 目标完成 `cargo check`、`cargo test` 与真实 CLI 握手验证。release workflow 目前只构建 macOS 通用包；Windows 安装包（MSI/NSIS）尚未纳入 CI，也未做安装与卸载验收。给 workflow 增加 `windows-latest` 矩阵并选用 MSVC 工具链即可产出安装包。
+
 ## 当前范围
 
 已包含基础窗口、系统浅深色、减少动态效果支持、Motion 反馈动画，以及首个真实业务链路：**Codex 订阅额度查询**。
@@ -136,12 +174,15 @@ public/               浏览器标签图标、Web manifest
 
 当前 Codex 查询依赖本机已安装的 Codex CLI。本机账户沿用本机已有登录态；独立账户通过官方授权登录，各自使用隔离的 `CODEX_HOME`，支持添加、改名、重新授权与移除。账户页不再只读。
 
+开机自启已接入系统登录项：默认关闭，开关只反映系统实际状态；写入失败会如实报错且不改本地状态，启动时以系统登录项为准回写偏好。
+
+低额度、授权失效与重置提醒已接入系统通知：低额度在剩余比例低于设置阈值时发送，同一重置周期只提醒一次；授权失效只在状态从正常跃迁到失效时提醒一次，重复查询与应用重启都不会重复；重置提醒默认关闭，只有查询结果同时确认旧周期结束和新周期开始时才发送，不根据本地倒计时推断。去重记录随状态持久化，设置页提供测试通知入口。系统通知是否展示仍由系统通知设置控制，桌面端没有应用内授权弹窗。
+
 尚未实现：
 
 - 百炼 Token Plan、Coding Plan 接入。
 - 独立账户凭证的系统级安全存储（当前依赖 Codex CLI 在隔离目录中维护的授权文件）。
 - 平台限流退避参数、休眠唤醒后的补偿策略。
-- 通知发送、开机自启的系统权限接入。
 - 菜单栏常驻、弹窗定位和窗口焦点策略。
 - 原生 Liquid Glass 与旧系统材质回退。目前没有将 CSS 毛玻璃伪称为系统 Liquid Glass。
 

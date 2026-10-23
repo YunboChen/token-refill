@@ -16,6 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_notification::NotificationExt;
 
 use crate::codex::{self, CodexIdentity, CodexUsage, UsageError};
 
@@ -29,6 +30,8 @@ pub const DEFAULT_PRODUCT_ID: &str = "codex-subscription";
 pub const REFRESH_OPTIONS: [i64; 5] = [1, 5, 15, 30, 60];
 const LOW_QUOTA_MIN: i64 = 5;
 const LOW_QUOTA_MAX: i64 = 50;
+/// 去重键的分隔符；账户与窗口标识都来自受控字符，用不可见字符避免拼接歧义。
+const REMINDER_KEY_SEP: char = '\u{1f}';
 const SCHEDULER_TICK: Duration = Duration::from_secs(5);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 const DISPLAY_NAME_MAX_CHARS: usize = 60;
@@ -61,6 +64,13 @@ impl Default for Preferences {
             auto_launch_enabled: false,
         }
     }
+}
+
+/// 普通设置保存不改变自启意图：该字段由系统登录项的实际状态决定，
+/// 只能通过 `set_auto_launch` 写入，避免一次无关的设置保存把系统状态覆盖掉。
+fn preferences_for_update(current: &Preferences, mut incoming: Preferences) -> Preferences {
+    incoming.auto_launch_enabled = current.auto_launch_enabled;
+    incoming
 }
 
 impl Preferences {
@@ -189,6 +199,23 @@ pub struct AccountLoginEvent {
     pub message: Option<String>,
 }
 
+/// 提醒去重记录：按账户/套餐/窗口记住上一次提醒所属的重置周期，
+/// 保证同一额度周期只提醒一次，应用重启后也不会重复。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReminderMarks {
+    #[serde(default)]
+    pub low_quota: HashMap<String, LowQuotaMark>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LowQuotaMark {
+    /// 上次提醒时该窗口的重置时间。`None` 表示平台未提供重置时间，
+    /// 此时改用“跌破阈值”的边沿去重，回到阈值以上后再解除标记。
+    pub resets_at_epoch: Option<i64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedState {
@@ -197,6 +224,9 @@ pub struct PersistedState {
     pub revision: u64,
     pub accounts: Vec<AccountState>,
     pub preferences: Preferences,
+    /// 旧版本状态文件没有该字段，读取时回退为空记录。
+    #[serde(default)]
+    pub reminders: ReminderMarks,
 }
 
 pub fn default_state() -> PersistedState {
@@ -220,6 +250,7 @@ pub fn default_state() -> PersistedState {
             }],
         }],
         preferences: Preferences::default(),
+        reminders: ReminderMarks::default(),
     }
 }
 
@@ -413,6 +444,8 @@ fn apply_error(
 
 /// 授权成功后的状态写入。新账户追加到列表；重新授权更新原账户，
 /// 不重复创建记录。额度读取失败时保留已授权状态并记录查询错误。
+// 各参数相互独立、没有自然的聚合体，硬拆成结构体只会让调用点更难读。
+#[allow(clippy::too_many_arguments)]
 fn apply_login_success(
     state: &mut PersistedState,
     account_id: &str,
@@ -475,6 +508,221 @@ fn apply_login_success(
             },
         }],
     });
+}
+
+/// 一条待发送的低额度提醒；只含展示所需的脱敏信息。
+#[derive(Debug, Clone, PartialEq)]
+pub struct LowQuotaNotice {
+    pub account_name: String,
+    pub window_label: String,
+    pub remaining_percent: i64,
+    pub threshold: i64,
+}
+
+/// 一条待发送的授权失效提醒。
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuthExpiredNotice {
+    pub account_name: String,
+    pub source: AccountSource,
+}
+
+/// 只在授权状态从非失效跃迁到失效时返回提醒。`auth_state` 本身随状态持久化，
+/// 所以重复查询、重复失败与应用重启都不会重复提醒；重新授权成功后状态回到
+/// `Ok`，下一次失效会重新提醒。普通网络错误不会把状态改为失效。
+fn auth_expired_notice(
+    state: &PersistedState,
+    account_id: &str,
+    was_reauth: bool,
+) -> Option<AuthExpiredNotice> {
+    if was_reauth || !state.preferences.auth_expired_enabled {
+        return None;
+    }
+    let account = state
+        .accounts
+        .iter()
+        .find(|account| account.account_id == account_id)?;
+    (account.auth_state == AuthState::NeedsReauth).then(|| AuthExpiredNotice {
+        account_name: account.display_name.clone(),
+        source: account.source,
+    })
+}
+
+fn reminder_key(account_id: &str, product_id: &str, window_id: &str) -> String {
+    format!("{account_id}{REMINDER_KEY_SEP}{product_id}{REMINDER_KEY_SEP}{window_id}")
+}
+
+/// 与总览页 `durationLabel` 保持一致，避免通知和界面使用不同的周期叫法。
+fn window_label(mins: Option<i64>) -> String {
+    match mins {
+        None => "额度窗口".to_string(),
+        Some(mins) if mins < 60 => format!("{mins} 分钟窗口"),
+        Some(mins) if mins < 1440 => format!("{} 小时窗口", (mins as f64 / 60.0).round() as i64),
+        Some(10080) => "1 周窗口".to_string(),
+        Some(mins) => format!("{} 天窗口", (mins as f64 / 1440.0).round() as i64),
+    }
+}
+
+/// 依据刚写入的快照判断是否需要发低额度提醒，并同步更新去重记录。
+///
+/// - 同一重置周期内只提醒一次，重启后仍保持；
+/// - 平台未提供重置时间时，退回“从阈值以上跌破”的边沿触发；
+/// - 剩余比例缺失时跳过，不用猜测值触发提醒。
+fn low_quota_notices(state: &mut PersistedState, account_id: &str) -> Vec<LowQuotaNotice> {
+    if !state.preferences.low_quota_enabled {
+        return Vec::new();
+    }
+    let threshold = state.preferences.low_quota_threshold;
+
+    // 先收集候选，结束对账户的可变借用后再写去重记录。
+    let (account_name, candidates) = {
+        let Some(account) = account_mut(state, account_id) else {
+            return Vec::new();
+        };
+        let mut candidates = Vec::new();
+        for product in account.products.iter().filter(|p| is_codex_product(p)) {
+            let Some(snapshot) = &product.snapshot else {
+                continue;
+            };
+            for group in &snapshot.groups {
+                for window in &group.windows {
+                    let Some(remaining) = window.remaining_percent else {
+                        continue;
+                    };
+                    candidates.push((
+                        reminder_key(account_id, &product.product_id, &window.window_id),
+                        remaining,
+                        window.resets_at_epoch,
+                        window.window_duration_mins,
+                    ));
+                }
+            }
+        }
+        (account.display_name.clone(), candidates)
+    };
+
+    let mut notices = Vec::new();
+    for (key, remaining, resets_at, duration_mins) in candidates {
+        let mark = state.reminders.low_quota.get(&key).cloned();
+        if remaining <= threshold {
+            let already_notified = match (&mark, resets_at) {
+                (Some(mark), Some(cycle)) => mark.resets_at_epoch == Some(cycle),
+                // 没有重置时间可比较时，只要提醒过就视为同一周期。
+                (Some(_), None) => true,
+                (None, _) => false,
+            };
+            if !already_notified {
+                state.reminders.low_quota.insert(
+                    key,
+                    LowQuotaMark {
+                        resets_at_epoch: resets_at,
+                    },
+                );
+                notices.push(LowQuotaNotice {
+                    account_name: account_name.clone(),
+                    window_label: window_label(duration_mins),
+                    remaining_percent: remaining,
+                    threshold,
+                });
+            }
+        } else if resets_at.is_none() {
+            // 无法用重置时间判断周期：回到阈值以上后解除标记，下次跌破再提醒。
+            // 有重置时间的标记保留到周期变化，避免同一周期补货后再次跌破时重复提醒。
+            state.reminders.low_quota.remove(&key);
+        }
+    }
+    notices
+}
+
+/// 一条待发送的额度重置提醒。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResetNotice {
+    pub account_name: String,
+    pub window_label: String,
+    pub remaining_percent: Option<i64>,
+}
+
+/// 在写入新快照前记录各窗口的重置时间，作为判断新周期的基线。
+fn window_resets(state: &PersistedState, account_id: &str) -> HashMap<String, i64> {
+    let Some(account) = state
+        .accounts
+        .iter()
+        .find(|account| account.account_id == account_id)
+    else {
+        return HashMap::new();
+    };
+    let mut resets = HashMap::new();
+    for product in account.products.iter().filter(|p| is_codex_product(p)) {
+        let Some(snapshot) = &product.snapshot else {
+            continue;
+        };
+        for group in &snapshot.groups {
+            for window in &group.windows {
+                if let Some(reset) = window.resets_at_epoch {
+                    resets.insert(
+                        reminder_key(account_id, &product.product_id, &window.window_id),
+                        reset,
+                    );
+                }
+            }
+        }
+    }
+    resets
+}
+
+/// 只有查询结果同时确认“旧周期已经结束”和“新周期已经开始”时才提醒：
+/// 重置时间必须晚于旧值、旧周期在上次查询前已到期、新周期在本次查询后仍有效。
+/// 不根据本地倒计时或重置时间的提前小幅调整推断重置。
+fn collect_reset_notices(
+    state: &PersistedState,
+    account_id: &str,
+    previous_resets: &HashMap<String, i64>,
+) -> Vec<ResetNotice> {
+    if !state.preferences.reset_notice_enabled {
+        return Vec::new();
+    }
+    let Some(account) = state
+        .accounts
+        .iter()
+        .find(|account| account.account_id == account_id)
+    else {
+        return Vec::new();
+    };
+
+    let mut notices = Vec::new();
+    for product in account.products.iter().filter(|p| is_codex_product(p)) {
+        let Some(snapshot) = &product.snapshot else {
+            continue;
+        };
+        let checked_at = snapshot.checked_at_epoch;
+        for group in &snapshot.groups {
+            for window in &group.windows {
+                let Some(new_reset) = window.resets_at_epoch else {
+                    continue;
+                };
+                let key = reminder_key(account_id, &product.product_id, &window.window_id);
+                let Some(&old_reset) = previous_resets.get(&key) else {
+                    continue;
+                };
+                if new_reset > old_reset && old_reset <= checked_at && new_reset > checked_at {
+                    notices.push(ResetNotice {
+                        account_name: account.display_name.clone(),
+                        window_label: window_label(window.window_duration_mins),
+                        remaining_percent: window.remaining_percent,
+                    });
+                }
+            }
+        }
+    }
+    notices
+}
+
+/// 账户移除后清掉它的去重记录，避免留下永不复用的键。
+fn clear_reminder_marks(state: &mut PersistedState, account_id: &str) {
+    let prefix = format!("{account_id}{REMINDER_KEY_SEP}");
+    state
+        .reminders
+        .low_quota
+        .retain(|key, _| !key.starts_with(&prefix));
 }
 
 fn is_account_due(account: &AccountState, refresh_minutes: i64, now: i64) -> bool {
@@ -636,6 +884,77 @@ impl StateStore {
         let _ = self.app.emit(STATE_EVENT, state);
     }
 
+    /// 提醒走系统通知；发送失败只记录日志，不影响额度查询与状态落盘。
+    fn show_notification(&self, title: &str, body: String) {
+        if let Err(err) = self
+            .app
+            .notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show()
+        {
+            eprintln!("发送「{title}」失败：{err}");
+        }
+    }
+
+    fn notify_low_quota(&self, notice: &LowQuotaNotice) {
+        let body = format!(
+            "{} · {}剩余 {}%，低于提醒阈值 {}%",
+            notice.account_name, notice.window_label, notice.remaining_percent, notice.threshold
+        );
+        self.show_notification("低额度提醒", body);
+    }
+
+    fn notify_reset(&self, notice: &ResetNotice) {
+        let body = match notice.remaining_percent {
+            Some(remaining) => format!(
+                "{} · {}已进入新周期，剩余额度 {remaining}%",
+                notice.account_name, notice.window_label
+            ),
+            None => format!(
+                "{} · {}已进入新周期",
+                notice.account_name, notice.window_label
+            ),
+        };
+        self.show_notification("额度重置提醒", body);
+    }
+
+    fn notify_auth_expired(&self, notice: &AuthExpiredNotice) {
+        let action = match notice.source {
+            AccountSource::Local => "请重新登录本机 Codex CLI 后再刷新。",
+            AccountSource::Managed => "请打开 Token Refill 重新授权。",
+        };
+        self.show_notification(
+            "授权失效提醒",
+            format!("{} 的授权已失效，{}", notice.account_name, action),
+        );
+    }
+
+    /// 应用一次刷新失败，并在授权状态跃迁到“需要重新授权”时提醒。
+    fn apply_refresh_error(
+        &self,
+        account_id: &str,
+        error: UsageError,
+        now: i64,
+        identity_update: Option<Option<CodexIdentity>>,
+    ) {
+        let mut notice = None;
+        self.update_soft(|state| {
+            let was_reauth = state
+                .accounts
+                .iter()
+                .find(|account| account.account_id == account_id)
+                .map(|account| account.auth_state == AuthState::NeedsReauth)
+                .unwrap_or(true);
+            apply_error(state, account_id, error, now, identity_update);
+            notice = auth_expired_notice(state, account_id, was_reauth);
+        });
+        if let Some(notice) = notice {
+            self.notify_auth_expired(&notice);
+        }
+    }
+
     /// 严格更新：落盘失败时不提交内存，也不广播，调用方必须报告失败。
     fn update_strict<F>(&self, change: F) -> Result<PersistedState, String>
     where
@@ -672,7 +991,25 @@ impl StateStore {
 
     pub fn update_preferences(&self, preferences: Preferences) -> Result<PersistedState, String> {
         preferences.validate()?;
-        self.update_strict(|state| state.preferences = preferences)
+        let next = preferences_for_update(&self.snapshot().preferences, preferences);
+        self.update_strict(|state| state.preferences = next)
+    }
+
+    /// 自启设置已由系统确认生效后，回写偏好并返回新状态。
+    pub fn set_auto_launch_preference(&self, enabled: bool) -> Result<PersistedState, String> {
+        self.update_strict(|state| state.preferences.auto_launch_enabled = enabled)
+    }
+
+    /// 启动时把系统登录项的实际状态同步到偏好。失败只记录日志，不阻断启动。
+    pub fn reconcile_auto_launch(&self, enabled: bool) {
+        if self.snapshot().preferences.auto_launch_enabled == enabled {
+            return;
+        }
+        if let Err(err) =
+            self.update_strict(|state| state.preferences.auto_launch_enabled = enabled)
+        {
+            eprintln!("同步开机自启状态失败：{err}");
+        }
     }
 
     fn private_profile_dir(&self, account_id: &str) -> Option<PathBuf> {
@@ -909,7 +1246,8 @@ impl StateStore {
         self.update_strict(|state| {
             state
                 .accounts
-                .retain(|account| account.account_id != account_id)
+                .retain(|account| account.account_id != account_id);
+            clear_reminder_marks(state, account_id);
         })
     }
 
@@ -1003,20 +1341,32 @@ fn spawn_refresh(store: Arc<StateStore>, account_id: String) {
                 let identity_update = readout.identity_checked.then_some(readout.identity);
                 match readout.usage {
                     Ok(usage) => {
+                        // 提醒判断与快照写入放在同一次状态更新里，避免并发刷新
+                        // 各自看到旧去重记录而重复提醒；重置判断需要旧快照作为基线，
+                        // 因此必须在覆盖快照前取一次。
+                        let mut low_notices = Vec::new();
+                        let mut reset_notices = Vec::new();
                         store.update_soft(|state| {
-                            apply_success(state, &account_id, usage, identity_update)
+                            let previous_resets = window_resets(state, &account_id);
+                            apply_success(state, &account_id, usage, identity_update);
+                            low_notices = low_quota_notices(state, &account_id);
+                            reset_notices =
+                                collect_reset_notices(state, &account_id, &previous_resets);
                         });
+                        for notice in &low_notices {
+                            store.notify_low_quota(notice);
+                        }
+                        for notice in &reset_notices {
+                            store.notify_reset(notice);
+                        }
                     }
                     Err(error) => {
-                        store.update_soft(|state| {
-                            apply_error(state, &account_id, error, finished_at, identity_update)
-                        });
+                        store.apply_refresh_error(&account_id, error, finished_at, identity_update);
                     }
                 }
             }
             Err(error) => {
-                store
-                    .update_soft(|state| apply_error(state, &account_id, error, finished_at, None));
+                store.apply_refresh_error(&account_id, error, finished_at, None);
             }
         }
         let mut in_flight = lock(&store.in_flight);
@@ -1065,6 +1415,32 @@ mod tests {
                         resets_at_epoch: Some(1_790_500_000),
                     },
                 ],
+            }],
+        }
+    }
+
+    fn usage_with(remaining_percent: i64, resets_at_epoch: Option<i64>) -> CodexUsage {
+        usage_at(remaining_percent, resets_at_epoch, 1_790_000_000)
+    }
+
+    fn usage_at(
+        remaining_percent: i64,
+        resets_at_epoch: Option<i64>,
+        checked_at_epoch: i64,
+    ) -> CodexUsage {
+        CodexUsage {
+            checked_at_epoch,
+            buckets: vec![CodexLimitBucket {
+                limit_id: None,
+                limit_name: None,
+                plan_type: None,
+                windows: vec![CodexWindow {
+                    role: "primary".to_string(),
+                    used_percent: 100 - remaining_percent,
+                    remaining_percent,
+                    window_duration_mins: Some(300),
+                    resets_at_epoch,
+                }],
             }],
         }
     }
@@ -1278,6 +1654,430 @@ mod tests {
     }
 
     #[test]
+    fn low_quota_notifies_once_per_reset_cycle_across_restarts() {
+        let mut state = default_state();
+        state.preferences.low_quota_threshold = 20;
+
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_with(10, Some(1_790_010_000)),
+            None,
+        );
+        let notices = low_quota_notices(&mut state, DEFAULT_ACCOUNT_ID);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].remaining_percent, 10);
+        assert_eq!(notices[0].threshold, 20);
+        assert_eq!(notices[0].window_label, "5 小时窗口");
+
+        // 同一重置周期内继续下跌不重复提醒。
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_with(8, Some(1_790_010_000)),
+            None,
+        );
+        assert!(low_quota_notices(&mut state, DEFAULT_ACCOUNT_ID).is_empty());
+
+        // 去重记录随状态持久化：模拟应用重启后仍不重复。
+        let mut reloaded: PersistedState =
+            serde_json::from_str(&serde_json::to_string(&state).expect("serialize"))
+                .expect("deserialize");
+        assert!(low_quota_notices(&mut reloaded, DEFAULT_ACCOUNT_ID).is_empty());
+
+        // 进入新的重置周期后可以再次提醒。
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_with(10, Some(1_790_020_000)),
+            None,
+        );
+        assert_eq!(low_quota_notices(&mut state, DEFAULT_ACCOUNT_ID).len(), 1);
+    }
+
+    #[test]
+    fn low_quota_stays_quiet_when_disabled_or_above_threshold() {
+        let mut state = default_state();
+        state.preferences.low_quota_enabled = false;
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_with(10, Some(1_790_010_000)),
+            None,
+        );
+        assert!(low_quota_notices(&mut state, DEFAULT_ACCOUNT_ID).is_empty());
+
+        let mut state = default_state();
+        state.preferences.low_quota_threshold = 20;
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_with(21, Some(1_790_010_000)),
+            None,
+        );
+        assert!(low_quota_notices(&mut state, DEFAULT_ACCOUNT_ID).is_empty());
+    }
+
+    #[test]
+    fn low_quota_without_reset_time_rearms_after_recovery() {
+        let mut state = default_state();
+        state.preferences.low_quota_threshold = 20;
+
+        apply_success(&mut state, DEFAULT_ACCOUNT_ID, usage_with(10, None), None);
+        assert_eq!(low_quota_notices(&mut state, DEFAULT_ACCOUNT_ID).len(), 1);
+        apply_success(&mut state, DEFAULT_ACCOUNT_ID, usage_with(9, None), None);
+        assert!(low_quota_notices(&mut state, DEFAULT_ACCOUNT_ID).is_empty());
+
+        // 无法判断周期时，回到阈值以上视为恢复，下一次跌破再提醒。
+        apply_success(&mut state, DEFAULT_ACCOUNT_ID, usage_with(60, None), None);
+        assert!(low_quota_notices(&mut state, DEFAULT_ACCOUNT_ID).is_empty());
+        apply_success(&mut state, DEFAULT_ACCOUNT_ID, usage_with(10, None), None);
+        assert_eq!(low_quota_notices(&mut state, DEFAULT_ACCOUNT_ID).len(), 1);
+    }
+
+    #[test]
+    fn low_quota_skips_windows_without_remaining_percent() {
+        let mut state = default_state();
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_with(10, Some(1_790_010_000)),
+            None,
+        );
+        state.accounts[0].products[0]
+            .snapshot
+            .as_mut()
+            .unwrap()
+            .groups[0]
+            .windows[0]
+            .remaining_percent = None;
+
+        assert!(low_quota_notices(&mut state, DEFAULT_ACCOUNT_ID).is_empty());
+    }
+
+    #[test]
+    fn removing_an_account_clears_only_its_reminder_marks() {
+        let mut state = default_state();
+        let own = reminder_key(DEFAULT_ACCOUNT_ID, DEFAULT_PRODUCT_ID, "primary-0");
+        let other = reminder_key("codex-other", DEFAULT_PRODUCT_ID, "primary-0");
+        state.reminders.low_quota.insert(
+            own.clone(),
+            LowQuotaMark {
+                resets_at_epoch: Some(1),
+            },
+        );
+        state.reminders.low_quota.insert(
+            other.clone(),
+            LowQuotaMark {
+                resets_at_epoch: Some(2),
+            },
+        );
+
+        clear_reminder_marks(&mut state, DEFAULT_ACCOUNT_ID);
+
+        assert!(!state.reminders.low_quota.contains_key(&own));
+        assert!(state.reminders.low_quota.contains_key(&other));
+    }
+
+    #[test]
+    fn auth_error_notifies_once_per_expiry_and_survives_restart() {
+        let mut state = default_state();
+        let was_reauth = state.accounts[0].auth_state == AuthState::NeedsReauth;
+        apply_error(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            UsageError {
+                code: "auth-expired".to_string(),
+                message: "需要重新登录".to_string(),
+            },
+            1_790_100_000,
+            None,
+        );
+        let notice = auth_expired_notice(&state, DEFAULT_ACCOUNT_ID, was_reauth)
+            .expect("first expiry should notify");
+        assert_eq!(notice.account_name, "本机 Codex");
+        assert_eq!(notice.source, AccountSource::Local);
+
+        // 已经是失效状态时，重复失败不重复提醒。
+        let was_reauth = state.accounts[0].auth_state == AuthState::NeedsReauth;
+        apply_error(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            UsageError {
+                code: "auth-expired".to_string(),
+                message: "需要重新登录".to_string(),
+            },
+            1_790_100_060,
+            None,
+        );
+        assert!(auth_expired_notice(&state, DEFAULT_ACCOUNT_ID, was_reauth).is_none());
+
+        // 去重依据是持久化的 authState：模拟重启后继续失败也不重复。
+        let mut reloaded: PersistedState =
+            serde_json::from_str(&serde_json::to_string(&state).expect("serialize"))
+                .expect("deserialize");
+        let was_reauth = reloaded.accounts[0].auth_state == AuthState::NeedsReauth;
+        apply_error(
+            &mut reloaded,
+            DEFAULT_ACCOUNT_ID,
+            UsageError {
+                code: "auth-expired".to_string(),
+                message: "需要重新登录".to_string(),
+            },
+            1_790_100_120,
+            None,
+        );
+        assert!(auth_expired_notice(&reloaded, DEFAULT_ACCOUNT_ID, was_reauth).is_none());
+    }
+
+    #[test]
+    fn network_error_never_triggers_auth_notice() {
+        let mut state = default_state();
+        let was_reauth = state.accounts[0].auth_state == AuthState::NeedsReauth;
+        apply_error(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            UsageError {
+                code: "rpc".to_string(),
+                message: "网络错误".to_string(),
+            },
+            1_790_100_000,
+            None,
+        );
+
+        assert_eq!(state.accounts[0].auth_state, AuthState::Unknown);
+        assert!(auth_expired_notice(&state, DEFAULT_ACCOUNT_ID, was_reauth).is_none());
+    }
+
+    #[test]
+    fn auth_notice_respects_the_disabled_switch() {
+        let mut state = default_state();
+        state.preferences.auth_expired_enabled = false;
+        let was_reauth = state.accounts[0].auth_state == AuthState::NeedsReauth;
+        apply_error(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            UsageError {
+                code: "auth-expired".to_string(),
+                message: "需要重新登录".to_string(),
+            },
+            1_790_100_000,
+            None,
+        );
+
+        // 开关关闭只影响提醒，不掩盖真实的授权状态。
+        assert_eq!(state.accounts[0].auth_state, AuthState::NeedsReauth);
+        assert!(auth_expired_notice(&state, DEFAULT_ACCOUNT_ID, was_reauth).is_none());
+    }
+
+    #[test]
+    fn reauthorization_rearms_auth_notice_for_managed_account() {
+        let account_id = "codex-synthetic-1";
+        let mut state = default_state();
+        apply_login_success(
+            &mut state,
+            account_id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            1_790_000_000,
+        );
+
+        let was_reauth = state.accounts[1].auth_state == AuthState::NeedsReauth;
+        apply_error(
+            &mut state,
+            account_id,
+            UsageError {
+                code: "auth-expired".to_string(),
+                message: "需要重新登录".to_string(),
+            },
+            1_790_100_000,
+            None,
+        );
+        let notice = auth_expired_notice(&state, account_id, was_reauth).expect("notice");
+        assert_eq!(notice.source, AccountSource::Managed);
+
+        // 重新授权成功回到 Ok，下一次失效重新提醒。
+        apply_login_success(
+            &mut state,
+            account_id,
+            None,
+            None,
+            None,
+            None,
+            None,
+            1_790_200_000,
+        );
+        assert_eq!(state.accounts[1].auth_state, AuthState::Ok);
+        let was_reauth = state.accounts[1].auth_state == AuthState::NeedsReauth;
+        apply_error(
+            &mut state,
+            account_id,
+            UsageError {
+                code: "auth-expired".to_string(),
+                message: "需要重新登录".to_string(),
+            },
+            1_790_300_000,
+            None,
+        );
+        assert!(auth_expired_notice(&state, account_id, was_reauth).is_some());
+    }
+
+    #[test]
+    fn reset_notifies_only_when_query_confirms_the_new_cycle() {
+        let mut state = default_state();
+        state.preferences.reset_notice_enabled = true;
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_at(96, Some(1_790_010_000), 1_790_000_000),
+            None,
+        );
+        let previous = window_resets(&state, DEFAULT_ACCOUNT_ID);
+
+        // 旧周期已到期，本次查询返回更晚的重置时间：确认进入新周期。
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_at(100, Some(1_790_020_000), 1_790_015_000),
+            None,
+        );
+        let notices = collect_reset_notices(&state, DEFAULT_ACCOUNT_ID, &previous);
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].remaining_percent, Some(100));
+        assert_eq!(notices[0].window_label, "5 小时窗口");
+
+        // 同一新周期内的后续刷新不再提醒。
+        let previous = window_resets(&state, DEFAULT_ACCOUNT_ID);
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_at(99, Some(1_790_020_000), 1_790_021_000),
+            None,
+        );
+        assert!(collect_reset_notices(&state, DEFAULT_ACCOUNT_ID, &previous).is_empty());
+    }
+
+    #[test]
+    fn reset_ignores_reset_time_drift_before_the_cycle_ends() {
+        let mut state = default_state();
+        state.preferences.reset_notice_enabled = true;
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_at(96, Some(1_790_030_000), 1_790_000_000),
+            None,
+        );
+        let previous = window_resets(&state, DEFAULT_ACCOUNT_ID);
+
+        // 旧周期尚未结束，平台把重置时间往后挪：不能当成已重置。
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_at(96, Some(1_790_040_000), 1_790_010_000),
+            None,
+        );
+        assert!(collect_reset_notices(&state, DEFAULT_ACCOUNT_ID, &previous).is_empty());
+    }
+
+    #[test]
+    fn reset_is_silent_without_switch_or_baseline() {
+        let mut state = default_state();
+        state.preferences.reset_notice_enabled = false;
+        let previous = HashMap::new();
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_at(100, Some(1_790_020_000), 1_790_015_000),
+            None,
+        );
+        assert!(collect_reset_notices(&state, DEFAULT_ACCOUNT_ID, &previous).is_empty());
+
+        // 打开开关但没有上一份快照：无法确认是“新周期”，不提醒。
+        state.preferences.reset_notice_enabled = true;
+        assert!(collect_reset_notices(&state, DEFAULT_ACCOUNT_ID, &previous).is_empty());
+    }
+
+    #[test]
+    fn reset_skips_windows_without_reset_time() {
+        let mut state = default_state();
+        state.preferences.reset_notice_enabled = true;
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_at(96, Some(1_790_010_000), 1_790_000_000),
+            None,
+        );
+        let previous = window_resets(&state, DEFAULT_ACCOUNT_ID);
+
+        // 新结果缺少重置时间：无法确认新周期，不提醒也不用倒计时推断。
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_at(100, None, 1_790_015_000),
+            None,
+        );
+        assert!(collect_reset_notices(&state, DEFAULT_ACCOUNT_ID, &previous).is_empty());
+    }
+
+    #[test]
+    fn reset_is_not_repeated_after_restart() {
+        let mut state = default_state();
+        state.preferences.reset_notice_enabled = true;
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_at(96, Some(1_790_010_000), 1_790_000_000),
+            None,
+        );
+        let previous = window_resets(&state, DEFAULT_ACCOUNT_ID);
+        apply_success(
+            &mut state,
+            DEFAULT_ACCOUNT_ID,
+            usage_at(100, Some(1_790_020_000), 1_790_015_000),
+            None,
+        );
+        assert_eq!(
+            collect_reset_notices(&state, DEFAULT_ACCOUNT_ID, &previous).len(),
+            1
+        );
+
+        // 新快照已持久化；模拟重启后同一周期继续刷新不会重复提醒。
+        let mut reloaded: PersistedState =
+            serde_json::from_str(&serde_json::to_string(&state).expect("serialize"))
+                .expect("deserialize");
+        let previous = window_resets(&reloaded, DEFAULT_ACCOUNT_ID);
+        apply_success(
+            &mut reloaded,
+            DEFAULT_ACCOUNT_ID,
+            usage_at(98, Some(1_790_020_000), 1_790_030_000),
+            None,
+        );
+        assert!(collect_reset_notices(&reloaded, DEFAULT_ACCOUNT_ID, &previous).is_empty());
+    }
+
+    #[test]
+    fn normal_preference_saves_do_not_change_auto_launch() {
+        let current = Preferences {
+            auto_launch_enabled: true,
+            ..Preferences::default()
+        };
+        let incoming = Preferences {
+            auto_launch_enabled: false,
+            refresh_minutes: 15,
+            ..Preferences::default()
+        };
+
+        let next = preferences_for_update(&current, incoming);
+
+        // 自启只由系统登录项状态决定，普通设置保存不能把它覆盖掉。
+        assert!(next.auto_launch_enabled);
+        assert_eq!(next.refresh_minutes, 15);
+    }
+
+    #[test]
     fn preferences_are_validated_before_saving() {
         let mut prefs = Preferences::default();
         assert!(prefs.validate().is_ok());
@@ -1330,6 +2130,12 @@ mod tests {
         let mut state = default_state();
         apply_success(&mut state, DEFAULT_ACCOUNT_ID, synthetic_usage(), None);
         state.preferences.refresh_minutes = 15;
+        state.reminders.low_quota.insert(
+            reminder_key(DEFAULT_ACCOUNT_ID, DEFAULT_PRODUCT_ID, "primary-0"),
+            LowQuotaMark {
+                resets_at_epoch: Some(1_790_010_000),
+            },
+        );
 
         write_state(&path, &state).expect("write state");
         #[cfg(unix)]

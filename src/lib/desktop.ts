@@ -147,6 +147,16 @@ export function removeAccount(accountId: string): Promise<AppState> {
   return invoke<AppState>('remove_account', { accountId });
 }
 
+/** 修改开机自启；由 Rust 写入系统登录项，成功后返回实际状态。 */
+export function setAutoLaunch(enabled: boolean): Promise<AppState> {
+  return invoke<AppState>('set_auto_launch', { enabled });
+}
+
+/** 设置页的显式测试入口；桌面端没有应用内通知授权弹窗。 */
+export function sendTestNotification(): Promise<void> {
+  return invoke<void>('send_test_notification');
+}
+
 /** 由 Rust 校验仅允许 HTTPS，并交给系统浏览器打开。 */
 export function openExternalUrl(url: string): Promise<void> {
   return invoke<void>('open_external_url', { url });

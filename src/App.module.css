@@ -772,6 +772,35 @@
   padding-left: 2px;
 }
 
+.settingHint[data-danger] {
+  color: var(--danger);
+}
+
+.testButton {
+  flex-shrink: 0;
+  min-height: 30px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 150ms ease-out, background-color 150ms ease-out;
+}
+
+.testButton:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--sunken);
+}
+
+.testButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 /* 单选药丸组（原生 radio，键盘方向键可用） */
 .pills {
   position: relative;
@@ -902,6 +931,14 @@
 .switchInput:focus-visible + .switchTrack {
   outline: 3px solid var(--focus);
   outline-offset: 2px;
+}
+
+.switchInput:disabled {
+  cursor: not-allowed;
+}
+
+.switchInput:disabled + .switchTrack {
+  opacity: 0.55;
 }
 
 /* 阈值滑块：轨道按当前值填充，与开关、剩余额度环使用同一主色 */
