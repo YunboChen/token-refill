@@ -414,8 +414,14 @@
 
 .overviewStack {
   display: grid;
-  gap: 24px;
+  gap: 26px;
   margin-top: 2px;
+}
+
+/* 平台分组之间沿用账户页的节奏：更大的间距 + 一条通栏发丝线 */
+.overviewStack > * + * {
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
 }
 
 .overviewEmpty {
@@ -487,17 +493,6 @@
   line-height: 1.5;
 }
 
-.planBadge {
-  padding: 1px 8px;
-  border-radius: var(--radius-pill);
-  color: var(--accent);
-  background: var(--accent-soft);
-  font-size: 10.5px;
-  font-weight: 600;
-  line-height: 1.7;
-  white-space: nowrap;
-}
-
 .accountHint {
   overflow: hidden;
   max-width: 220px;
@@ -555,139 +550,321 @@
   line-height: 1.65;
 }
 
-/* 一个账户下可有多类套餐：每类单独一块，用发丝线分隔，不合并单位与周期。 */
-.productBlock {
-  margin-top: 16px;
-  padding-top: 14px;
+/* ---------- 总览：平台共用的账户卡、折叠行与横向额度条 ---------- */
+
+/* 同平台的所有账户共用一张卡：展开项在上，其余账户折叠成一行摘要。
+   卡片本身只负责边界，账户之间用发丝线分隔。 */
+.quotaBoard {
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.quotaAccount {
+  padding: 13px 18px 16px;
+}
+
+/* 折叠行只承担摘要，收窄上下留白，让同一张卡里能放下更多账户 */
+.quotaAccount:not([data-open]) {
+  padding-block: 7px;
+}
+
+.quotaAccount + .quotaAccount {
   border-top: 1px solid var(--border);
 }
 
-.productBlock:first-of-type {
-  margin-top: 14px;
-  padding-top: 0;
-  border-top: 0;
-}
-
-.productHead {
+.quotaAccountHead {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.productTitle {
+/* 名称、档位与折叠摘要都在这个按钮内：整块可点，展开/收起不只依赖右侧箭头 */
+.quotaAccountToggle {
   display: flex;
-  flex-wrap: wrap;
+  flex: 1;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  min-height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
-.productName {
-  color: var(--text);
-  font-size: 13px;
+/* 账户名与档位占一个固定起步宽度，折叠摘要按同一条竖线起排 */
+.quotaAccountIdentity {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 132px;
+}
+
+.quotaAccountName {
+  overflow: hidden;
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 15.5px;
   font-weight: 600;
-  letter-spacing: -0.005em;
+  letter-spacing: -0.012em;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.productBusy {
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 600;
+.quotaAccountToggle .planTier {
+  flex-shrink: 0;
 }
 
-.quotaGroup {
-  margin-top: 18px;
-}
-
-.quotaGroupLabel {
-  margin: 0 0 10px;
+/* 折叠时的额度摘要：只保留最关键的窗口，和账户名同一行 */
+.quotaSummary {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 8px;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 600;
-}
-
-/* 额度窗口直接落在卡片上，不再套一层盒子：环 + 标签 + 重置信息 */
-.quotaGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(232px, 1fr));
-  gap: 16px;
-}
-
-.quotaTile {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.ring {
-  position: relative;
-  display: grid;
-  flex-shrink: 0;
-  place-items: center;
-  width: 58px;
-  height: 58px;
-}
-
-.ringSvg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-
-.ringTrack {
-  stroke: var(--border);
-}
-
-.ringArc {
-  stroke: var(--accent-strong);
-}
-
-.ring[data-low] .ringArc {
-  stroke: var(--danger);
-}
-
-.ring[data-unknown] .ringTrack {
-  stroke-dasharray: 2 5;
-  stroke-linecap: round;
-}
-
-.ringValue {
-  position: relative;
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.ring[data-low] .ringValue {
-  color: var(--danger);
+.quotaAccountTools {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
 }
 
-.ring[data-unknown] .ringValue {
-  color: var(--muted);
-  font-weight: 600;
-}
-
-.quotaCopy {
+.chevronButton {
   display: grid;
-  gap: 3px;
-  min-width: 0;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  transition: color 150ms ease-out, background-color 150ms ease-out;
 }
 
-.quotaTitleRow {
+.chevronButton:hover {
+  color: var(--text);
+  background: var(--sunken);
+}
+
+.chevronIcon {
+  display: block;
+  width: 13px;
+  height: 13px;
+}
+
+/* 展开后的身份说明：弱于账户名，和额度区留出呼吸 */
+.quotaAccountMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.metaDot {
+  color: var(--muted);
+  opacity: 0.75;
+}
+
+/* 折叠动画需要裁掉溢出的高度；内层负责与表头之间的留白 */
+.quotaBody {
+  overflow: hidden;
+}
+
+.quotaBodyInner {
+  display: grid;
+  gap: 14px;
+  padding-top: 4px;
+}
+
+.quotaBodyInner > .quotaAccountMeta {
+  margin: 0;
+}
+
+.quotaNotices {
+  display: grid;
+  gap: 8px;
+}
+
+.quotaNotices .noticeDanger,
+.quotaNotices .noticeStale {
+  margin: 0;
+}
+
+.quotaBodyInner .accountNote,
+.quotaBodyInner .dataGaps {
+  margin: 0;
+}
+
+/* 额度窗口排成一行：条目少时平分宽度，四类套餐同排展示；
+   列间用一条竖向发丝线分隔，与上下内容留出相同呼吸。 */
+.metricGrid {
+  display: flex;
+  align-items: stretch;
+}
+
+.metric {
+  display: grid;
+  flex: 1 1 0;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding-inline: 14px;
+}
+
+.metric:first-child {
+  padding-left: 0;
+}
+
+.metric:last-child {
+  padding-right: 0;
+}
+
+/* 套餐内的窗口分隔线上下收一截；套餐与套餐之间保持整行高度，
+   让「换套餐」和「换时间窗口」在视觉上有明确主次。 */
+.metricDivider {
+  flex: 0 0 1px;
+  align-self: stretch;
+  margin-block: 16px;
+  background: var(--border);
+}
+
+.metricDivider[data-strong] {
+  margin-block: 0;
+}
+
+/* 多套餐时，套餐名与档位占一条固定高度的眉线；
+   没有套餐名的格子留空，保证所有窗口标签和进度条横向对齐。 */
+.metricEyebrow {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
+  overflow: hidden;
+  min-height: 17px;
 }
 
-.quotaLabel {
+.metricProduct {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metricEyebrow .planTier {
+  flex-shrink: 0;
+}
+
+.metricLabel {
+  overflow: hidden;
+  color: var(--text);
   font-size: 13px;
   font-weight: 600;
   line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 数值与进度条同排：数值固定宽度，进度条吃掉剩余空间 */
+.quotaBarRow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.quotaPercent {
+  flex-shrink: 0;
+  color: var(--text);
+  font-size: 21px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.quotaBarRow[data-low] .quotaPercent {
+  color: var(--danger);
+}
+
+.quotaBarRow[data-unknown] .quotaPercent {
+  color: var(--muted);
+}
+
+.quotaBarTrack {
+  display: block;
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.quotaBarFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-strong);
+}
+
+.quotaBarRow[data-low] .quotaBarFill {
+  background: var(--danger);
+}
+
+.metricMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+/* 绝对值窗口（次数）信息更长，固定分成两行，重置时间不会挤在「已用」后面 */
+.metricMeta[data-stacked] {
+  display: grid;
+  gap: 1px;
+}
+
+/* 日期时间不拆行，换行只发生在「已用」与「重置于」之间 */
+.metricMetaPart {
+  white-space: nowrap;
+}
+
+/* 四列布局在窄窗口里装不下整行说明，去掉间隔点，避免它孤零零挂在行尾 */
+.metricDot {
+  color: var(--muted);
+  opacity: 0.75;
+}
+
+@media (max-width: 1050px) {
+  .metricDot {
+    display: none;
+  }
 }
 
 .quotaMeta {
@@ -805,7 +982,7 @@
   font-weight: 600;
 }
 
-/* 骨架屏：与额度窗口同形（环 + 两行文字），避免通用转圈 */
+/* 骨架屏：与额度窗口同形（标签 + 数值 + 条 + 说明），避免通用转圈 */
 .skel {
   display: block;
   height: 11px;
@@ -814,21 +991,25 @@
   animation: pulse 1.3s ease-in-out infinite;
 }
 
-.skelRing {
-  flex-shrink: 0;
-  width: 58px;
-  height: 58px;
-  border-radius: 50%;
+.skelLabel {
+  width: 64px;
 }
 
-.skelLines {
-  display: grid;
-  flex: 1;
-  gap: 8px;
+.skelValue {
+  width: 54px;
+  height: 22px;
+  border-radius: 7px;
 }
 
-.w96 { width: 96px; }
-.w150 { width: 150px; }
+.skelBar {
+  width: 100%;
+  height: 6px;
+}
+
+.skelMeta {
+  width: 82%;
+  height: 10px;
+}
 
 @keyframes pulse {
   50% {
