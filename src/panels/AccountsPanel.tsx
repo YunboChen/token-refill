@@ -3,11 +3,11 @@ import { createPortal } from 'react-dom';
 import { AnimatePresence, m } from 'motion/react';
 import {
   ArrowClockwise,
+  CircleNotch,
   LinkSimple,
   PencilSimple,
   Plus,
   Trash,
-  UsersThree,
   X,
 } from '@phosphor-icons/react';
 import {
@@ -17,9 +17,14 @@ import {
   type LoginStart,
   type ProductState,
 } from '../lib/desktop';
-import { groupAccountsByPlatform, pendingPlatforms } from '../lib/platforms';
+import {
+  accountPlatformGroups,
+  pendingPlatforms,
+  platformMeta,
+} from '../lib/platforms';
 import { useAppState } from '../lib/store';
 import PlatformHeading from '../components/PlatformHeading';
+import PlatformLogo from '../components/PlatformLogo';
 import styles from '../App.module.css';
 
 const AUTH_LABELS: Record<AuthState, string> = {
@@ -32,23 +37,41 @@ type DialogPlatform = 'codex' | 'bailian';
 
 const PLATFORM_CHOICES: {
   key: DialogPlatform;
-  name: string;
-  hint: string;
-  note: string;
+  /** 添加位与弹窗标题共用，中英文混排的间距在这里一次写清 */
+  addLabel: string;
+  /** 标题下方一行，说明平台与授权方式 */
+  subtitle: string;
+  /** 授权流程要点：分条展示，避免整段文字堆在弹窗里 */
+  steps: string[];
 }[] = [
   {
     key: 'codex',
-    name: 'Codex',
-    hint: 'ChatGPT 订阅 · 官方浏览器授权',
-    note: '接下来会打开系统浏览器完成 Codex 官方授权。每个账户使用独立授权目录，不会读取或修改本机 Codex 的默认登录。',
+    addLabel: '添加 Codex 账户',
+    subtitle: 'ChatGPT 订阅 · 官方浏览器授权',
+    steps: [
+      '在系统浏览器中完成 Codex 官方授权',
+      '每个账户使用独立授权目录',
+      '不读取或修改本机 Codex 的默认登录',
+    ],
   },
   {
     key: 'bailian',
-    name: '百炼',
-    hint: 'Token Plan · Coding Plan · 阿里云控制台',
-    note: '接下来会打开阿里云百炼控制台登录页。登录成功后，控制台会话令牌会通过本机回环地址直接交给应用，不经过前端，也不会写入外部工具的配置。',
+    addLabel: '添加百炼账户',
+    subtitle: '阿里云 · Token Plan / Coding Plan',
+    steps: [
+      '在系统浏览器中登录要接入的阿里云账号',
+      '控制台会话令牌经本机回环地址直接交给应用',
+      '不经过前端，也不写入外部工具的配置',
+    ],
   },
 ];
+
+/** 添加入口文案；未知平台退回通用文案，只在平台已开放接入时使用。 */
+function addAccountLabel(platform: string): string {
+  return (
+    PLATFORM_CHOICES.find((item) => item.key === platform)?.addLabel ?? '添加账户'
+  );
+}
 
 type DialogState =
   | { kind: 'add-form'; platform: DialogPlatform }
@@ -59,7 +82,9 @@ type DialogState =
       start: LoginStart;
       phase: 'waiting' | 'succeeded' | 'failed' | 'canceled';
       message: string | null;
-    };
+    }
+  | { kind: 'rename'; accountId: string; value: string }
+  | { kind: 'remove'; accountId: string; displayName: string };
 
 function checkedAtLabel(epoch: number | null): string {
   if (epoch === null) return '尚未获取额度';
@@ -103,7 +128,6 @@ function accountMark(name: string): string {
 export default function AccountsPanel() {
   const {
     state,
-    ready,
     desktop,
     refresh,
     beginLogin,
@@ -116,8 +140,8 @@ export default function AccountsPanel() {
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [draftName, setDraftName] = useState('');
   const [starting, setStarting] = useState(false);
-  const [renaming, setRenaming] = useState<{ accountId: string; value: string } | null>(null);
-  const [confirming, setConfirming] = useState<string | null>(null);
+  // 改名与移除都在弹窗里确认，提交期间锁住按钮避免重复请求。
+  const [acting, setActing] = useState(false);
 
   // 授权在 Rust 后台线程完成；这里只接收脱敏状态并更新对话框。
   useEffect(() => {
@@ -203,53 +227,58 @@ export default function AccountsPanel() {
   };
 
   const saveRename = async () => {
-    if (!renaming) return;
-    const ok = await renameAccount(renaming.accountId, renaming.value);
-    if (ok) setRenaming(null);
+    if (dialog?.kind !== 'rename' || acting) return;
+    const value = dialog.value.trim();
+    if (!value) return;
+    setActing(true);
+    const ok = await renameAccount(dialog.accountId, value);
+    setActing(false);
+    if (ok) setDialog(null);
   };
 
-  const confirmRemove = async (accountId: string) => {
-    const ok = await removeAccount(accountId);
-    if (ok) setConfirming(null);
+  const confirmRemove = async () => {
+    if (dialog?.kind !== 'remove' || acting) return;
+    setActing(true);
+    const ok = await removeAccount(dialog.accountId);
+    setActing(false);
+    if (ok) setDialog(null);
   };
 
-  const groups = groupAccountsByPlatform(state.accounts);
+  const openRenameDialog = (account: AccountState) => {
+    setActing(false);
+    setDialog({
+      kind: 'rename',
+      accountId: account.accountId,
+      value: account.displayName,
+    });
+  };
+
+  const openRemoveDialog = (account: AccountState) => {
+    setActing(false);
+    setDialog({
+      kind: 'remove',
+      accountId: account.accountId,
+      displayName: account.displayName,
+    });
+  };
+
+  const groups = accountPlatformGroups(state.accounts);
   const unavailable = pendingPlatforms();
 
-  const openAddDialog = (platform: DialogPlatform = 'codex') => {
+  const openAddDialog = (platform: DialogPlatform) => {
     setDraftName('');
     setDialog({ kind: 'add-form', platform });
   };
 
+  // 平台由入口决定：从哪个平台分组点进来，就只给哪个平台添加账户，
+  // 弹窗内不再提供切换，避免加到别的分组里。
   const dialogPlatform =
-    dialog?.kind === 'add-form' ? dialog.platform : dialog?.platform ?? 'codex';
+    dialog && 'platform' in dialog ? dialog.platform : null;
   const choice =
     PLATFORM_CHOICES.find((item) => item.key === dialogPlatform) ?? PLATFORM_CHOICES[0];
 
   return (
     <section>
-      {ready && state.accounts.length === 0 ? (
-        <div className={styles.empty}>
-          <span className={styles.emptyIconWrap}>
-            <UsersThree size={22} weight="duotone" aria-hidden />
-          </span>
-          <p className={styles.emptyTitle}>还没有接入账户</p>
-          <p className={styles.usageNote}>
-            添加账户后，每个账户会使用独立的授权副本，互不影响。
-          </p>
-          <button
-            type="button"
-            className={styles.button}
-            onClick={() => openAddDialog()}
-            disabled={!desktop}
-            title={desktop ? '添加账户' : '浏览器预览无法发起授权'}
-          >
-            <Plus size={15} weight="bold" aria-hidden />
-            添加账户
-          </button>
-        </div>
-      ) : null}
-
       <div className={styles.platformStack}>
         {groups.map((group) => (
           <section className={styles.platformPanel} key={group.platform}>
@@ -257,7 +286,7 @@ export default function AccountsPanel() {
               <PlatformHeading
                 active
                 platform={group.platform}
-                count={group.accounts.length}
+                count={group.accounts.length > 0 ? group.accounts.length : undefined}
               />
             </div>
 
@@ -372,12 +401,7 @@ export default function AccountsPanel() {
                           <button
                             type="button"
                             className={styles.miniButton}
-                            onClick={() =>
-                              setRenaming({
-                                accountId: account.accountId,
-                                value: account.displayName,
-                              })
-                            }
+                            onClick={() => openRenameDialog(account)}
                             disabled={!desktop}
                             aria-label="重命名"
                             title="重命名"
@@ -387,7 +411,7 @@ export default function AccountsPanel() {
                           <button
                             type="button"
                             className={styles.miniButton}
-                            onClick={() => setConfirming(account.accountId)}
+                            onClick={() => openRemoveDialog(account)}
                             disabled={!desktop}
                             aria-label="移除账户"
                             title="移除账户"
@@ -398,67 +422,6 @@ export default function AccountsPanel() {
                         </div>
                       ) : null}
                     </div>
-
-                    {renaming?.accountId === account.accountId ? (
-                      <form
-                        className={styles.inlineForm}
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          void saveRename();
-                        }}
-                      >
-                        <input
-                          className={styles.textInput}
-                          value={renaming.value}
-                          onChange={(event) =>
-                            setRenaming({ ...renaming, value: event.target.value })
-                          }
-                          maxLength={60}
-                          aria-label="账户名称"
-                          autoFocus
-                        />
-                        <button
-                          type="submit"
-                          className={styles.button}
-                          disabled={!desktop}
-                        >
-                          保存
-                        </button>
-                        <button
-                          type="button"
-                          className={styles.buttonGhost}
-                          onClick={() => setRenaming(null)}
-                        >
-                          取消
-                        </button>
-                      </form>
-                    ) : null}
-
-                    {confirming === account.accountId ? (
-                      <div className={styles.inlineConfirm}>
-                        <span className={styles.usageNote}>
-                          移除后本应用会删除该账户在本地的授权副本；
-                          外部工具与百炼账号的登录状态不受影响。
-                        </span>
-                        <div className={styles.inlineConfirmActions}>
-                          <button
-                            type="button"
-                            className={styles.dangerButton}
-                            onClick={() => void confirmRemove(account.accountId)}
-                            disabled={!desktop}
-                          >
-                            确认移除
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.buttonGhost}
-                            onClick={() => setConfirming(null)}
-                          >
-                            取消
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
                   </article>
                 );
               })}
@@ -474,14 +437,16 @@ export default function AccountsPanel() {
                   disabled={!desktop}
                   title={
                     desktop
-                      ? `添加 ${group.meta.name} 账户`
+                      ? addAccountLabel(group.platform)
                       : '浏览器预览无法发起授权'
                   }
                 >
                   <span className={styles.accountAddIcon} aria-hidden="true">
                     <Plus size={15} weight="bold" />
                   </span>
-                  <span className={styles.accountAddLabel}>添加账户</span>
+                  <span className={styles.accountAddLabel}>
+                    {addAccountLabel(group.platform)}
+                  </span>
                 </button>
               ) : null}
             </div>
@@ -549,29 +514,29 @@ export default function AccountsPanel() {
 
                 {dialog.kind === 'add-form' ? (
                   <>
-                    <h2 id="account-dialog-title">添加账户</h2>
-                    <div
-                      className={styles.platformPicker}
-                      role="group"
-                      aria-label="选择平台"
-                    >
-                      {PLATFORM_CHOICES.map((item) => (
-                        <button
-                          type="button"
-                          key={item.key}
-                          className={styles.platformPick}
-                          data-active={dialog.platform === item.key || undefined}
-                          aria-pressed={dialog.platform === item.key}
-                          onClick={() =>
-                            setDialog({ kind: 'add-form', platform: item.key })
-                          }
-                        >
-                          <span className={styles.platformPickName}>{item.name}</span>
-                          <span className={styles.platformPickHint}>{item.hint}</span>
-                        </button>
+                    <header className={styles.dialogHeader}>
+                      <span
+                        className={styles.platformBadge}
+                        data-active
+                        aria-hidden="true"
+                      >
+                        <PlatformLogo
+                          platform={dialog.platform}
+                          fallback={platformMeta(dialog.platform).mark}
+                        />
+                      </span>
+                      <div className={styles.dialogHeading}>
+                        <h2 id="account-dialog-title">{choice.addLabel}</h2>
+                        <p className={styles.dialogSubtitle}>{choice.subtitle}</p>
+                      </div>
+                    </header>
+                    <ul className={styles.dialogSteps} role="list">
+                      {choice.steps.map((step) => (
+                        <li className={styles.dialogStep} key={step}>
+                          {step}
+                        </li>
                       ))}
-                    </div>
-                    <p className={styles.usageNote}>{choice.note}</p>
+                    </ul>
                     <label className={styles.field}>
                       <span className={styles.fieldLabel}>账户名称（可选）</span>
                       <input
@@ -584,7 +549,6 @@ export default function AccountsPanel() {
                             : '留空则使用授权后的脱敏邮箱'
                         }
                         maxLength={60}
-                        autoFocus
                       />
                     </label>
                     <div className={styles.dialogActions}>
@@ -609,39 +573,125 @@ export default function AccountsPanel() {
                       </button>
                     </div>
                   </>
+                ) : dialog.kind === 'rename' ? (
+                  <form
+                    className={styles.dialogForm}
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void saveRename();
+                    }}
+                  >
+                    <h2 id="account-dialog-title">重命名账户</h2>
+                    <input
+                      className={styles.textInput}
+                      value={dialog.value}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        setDialog((current) =>
+                          current?.kind === 'rename'
+                            ? { ...current, value }
+                            : current,
+                        );
+                      }}
+                      maxLength={60}
+                      aria-label="账户名称"
+                      autoFocus
+                    />
+                    <div className={styles.dialogActions}>
+                      <button
+                        type="button"
+                        className={styles.buttonGhost}
+                        onClick={closeDialog}
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="submit"
+                        className={styles.button}
+                        disabled={
+                          acting || !desktop || dialog.value.trim().length === 0
+                        }
+                      >
+                        {acting ? '保存中…' : '保存'}
+                      </button>
+                    </div>
+                  </form>
+                ) : dialog.kind === 'remove' ? (
+                  <>
+                    <h2 id="account-dialog-title">移除账户</h2>
+                    <p className={styles.usageNote}>
+                      将移除「{dialog.displayName}」，并删除该账户在本地的授权副本；
+                      外部工具与百炼账号的登录状态不受影响。
+                    </p>
+                    <div className={styles.dialogActions}>
+                      <button
+                        type="button"
+                        className={styles.buttonGhost}
+                        onClick={closeDialog}
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.dangerButton}
+                        onClick={() => void confirmRemove()}
+                        disabled={acting || !desktop}
+                      >
+                        {acting ? '正在移除…' : '确认移除'}
+                      </button>
+                    </div>
+                  </>
                 ) : (
                   <>
-                    <h2 id="account-dialog-title">
-                      {dialog.phase === 'succeeded'
-                        ? '授权完成'
-                        : dialog.phase === 'failed'
-                          ? '授权失败'
-                          : dialog.phase === 'canceled'
-                            ? '已取消授权'
-                            : dialog.mode === 'reauth'
-                              ? '重新授权'
-                              : dialog.platform === 'bailian'
-                                ? '登录阿里云百炼'
-                                : '在浏览器中完成授权'}
-                    </h2>
+                    <header className={styles.dialogHeader}>
+                      <span
+                        className={styles.platformBadge}
+                        data-active
+                        aria-hidden="true"
+                      >
+                        <PlatformLogo
+                          platform={dialog.platform}
+                          fallback={platformMeta(dialog.platform).mark}
+                        />
+                      </span>
+                      <div className={styles.dialogHeading}>
+                        <h2 id="account-dialog-title">
+                          {dialog.phase === 'succeeded'
+                            ? '授权完成'
+                            : dialog.phase === 'failed'
+                              ? '授权失败'
+                              : dialog.phase === 'canceled'
+                                ? '已取消授权'
+                                : dialog.mode === 'reauth'
+                                  ? '重新授权'
+                                  : dialog.platform === 'bailian'
+                                    ? '登录阿里云百炼'
+                                    : '在浏览器中完成授权'}
+                        </h2>
+                        <p className={styles.dialogSubtitle}>{choice.subtitle}</p>
+                      </div>
+                    </header>
 
                     {dialog.phase === 'waiting' ? (
                       <>
                         <p className={styles.usageNote}>
                           {dialog.platform === 'bailian'
-                            ? '已打开系统浏览器。请登录要接入的阿里云账号并确认授权；控制台会话令牌会通过本机回环地址直接交给应用。等待期间请保持本应用运行。'
-                            : '已打开系统浏览器。请登录要接入的 ChatGPT 账户并确认授权。如果浏览器已登录其他账户，请先切换账户或使用无痕窗口。等待期间请保持本应用运行。'}
+                            ? '请登录要接入的阿里云账号并确认授权，控制台会话令牌会通过本机回环地址直接交给应用。'
+                            : '请登录要接入的 ChatGPT 账户并确认授权。如果浏览器已登录其他账户，请先切换账户或使用无痕窗口。'}
                         </p>
-                        <p className={styles.authUrl}>{dialog.start.authUrl}</p>
-                        <p className={styles.loginStatus}>等待授权完成…</p>
+                        <div className={styles.authBlock}>
+                          <span className={styles.fieldLabel}>授权链接</span>
+                          <p className={styles.authUrl}>{dialog.start.authUrl}</p>
+                        </div>
+                        <p className={styles.loginStatus}>
+                          <CircleNotch
+                            size={13}
+                            className={styles.spin}
+                            aria-hidden
+                          />
+                          等待授权完成…
+                        </p>
                         <div className={styles.dialogActions}>
-                          <button
-                            type="button"
-                            className={styles.buttonGhost}
-                            onClick={() => void openExternal(dialog.start.authUrl)}
-                          >
-                            重新打开授权页面
-                          </button>
                           <button
                             type="button"
                             className={styles.buttonGhost}
@@ -649,11 +699,18 @@ export default function AccountsPanel() {
                           >
                             取消授权
                           </button>
+                          <button
+                            type="button"
+                            className={styles.button}
+                            onClick={() => void openExternal(dialog.start.authUrl)}
+                          >
+                            重新打开授权页面
+                          </button>
                         </div>
                       </>
                     ) : dialog.phase === 'succeeded' ? (
                       <>
-                        <p className={styles.noticeStale}>
+                        <p className={styles.usageNote}>
                           账户已接入，额度数据会在后台刷新后显示。
                         </p>
                         <div className={styles.dialogActions}>

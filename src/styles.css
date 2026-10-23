@@ -38,6 +38,7 @@
   --danger: #b4233b;
   --danger-soft: #fbeaed;
   --focus: #0b63ce;
+  --accent-ring: rgb(11 99 206 / 0.14);
   --wordmark-filter: none;
 }
 
@@ -63,6 +64,7 @@
   --danger: #ff8b9c;
   --danger-soft: #341c23;
   --focus: #79b8ff;
+  --accent-ring: rgb(121 184 255 / 0.18);
   --wordmark-filter: brightness(1.12) saturate(1.02);
 }
 
@@ -87,6 +89,7 @@
     --danger: #ff8b9c;
     --danger-soft: #341c23;
     --focus: #79b8ff;
+    --accent-ring: rgb(121 184 255 / 0.18);
     --wordmark-filter: brightness(1.12) saturate(1.02);
   }
 }

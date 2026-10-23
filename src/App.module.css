@@ -1233,43 +1233,10 @@
   opacity: 0.7;
 }
 
-/* 空状态：与账户卡同属前景层，用实线和轻投影代替虚线占位 */
-.empty {
-  display: grid;
-  gap: 10px;
-  justify-items: center;
-  margin-top: 18px;
-  padding: 44px 24px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--surface);
-  text-align: center;
-}
-
-.emptyIconWrap {
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  margin-bottom: 4px;
-  border-radius: 10px;
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
 .emptyTitle {
   margin: 0;
   font-size: 14px;
   font-weight: 600;
-}
-
-.empty .usageNote {
-  max-width: 380px;
-  margin: 0;
-}
-
-.empty .button {
-  margin-top: 6px;
 }
 
 /* ---------- 平台分组：不套容器卡，靠标题行与留白分区 ---------- */
@@ -1809,12 +1776,6 @@
   gap: 2px;
 }
 
-/* 重命名与移除确认在卡片内就地展开，接在操作行下方 */
-.accountTile > .inlineForm,
-.accountTile > .inlineConfirm {
-  margin-top: 10px;
-}
-
 .miniButton {
   display: grid;
   place-items: center;
@@ -1844,19 +1805,6 @@
 .miniButton:disabled {
   cursor: not-allowed;
   opacity: 0.45;
-}
-
-.inlineForm {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 12px;
-}
-
-.inlineForm .textInput {
-  flex: 1 1 120px;
-  min-width: 0;
 }
 
 .inlineConfirm {
@@ -1908,7 +1856,7 @@
 .dialog {
   position: relative;
   display: grid;
-  gap: 12px;
+  gap: 16px;
   width: min(440px, 100%);
   padding: 20px;
   border: 1px solid var(--border);
@@ -1922,6 +1870,76 @@
   padding-right: 26px;
   font-size: 15.5px;
   font-weight: 600;
+}
+
+/* 重命名弹窗整体是表单，沿用弹窗本身的纵向间距 */
+.dialogForm {
+  display: grid;
+  gap: 16px;
+}
+
+/* 授权弹窗头部：复用平台徽标，把标题和接入方式收成一组，
+   右侧留出关闭按钮的位置 */
+.dialogHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-right: 26px;
+}
+
+.dialogHeading {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dialogHeading h2 {
+  padding-right: 0;
+}
+
+.dialogSubtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+/* 授权要点：分条列出，比整段说明更好扫读 */
+.dialogSteps {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+  list-style: none;
+}
+
+.dialogStep {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+/* 圆点只是视觉引导，不暗示“已完成”，用伪元素避免列表标记被重置 */
+.dialogStep::before {
+  content: '';
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.85;
+}
+
+.authBlock {
+  display: grid;
+  gap: 6px;
 }
 
 .dialogClose {
@@ -1950,55 +1968,7 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 4px;
-}
-
-.platformPicker {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.platformPick {
-  display: grid;
-  gap: 3px;
-  padding: 10px 11px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  color: var(--text);
-  background: var(--background);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 150ms ease-out, background-color 150ms ease-out,
-    box-shadow 150ms ease-out;
-}
-
-.platformPick:hover {
-  border-color: var(--border-strong);
-}
-
-.platformPick[data-active] {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-
-.platformPickName {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.platformPickHint {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-@media (max-width: 460px) {
-  .platformPicker {
-    grid-template-columns: 1fr;
-  }
+  margin-top: 6px;
 }
 
 .field {
@@ -2024,8 +1994,15 @@
 }
 
 .textInput:focus {
-  border-color: var(--accent);
-  outline: 2px solid var(--accent-soft);
+  border-color: var(--accent-strong);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+/* 弹窗里的输入框沿用说明面板的凹陷底色，
+   避免在深色弹窗中塌成一块更黑的区域 */
+.dialog .textInput {
+  background: var(--sunken);
 }
 
 .authUrl {
@@ -2041,6 +2018,9 @@
 }
 
 .loginStatus {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
   color: var(--accent);
   font-size: 12px;
