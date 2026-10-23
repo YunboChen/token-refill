@@ -141,10 +141,10 @@ public/               浏览器标签图标、Web manifest
    cargo check --manifest-path src-tauri/Cargo.toml   # 同步 Cargo.lock
    ```
 
-2. 提交并推送到 `dev`：
+2. 提交并推送到 `main`：
 
    ```sh
-   git push origin dev
+   git push origin main
    ```
 
 `prepare` job 会对比这次推送前后的 `src-tauri/tauri.conf.json` 版本号：**只有版本号变化才继续构建**，版本未变时其余 job 全部跳过，不会重复生成或上传产物。也可以显式发版：推送 `v*` tag，或在 Actions 页面手动触发 `release`（手动触发不比较版本，总是构建）。
