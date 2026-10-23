@@ -231,7 +231,17 @@ fn parse_identity(value: &serde_json::Value) -> Option<CodexIdentity> {
 }
 
 // ---------- Codex CLI 查找 ----------
+//
+// 查找顺序：CODEX_BIN → PATH → 版本管理器（nvm/fnm/nvm-windows）→ 各包管理器默认目录。
+// Windows 上 CLI 常以 `codex.exe`（官方安装包）或 `codex.cmd`（npm/pnpm/scoop
+// 包装脚本）存在，没有 Unix 的执行位，因此可执行判定与候选文件名都按平台区分。
 
+#[cfg(windows)]
+const BINARY_NAMES: &[&str] = &["codex.exe", "codex.cmd", "codex.bat", "codex.com"];
+#[cfg(not(windows))]
+const BINARY_NAMES: &[&str] = &["codex"];
+
+#[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     fs::metadata(path)
@@ -239,17 +249,127 @@ fn is_executable(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn find_in_nvm(home: &Path) -> Option<PathBuf> {
-    let versions = home.join(".nvm").join("versions").join("node");
-    let mut found: Vec<PathBuf> = fs::read_dir(&versions)
+/// Windows 没有执行位，只按扩展名判定。`.cmd`/`.bat` 由 Rust 标准库（≥ 1.77.2）
+/// 自动经 `cmd.exe` 启动并转义参数，因此可以直接交给 `Command`。
+#[cfg(windows)]
+fn is_executable(path: &Path) -> bool {
+    let is_file = fs::metadata(path)
+        .map(|meta| meta.is_file())
+        .unwrap_or(false);
+    if !is_file {
+        return false;
+    }
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "exe" | "cmd" | "bat" | "com"
+            )
+        })
+}
+
+/// `HOME` 在 Windows 上可能由 Git Bash 等终端设成 `/c/Users/...` 形式，
+/// 因此 Windows 先取 `USERPROFILE`；Unix 没有 `USERPROFILE`，仍以 `HOME` 为准。
+fn home_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    const KEYS: [&str; 2] = ["USERPROFILE", "HOME"];
+    #[cfg(not(windows))]
+    const KEYS: [&str; 2] = ["HOME", "USERPROFILE"];
+    KEYS.iter()
+        .find_map(|key| std::env::var_os(key).map(PathBuf::from))
+}
+
+fn find_in_dir(dir: &Path) -> Option<PathBuf> {
+    BINARY_NAMES
+        .iter()
+        .map(|name| dir.join(name))
+        .find(|candidate| is_executable(candidate))
+}
+
+/// 在版本管理器的版本根目录里取最新一份 codex。目录名按字符串降序
+/// （v26.12.0 > v20.0.0 基本成立），没有安装 CLI 的版本目录会被跳过。
+fn find_in_version_dirs(root: &Path, suffix: &[&str]) -> Option<PathBuf> {
+    let mut versions: Vec<PathBuf> = fs::read_dir(root)
         .ok()?
         .filter_map(Result::ok)
-        .map(|entry| entry.path().join("bin").join("codex"))
-        .filter(|candidate| is_executable(candidate))
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
         .collect();
-    // 版本目录名可排序（v26.12.0 > v20.0.0 按字符串降序基本成立），取最新。
-    found.sort_by(|a, b| b.cmp(a));
-    found.into_iter().next()
+    versions.sort_by(|a, b| b.cmp(a));
+    versions.iter().find_map(|version| {
+        let mut dir = version.clone();
+        for part in suffix {
+            dir.push(part);
+        }
+        find_in_dir(&dir)
+    })
+}
+
+/// 版本管理器根目录及其相对可执行文件所在的子路径。
+fn version_dirs() -> Vec<(PathBuf, &'static [&'static str])> {
+    let mut roots: Vec<(PathBuf, &'static [&'static str])> = Vec::new();
+    #[cfg(unix)]
+    if let Some(home) = home_dir() {
+        roots.push((home.join(".nvm").join("versions").join("node"), &["bin"]));
+    }
+    #[cfg(windows)]
+    {
+        // nvm-windows：版本目录直接位于 NVM_HOME（默认 %APPDATA%\nvm）下。
+        let nvm_root = std::env::var_os("NVM_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("APPDATA").map(|base| PathBuf::from(base).join("nvm")));
+        if let Some(root) = nvm_root {
+            roots.push((root, &[]));
+        }
+        // fnm：node-versions\<version>\installation\codex.cmd
+        if let Some(base) = std::env::var_os("APPDATA").map(PathBuf::from) {
+            roots.push((base.join("fnm").join("node-versions"), &["installation"]));
+        }
+    }
+    roots
+}
+
+/// PATH 之外的常见安装位置。从资源管理器启动的 GUI 应用拿不到终端里临时
+/// 追加的 PATH，所以在包管理器的默认目录再找一遍。
+fn extra_search_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    #[cfg(unix)]
+    {
+        dirs.push(PathBuf::from("/usr/local/bin"));
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        if let Some(home) = home_dir() {
+            dirs.push(home.join(".local").join("bin"));
+        }
+    }
+    #[cfg(windows)]
+    {
+        let env_dir = |key: &str| std::env::var_os(key).map(PathBuf::from);
+        if let Some(base) = env_dir("APPDATA") {
+            dirs.push(base.join("npm"));
+        }
+        if let Some(base) = env_dir("LOCALAPPDATA") {
+            dirs.push(base.join("pnpm"));
+            dirs.push(base.join("Volta").join("bin"));
+            // 官方 Windows 安装包的默认位置
+            dirs.push(
+                base.join("Programs")
+                    .join("OpenAI")
+                    .join("Codex")
+                    .join("bin"),
+            );
+            dirs.push(base.join("Microsoft").join("WindowsApps"));
+        }
+        // nvm-windows 活动版本的软链接目录
+        if let Some(base) = env_dir("NVM_SYMLINK") {
+            dirs.push(base);
+        }
+        if let Some(home) = home_dir() {
+            dirs.push(home.join(".bun").join("bin"));
+            dirs.push(home.join("scoop").join("shims"));
+        }
+    }
+    dirs
 }
 
 pub fn find_codex_binary() -> Result<PathBuf, UsageError> {
@@ -266,28 +386,20 @@ pub fn find_codex_binary() -> Result<PathBuf, UsageError> {
 
     if let Some(path_env) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path_env) {
-            let candidate = dir.join("codex");
-            if is_executable(&candidate) {
+            if let Some(candidate) = find_in_dir(&dir) {
                 return Ok(candidate);
             }
         }
     }
 
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    if let Some(home) = &home {
-        if let Some(candidate) = find_in_nvm(home) {
+    for (root, suffix) in version_dirs() {
+        if let Some(candidate) = find_in_version_dirs(&root, suffix) {
             return Ok(candidate);
         }
     }
-    let mut candidates = vec![
-        PathBuf::from("/usr/local/bin/codex"),
-        PathBuf::from("/opt/homebrew/bin/codex"),
-    ];
-    if let Some(home) = &home {
-        candidates.push(home.join(".local/bin/codex"));
-    }
-    for candidate in candidates {
-        if is_executable(&candidate) {
+
+    for dir in extra_search_dirs() {
+        if let Some(candidate) = find_in_dir(&dir) {
             return Ok(candidate);
         }
     }
@@ -508,6 +620,26 @@ pub struct LoginSession {
     next_request_id: i64,
 }
 
+/// Codex 的登录回调端口固定为 1455（1457 只在端口被占用时回退），app-server
+/// 没有改端口的参数。Windows 的 Hyper-V/WinNAT 会把一段 TCP 端口划进预留区间，
+/// 落在其中的端口绑定会返回 WSAEACCES(10013)；这里把系统错误翻译成可执行的修复步骤。
+fn explain_login_start_error(error: UsageError) -> UsageError {
+    #[cfg(target_os = "windows")]
+    {
+        if error.message.contains("10013") {
+            return UsageError::new(
+                "login-port-blocked",
+                "Codex 授权回调端口（1455/1457）被 Windows 预留，无法监听（os error 10013）。\
+                 请以管理员身份依次执行：net stop winnat；\
+                 netsh int ipv4 add excludedportrange protocol=tcp startport=1455 numberofports=3；\
+                 net start winnat。完成后重试添加账户。"
+                    .to_string(),
+            );
+        }
+    }
+    error
+}
+
 impl LoginSession {
     /// 在独立 `CODEX_HOME` 中启动官方 ChatGPT 授权流程。
     pub fn start(binary: &Path, codex_home: &Path) -> Result<Self, UsageError> {
@@ -519,7 +651,9 @@ impl LoginSession {
             "method": "account/login/start",
             "params": { "type": "chatgpt" }
         }))?;
-        let result = server.await_response(2, INITIALIZE_TIMEOUT)?;
+        let result = server
+            .await_response(2, INITIALIZE_TIMEOUT)
+            .map_err(explain_login_start_error)?;
         let login_id = result
             .get("loginId")
             .and_then(|value| value.as_str())
@@ -752,6 +886,9 @@ mod tests {
         assert_eq!(err.code, "decode");
     }
 
+    /// 合成 app-server 用 Python 脚本实现，只在有 python3 的 Unix 环境验证；
+    /// Windows 下的查找与启动由纯逻辑测试覆盖。
+    #[cfg(unix)]
     #[test]
     fn read_usage_drives_fake_app_server_over_stdio() {
         use std::os::unix::fs::PermissionsExt;
@@ -825,6 +962,7 @@ for line in sys.stdin:
         assert!(parse_identity(&serde_json::json!({ "account": null })).is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn login_session_drives_fake_app_server_in_isolated_home() {
         use std::os::unix::fs::PermissionsExt;
@@ -909,18 +1047,134 @@ for line in sys.stdin:
         assert_eq!(classify_rpc_error("unexpected response shape"), "rpc");
     }
 
-    #[test]
-    fn explicit_codex_bin_must_be_executable() {
-        // 仅验证纯逻辑：不可执行路径返回稳定错误码，不启动进程。
-        // 环境变量隔离测试：使用不存在的路径。
+    /// CODEX_BIN 是进程级全局状态，改动它的用例必须串行执行。
+    fn codex_bin_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn with_codex_bin<T>(value: &Path, run: impl FnOnce() -> T) -> T {
         let previous = std::env::var_os("CODEX_BIN");
-        std::env::set_var("CODEX_BIN", "/nonexistent/codex-binary-for-test");
-        let result = find_codex_binary();
+        std::env::set_var("CODEX_BIN", value);
+        let result = run();
         match previous {
             Some(value) => std::env::set_var("CODEX_BIN", value),
             None => std::env::remove_var("CODEX_BIN"),
         }
-        let err = result.expect_err("should fail");
+        result
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "token-refill-{name}-{}-{unique}",
+            std::process::id()
+        ))
+    }
+
+    /// 写一个可被发现的 codex 桩文件：Windows 用 `codex.exe`，Unix 用 `codex` 并补执行位。
+    fn write_stub(dir: &Path) -> PathBuf {
+        fs::create_dir_all(dir).expect("create stub dir");
+        let path = dir.join(BINARY_NAMES[0]);
+        fs::write(&path, b"").expect("write stub");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod stub");
+        }
+        path
+    }
+
+    #[test]
+    fn explicit_codex_bin_must_be_executable() {
+        // 仅验证纯逻辑：不可执行路径返回稳定错误码，不启动进程。
+        let _guard = codex_bin_lock();
+        let err = with_codex_bin(
+            Path::new("/nonexistent/codex-binary-for-test"),
+            find_codex_binary,
+        )
+        .expect_err("should fail");
         assert_eq!(err.code, "codex-not-found");
+    }
+
+    #[test]
+    fn explicit_codex_bin_is_used_when_executable() {
+        let _guard = codex_bin_lock();
+        let dir = temp_dir("codex-bin");
+        let stub = write_stub(&dir);
+
+        let found = with_codex_bin(&stub, find_codex_binary).expect("CODEX_BIN is accepted");
+        fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(found, stub);
+    }
+
+    #[test]
+    fn binary_names_match_platform_packaging() {
+        #[cfg(windows)]
+        {
+            // 官方安装包是 .exe，npm/pnpm/scoop 落地为 .cmd；优先原生可执行文件。
+            assert_eq!(BINARY_NAMES[0], "codex.exe");
+            assert!(BINARY_NAMES.contains(&"codex.cmd"));
+        }
+        #[cfg(not(windows))]
+        assert_eq!(BINARY_NAMES, &["codex"]);
+    }
+
+    #[test]
+    fn version_search_picks_newest_version_that_has_a_binary() {
+        let root = temp_dir("versions");
+        let older = write_stub(&root.join("v20.1.0").join("bin"));
+        let newer = write_stub(&root.join("v22.0.0").join("bin"));
+        // 更新的版本目录里没有安装 CLI，应跳过而不是报错。
+        fs::create_dir_all(root.join("v23.0.0").join("bin")).expect("create empty version");
+
+        let found = find_in_version_dirs(&root, &["bin"]).expect("finds newest installed");
+        fs::remove_dir_all(&root).ok();
+
+        assert_eq!(found, newer);
+        assert_ne!(found, older);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_probes_follow_extension_rules() {
+        let dir = temp_dir("windows-probe");
+        fs::create_dir_all(&dir).expect("create probe dir");
+
+        fs::write(dir.join("codex.txt"), b"").expect("write txt stub");
+        assert!(find_in_dir(&dir).is_none(), "非可执行扩展名不应命中");
+
+        fs::write(dir.join("codex.cmd"), b"").expect("write cmd stub");
+        assert_eq!(find_in_dir(&dir), Some(dir.join("codex.cmd")));
+
+        // 同时存在时优先原生 .exe。
+        fs::write(dir.join("codex.exe"), b"").expect("write exe stub");
+        assert_eq!(find_in_dir(&dir), Some(dir.join("codex.exe")));
+
+        assert!(!is_executable(&dir), "目录不算可执行文件");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn non_port_login_errors_are_passed_through() {
+        let error = explain_login_start_error(UsageError::new("rpc", "Codex 查询失败：网络不可用"));
+        assert_eq!(error.code, "rpc");
+        assert!(error.message.contains("网络不可用"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn blocked_callback_port_gets_actionable_guidance() {
+        let error = explain_login_start_error(UsageError::new(
+            "rpc",
+            "Codex 查询失败：failed to start login server: 以一种访问权限不允许的方式做了一个访问套接字的尝试。 (os error 10013)",
+        ));
+        assert_eq!(error.code, "login-port-blocked");
+        assert!(error.message.contains("excludedportrange"));
+        assert!(error.message.contains("1455"));
     }
 }

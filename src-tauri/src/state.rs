@@ -752,6 +752,8 @@ fn is_account_due(account: &AccountState, refresh_minutes: i64, now: i64) -> boo
 // ---------- 文件持久化 ----------
 
 /// 授权目录由 Codex CLI 写入登录令牌，限制为仅当前用户可访问。
+/// Unix 显式设 0700；Windows 的应用数据目录位于 `%APPDATA%\<identifier>`，
+/// 默认 ACL 只授予当前用户、SYSTEM 与 Administrators，不再叠加 POSIX 权限位。
 fn ensure_private_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|err| format!("创建账户授权目录失败：{err}"))?;
     #[cfg(unix)]
@@ -771,13 +773,15 @@ fn write_state(path: &Path, state: &PersistedState) -> Result<(), String> {
         serde_json::to_vec_pretty(state).map_err(|err| format!("序列化应用状态失败：{err}"))?;
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, bytes).map_err(|err| format!("写入应用状态失败：{err}"))?;
-    // 状态含账户与用量信息，限制为仅当前用户可读写（macOS/Linux）。
+    // 状态含账户与用量信息，限制为仅当前用户可读写（Unix 权限位；
+    // Windows 沿用 `%APPDATA%` 的按用户 ACL）。
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
             .map_err(|err| format!("设置应用状态权限失败：{err}"))?;
     }
+    // Windows 上 `fs::rename` 走 MoveFileEx(REPLACE_EXISTING)，可覆盖已存在的状态文件。
     fs::rename(&tmp, path).map_err(|err| format!("替换应用状态失败：{err}"))?;
     Ok(())
 }

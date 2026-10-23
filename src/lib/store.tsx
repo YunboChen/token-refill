@@ -11,6 +11,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import {
   beginAccountLogin,
   cancelAccountLogin,
+  checkForUpdate,
   getAppState,
   onAppStateChanged,
   openExternalUrl,
@@ -22,6 +23,7 @@ import {
   type AppState,
   type LoginStart,
   type Preferences,
+  type UpdateStatus,
 } from './desktop';
 import { clearLegacyPreferences, defaultAppState, readLegacyPreferences } from './prefs';
 
@@ -30,6 +32,7 @@ interface AppStateContextValue {
   ready: boolean;
   desktop: boolean;
   error: string | null;
+  update: UpdateStatus | null;
   refresh: (accountId?: string) => Promise<void>;
   savePreferences: (preferences: Preferences) => Promise<boolean>;
   beginLogin: (accountId?: string, displayName?: string) => Promise<LoginStart | null>;
@@ -55,6 +58,24 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(defaultAppState);
   const [ready, setReady] = useState(!desktop);
   const [error, setError] = useState<string | null>(null);
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
+
+  // 启动时静默检查一次版本；失败（离线、限流）不打扰用户，设置页仍可手动重试。
+  useEffect(() => {
+    if (!desktop) return;
+    let disposed = false;
+    void checkForUpdate().then(
+      (status) => {
+        if (!disposed) setUpdate(status);
+      },
+      () => {
+        // 静默失败：设置页会显示具体原因。
+      },
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [desktop]);
 
   // 乱序响应或事件不应该把状态回退到旧修订号。
   const applyState = useCallback((next: AppState) => {
@@ -243,6 +264,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       ready,
       desktop,
       error,
+      update,
       refresh,
       savePreferences,
       beginLogin,
@@ -257,6 +279,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       ready,
       desktop,
       error,
+      update,
       refresh,
       savePreferences,
       beginLogin,

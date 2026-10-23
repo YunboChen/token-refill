@@ -1,14 +1,14 @@
 # Token Refill 开发计划文档
 
-- 文档版本：0.12
-- 状态：实际验证对象已明确为 Codex Plus、Token Plan 个人版、Coding Plan 中国站；Codex 本机查询、官方授权多账户与统一状态层已实现，百炼接入验证未开始
-- 最近更新：2026-10-22
+- 文档版本：0.13
+- 状态：实际验证对象已明确为 Codex Plus、Token Plan 个人版、Coding Plan 中国站；Codex 本机查询、官方授权多账户、统一状态层与 Windows 兼容层已实现，百炼接入验证未开始
+- 最近更新：2026-10-23
 - 关联文档：[需求文档](./requirements.md)、[软件设计文档](./software-design.md)
 
 ## 1. 计划原则
 
 - 已确认首批覆盖 Codex 订阅、百炼 Token Plan 与 Coding Plan，不将三类支持降为仅一类。
-- 已确认首发 macOS，提供菜单栏快速查看与独立管理窗口；Windows 作为后续阶段。
+- 已确认首发 macOS，提供菜单栏快速查看与独立管理窗口；Windows 兼容层已实现源码适配，安装包与运行验收仍属后续阶段。
 - 先确认关键展示信息、接入边界与刷新行为，再细化任务和估算。
 - 优先验证真实平台接入能力，避免界面完成后才发现关键数据无法获取。
 - 开发先交付一条端到端可验证链路，再扩展到三类套餐和双入口；中间里程碑不等同于首版完整交付。
@@ -23,6 +23,8 @@
 | 文档草稿建立 | 已完成 | 需求、软件设计、开发计划及文档索引 |
 | 核心问题与产品方向 | 已确认 | 减少在软件与 CLI 之间切换，集中查看三类 AI 套餐 |
 | 首发系统与形态 | 已确认 | macOS，菜单栏快速查看 + 独立管理窗口；后续 Windows |
+| Windows 兼容层 | 已实现 | CLI 查找、授权链接、数据目录、标题栏按平台适配；Windows 本机构建、单元测试、真实 CLI 握手与启动验证通过，安装包与运行验收未完成，详见 [Windows 兼容设计](./windows-support.md) |
+| 版本检查 | 已实现 | 设置页查询 GitHub Releases 最新正式版本并与当前版本比较；有新版本时跳转发布页，不自动下载或安装 |
 | 展示信息与多账户 | 已确认 | 额度或比例、各周期、重置时间或倒计时、更新时间与状态都需要；支持多个账户 |
 | 接入原则 | 已确认 | 应用独立管理多账户、可选主动导入、CLI 非正式版强制依赖；不包含本机凭证读取操作授权 |
 | 刷新、后台运行与提醒 | 已确认 | 默认 5 分钟可调自动刷新 + 单账户/全部手动刷新；缓存与失败反馈；关闭窗口常驻、明确退出、自启可选默认关闭；低额度、授权失效及可选重置提醒 |
@@ -133,11 +135,12 @@
 
 ### P5：后续 Windows 支持
 
-- 在 macOS 首版之后，重新确认 Windows 版本、架构及使用范围。
-- 适配系统安全存储、托盘、窗口行为和打包安装。
+- 兼容层已实现：CLI 查找覆盖 `codex.exe` / `.cmd` 与常见安装目录，授权链接改用 `ShellExecuteW`，数据目录沿用 `%APPDATA%`，窗口使用系统标题栏。
+- 重新确认 Windows 版本、架构及使用范围。
+- 适配系统安全存储、托盘、窗口行为和打包安装；完成免安装 exe 与 NSIS 安装器构建及全新环境安装验收。
 - 验证三类查询链路在 Windows 的依赖条件与可靠性。
 
-交付物与排期：待后续需求细化，不属于本次 macOS 首发验收。
+交付物与排期：安装包、运行验收记录与支持声明待后续需求细化，不属于本次 macOS 首发验收。
 
 ## 4. 任务追踪
 
@@ -205,3 +208,11 @@
 2026-10-23 已实现低额度提醒：接入 `tauri-plugin-notification` 发送系统通知；刷新成功后按账户/套餐/窗口比较剩余比例与阈值，同一重置周期只提醒一次，去重记录随状态 JSON 持久化，旧状态缺少该字段时回退为空记录；平台未提供重置时间时改用跌破阈值的边沿去重，剩余比例缺失不触发。设置页新增“发送测试通知”入口并更新状态说明。Rust 单元测试 33 项通过，TypeScript 检查通过；真实系统通知展示仍需用户在 macOS 上实测。
 
 本轮验证：Rust 单元测试 28 项通过，TypeScript 检查与前端生产构建通过；使用临时 `CODEX_HOME` 对真实 Codex CLI 0.160.1 验证了 `account/login/start` 返回授权 URL 与 `account/login/cancel`，未打开浏览器、未完成任何真实账户授权。另以真实本机登录态验证 `account/read` 能返回脱敏身份与套餐档位，未记录邮箱原文。`cargo clippy` 因本机未安装该组件未执行，不能记为已通过。真实多账户授权、数据隔离与额度口径仍需用户本人实测。
+
+2026-10-23 已实现 Windows 兼容层：Codex CLI 查找按平台区分 `codex` / `codex.exe` / `.cmd`，补充 npm、pnpm、Volta、Bun、Scoop、nvm-windows、fnm 与官方安装包目录；授权链接改用 `ShellExecuteW`，避免 `cmd /C start` 解析 URL 中的 `&`；数据目录沿用 `app_data_dir()`，Unix 权限位不变，Windows 依赖 `%APPDATA%` 的按用户 ACL；窗口使用系统标题栏，前端按 `get_app_info().platform` 收窄顶部留白。
+
+本轮验证：Windows 10.0.26300 x64 + MSVC 目标，`cargo check --all-targets` 通过，`cargo test` 30 项通过（两个 Python 假 app-server 用例按平台跳过），`tsc --noEmit` 与 `vite build` 通过；真实 `codex.exe` 完成 `initialize` / `account/read` 握手，未登录时返回 `auth-expired`；应用二进制启动后生成 `%APPDATA%\dev.tokenrefill.desktop\state.json` 并写入查询状态；Windows 标题栏留白规则在 Chromium 中验证为 44px → 10px。`cargo clippy` 仍有 1 条既有告警（`apply_login_success` 参数个数），与本次改动无关。MSI/NSIS 安装包、已登录账户查询、实际窗口截图与 Windows 10 具体版本仍未验证；本机 GNU 目标因缺 `dlltool.exe` 无法编译，结论仅对 MSVC 目标成立。
+
+2026-10-23 Windows 产物调整为免安装单文件 exe（`--no-bundle`）与 NSIS 安装器（`--bundles nsis`），不再产出 MSI。本机验证：免安装 exe 10.1 MiB、可正常启动；NSIS 安装器 2.48 MiB。CI 的 `build-windows` job 用 `tauri-action` 创建 draft Release 并上传安装器，再用 `softprops/action-gh-release@v3` 追加免安装 exe；workflow 通过 actionlint，尚未在 GitHub Actions 实际运行。安装、卸载与升级验收仍未完成。
+
+2026-10-23 实现版本检查：新增 `check_for_update` 命令（Rust 侧用 ureq + rustls 请求 GitHub Releases `/releases/latest`，8 秒超时，semver 比较），设置页新增“版本”区块，自动查询并在有新版本时提供“前往下载”；只检查，不下载、不安装。验证：5 项单元测试覆盖版本比较、预发布/草稿与异常 tag；真实接口在无正式版本时返回 404 并映射为“发布仓库暂无正式版本”；临时指向其他公开仓库验证了“发现新版本”界面与按钮（已还原）。`cargo test` 52 项通过，`tsc --noEmit` 与 `vite build` 通过。

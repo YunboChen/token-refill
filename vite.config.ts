@@ -6,11 +6,14 @@ export default defineConfig({
   clearScreen: false,
   server: {
     host: '127.0.0.1',
-    port: 1420,
+    // Windows 可能把 1024–5000 中的一段划给 Hyper-V/WinNAT 预留端口，
+    // 落在预留区间时监听会直接报 EACCES。这里改用 Vite 常用端口，
+    // 同时与 tauri.conf.json 的 devUrl、devCsp 保持一致。
+    port: 5173,
     strictPort: true,
     hmr: {
       host: '127.0.0.1',
-      port: 1421,
+      port: 5174,
     },
     watch: {
       ignored: ['**/src-tauri/**'],

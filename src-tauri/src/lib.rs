@@ -1,7 +1,9 @@
 mod codex;
 mod state;
+mod update;
 
 use std::fs;
+#[cfg(not(target_os = "windows"))]
 use std::process::Command;
 use std::sync::Arc;
 
@@ -142,14 +144,40 @@ fn open_external_url(url: String) -> Result<(), String> {
         return Err("授权链接包含无效字符".to_string());
     }
 
+    open_in_browser(url)
+}
+
+/// Windows 不能走 `cmd /C start`：授权 URL 的查询串含有 `&`，会被 cmd.exe
+/// 当成命令分隔符。直接调用 ShellExecuteW，URL 作为独立参数交给系统。
+#[cfg(target_os = "windows")]
+fn open_in_browser(url: &str) -> Result<(), String> {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let operation: Vec<u16> = "open\0".encode_utf16().collect();
+    let target: Vec<u16> = url.encode_utf16().chain(std::iter::once(0)).collect();
+    // ShellExecuteW 的返回值大于 32 才代表成功，小于等于 32 是错误码。
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            operation.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    } as isize;
+    if result > 32 {
+        Ok(())
+    } else {
+        Err(format!("打开浏览器失败：ShellExecuteW 返回 {result}"))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn open_in_browser(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let mut command = Command::new("open");
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", ""]);
-        command
-    };
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut command = Command::new("xdg-open");
 
@@ -158,6 +186,15 @@ fn open_external_url(url: String) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|err| format!("打开浏览器失败：{err}"))
+}
+
+/// 查询 GitHub Releases 的最新正式版本；只比较版本与返回下载页，不下载文件。
+/// 网络请求是阻塞的，放到专用线程，避免占用 IPC 处理线程。
+#[tauri::command]
+async fn check_for_update() -> Result<update::UpdateStatus, String> {
+    tauri::async_runtime::spawn_blocking(update::check_for_update)
+        .await
+        .map_err(|err| format!("检查更新失败：{err}"))?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -197,7 +234,8 @@ pub fn run() {
             remove_account,
             open_external_url,
             send_test_notification,
-            set_auto_launch
+            set_auto_launch,
+            check_for_update
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Token Refill");

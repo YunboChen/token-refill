@@ -18,6 +18,7 @@
 - [需求文档](./docs/requirements.md)
 - [软件设计文档](./docs/software-design.md)
 - [开发计划文档](./docs/development-plan.md)
+- [Windows 兼容设计](./docs/windows-support.md)
 
 ## 环境准备
 
@@ -25,9 +26,9 @@
 - pnpm 12。
 - Rust 稳定版，包含 Cargo、rustfmt 和 Clippy。
 - macOS：Xcode Command Line Tools，可使用 `xcode-select --install` 安装。
-- Windows 后续开发还需要 MSVC 构建工具及 WebView2，参见 [Tauri 环境要求](https://v2.tauri.app/start/prerequisites/)。当前未在 Windows 上验证。
+- Windows：MSVC 构建工具（Visual Studio Build Tools 的「使用 C++ 的桌面开发」）与 WebView2 运行时，参见 [Tauri 环境要求](https://v2.tauri.app/start/prerequisites/)；Rust 目标使用 `x86_64-pc-windows-msvc`。GNU 目标未验证。
 
-当前 macOS 打包配置最低版本为 12.0，不代表已完成该版本的运行验证。
+macOS 打包配置最低版本为 12.0，Windows 尚未确认最低版本，均不代表已完成对应系统的运行验证。
 
 ## 开发
 
@@ -38,7 +39,7 @@ pnpm tauri dev
 
 桌面应用启动后进入总览页：先展示 Rust 侧缓存（首次为空时显示查询中），随后按设置自动刷新。Codex 需要本机已安装官方 CLI；本机账户沿用 CLI 已有登录态，未安装或未登录时界面会显示对应错误，其他界面仍可用。
 
-在“账户”页可以添加独立账户：应用会为每个账户创建单独的 `CODEX_HOME`，通过 Codex 官方浏览器授权登录。各账户的登录令牌由 Codex CLI 保存在应用数据目录下的独立授权目录中（目录权限 0700），应用不读取、不复制、也不向前端展示令牌；添加独立账户不会修改本机 Codex 的默认登录态。本机账户也会读取当前 CLI 登录的脱敏邮箱与套餐档位，便于确认正在查看的是哪个账号。
+在“账户”页可以添加独立账户：应用会为每个账户创建单独的 `CODEX_HOME`，通过 Codex 官方浏览器授权登录。各账户的登录令牌由 Codex CLI 保存在应用数据目录下的独立授权目录中（macOS/Linux 目录权限 0700，Windows 继承 `%APPDATA%` 的按用户 ACL），应用不读取、不复制、也不向前端展示令牌；添加独立账户不会修改本机 Codex 的默认登录态。本机账户也会读取当前 CLI 登录的脱敏邮箱与套餐档位，便于确认正在查看的是哪个账号。
 
 只预览网页：
 
@@ -46,7 +47,29 @@ pnpm tauri dev
 pnpm dev
 ```
 
-访问 `http://127.0.0.1:1420`。浏览器预览使用内置默认状态，不会调用 Rust 或读取真实额度；设置仅在当前页面内存中生效。
+访问 `http://127.0.0.1:5173`。浏览器预览使用内置默认状态，不会调用 Rust 或读取真实额度；设置仅在当前页面内存中生效。
+
+### Windows 说明
+
+- Codex CLI 查找顺序：`CODEX_BIN` → `PATH` → nvm-windows / fnm 的版本目录 → npm、pnpm、Volta、Bun、Scoop、`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` 等默认安装位置。候选文件为 `codex.exe`、`codex.cmd`、`codex.bat`、`codex.com`，优先原生可执行文件；找不到时设置 `CODEX_BIN` 指向完整路径。
+- 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立账户的 `CODEX_HOME`。
+- 窗口使用系统标题栏，前端按 `get_app_info().platform` 收窄侧栏顶部留白。
+- 授权链接通过 `ShellExecuteW` 交给系统浏览器，不经过 `cmd.exe`，URL 中的 `&` 不会被当作命令分隔符。
+- `src-tauri/tauri.windows.conf.json` 把 Windows 的 `bundle.targets` 收窄为 `["nsis"]`：`pnpm tauri build` 只产出 NSIS 安装器（`-setup.exe`），不再生成 MSI；免安装单文件 exe 用 `pnpm tauri build --no-bundle`。两者尚未做安装与卸载验收。详见 [Windows 兼容设计](./docs/windows-support.md)。
+
+#### Windows 开发排错
+
+- **`EACCES: permission denied 127.0.0.1:5173`**：Hyper-V / WinNAT 会在开机时预留若干 TCP 端口段，落在预留区间的端口无法监听。用 `netsh interface ipv4 show excludedportrange protocol=tcp` 查看本机区间。开发端口在 `vite.config.ts`（`server.port` / `server.hmr.port`）与 `src-tauri/tauri.conf.json`（`build.devUrl`、`app.security.devCsp`）两处，换成空闲端口时需要同时修改。
+- **`error calling dlltool 'dlltool.exe': program not found`**：默认 Rust 工具链是 GNU 目标，缺少 MinGW 组件，`tauri dev` 生成的 `cargo run` 也不会采用 `RUSTUP_TOOLCHAIN` 环境变量（本机实测仍走 GNU）。请改用 MSVC：`rustup default stable-x86_64-pc-windows-msvc`，或只对本仓库生效 `rustup override set stable-x86_64-pc-windows-msvc --path src-tauri`（撤销：`rustup override unset --path src-tauri`）。
+- **添加账户报 `failed to start login server … (os error 10013)`**：Codex CLI 的 OAuth 回调固定监听 `127.0.0.1:1455`（1457 仅在端口被占用时回退），Windows 预留区间覆盖这两个端口时绑定被拒。以管理员身份执行：
+
+  ```powershell
+  net stop winnat
+  netsh int ipv4 add excludedportrange protocol=tcp startport=1455 numberofports=3
+  net start winnat
+  ```
+
+  之后 `netsh interface ipv4 show excludedportrange protocol=tcp` 应出现带 `*` 的 `1455 1457`。这是系统级问题：直接用 `codex login` 也会同样失败，应用会把该错误翻译成这段修复提示；macOS 没有这种预留机制。
 
 ## 检查与构建
 
@@ -107,7 +130,7 @@ public/               浏览器标签图标、Web manifest
 
 ## 发布
 
-打包由 [.github/workflows/release.yml](./.github/workflows/release.yml) 在 GitHub Actions 上完成，当前只产出 macOS 通用包（Apple Silicon + Intel 的 `.dmg`）。
+打包由 [.github/workflows/release.yml](./.github/workflows/release.yml) 在 GitHub Actions 上完成：macOS 通用包（Apple Silicon + Intel 的 `.dmg`），以及 Windows x64 的免安装单文件 exe 与 NSIS 安装器（`-setup.exe`）。Windows 不产出 MSI。
 
 发版步骤：
 
@@ -118,16 +141,15 @@ public/               浏览器标签图标、Web manifest
    cargo check --manifest-path src-tauri/Cargo.toml   # 同步 Cargo.lock
    ```
 
-2. 提交后打 tag 并推送：
+2. 提交并推送到 `main`：
 
    ```sh
-   git tag v0.2.0
-   git push origin v0.2.0
+   git push origin main
    ```
 
-CI 会先跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），再打通用包，成功后把 `.dmg` 挂到一个 **draft Release** 上，确认无误后手动发布。tag 与 `tauri.conf.json` / `package.json` / `Cargo.toml` 任一处版本不一致时构建直接失败，避免出现版本号对不上的安装包。
+`prepare` job 会对比这次推送前后的 `src-tauri/tauri.conf.json` 版本号：**只有版本号变化才继续构建**，版本未变时其余 job 全部跳过，不会重复生成或上传产物。也可以显式发版：推送 `v*` tag，或在 Actions 页面手动触发 `release`（手动触发不比较版本，总是构建）。
 
-也可以在 Actions 页面手动触发 `release`，此时按当前 `tauri.conf.json` 版本创建 `vX.Y.Z` 草稿。
+构建流程：先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS 通用包与 Windows x64 产物：macOS 用 `cargo tauri` + ad-hoc 签名；Windows 用 MSVC 工具链，先跑 `pnpm test:rust`，再用 `--no-bundle` 产出免安装 exe，最后用 `--bundles nsis` 产出安装器。两类产物都挂到同一个 **draft Release**（tag 为 `v<版本号>`），确认无误后手动发布。`tauri.conf.json` / `package.json` / `Cargo.toml` 三处版本不一致时构建直接失败；tag 推送还会校验 tag 与版本号一致。
 
 ### 签名状态
 
@@ -143,7 +165,7 @@ macOS 26 的自适应图标依赖 runner 上的 Xcode 26 `actool`；runner 版�
 
 CI 打包刻意走 `cargo tauri` 而不是 `pnpm tauri`：Node 版 CLI 下 libuv 会把继承来的 fd 0 标记为 close-on-exec，`actool` 启动时 stdin 已关闭，其 helper `ibtoold` 崩溃，`.icon` 就编不出 `Assets.car`（[tauri#15315](https://github.com/tauri-apps/tauri/issues/15315)）。`cargo-tauri` 不经过 libuv，所以正常。上游修复 PR 合并并升级 CLI 后，可以改回 `pnpm tauri` 并删掉 workflow 里的安装步骤。
 
-Windows 暂未进入构建矩阵：`src-tauri/src/codex.rs` 的 `is_executable` 无条件使用 `std::os::unix::fs::PermissionsExt`，Codex CLI 查找也只处理 Unix 路径，Windows 上无法编译。适配后给 workflow 加一条 `windows-latest` 矩阵即可。
+Windows 的免安装 exe 与 NSIS 安装器由 `build-windows` job 用 MSVC 工具链构建。两者都未配置 Authenticode 证书，首次运行会出现 SmartScreen 提示；免安装 exe 依赖系统 WebView2（Win10/11 通常已预装）。接入代码签名证书后可在该 job 补充签名步骤。Windows 包的安装与卸载验收仍未完成。
 
 ## 当前范围
 
@@ -157,12 +179,15 @@ Windows 暂未进入构建矩阵：`src-tauri/src/codex.rs` 的 `is_executable` 
 
 低额度、授权失效与重置提醒已接入系统通知：低额度在剩余比例低于设置阈值时发送，同一重置周期只提醒一次；授权失效只在状态从正常跃迁到失效时提醒一次，重复查询与应用重启都不会重复；重置提醒默认关闭，只有查询结果同时确认旧周期结束和新周期开始时才发送，不根据本地倒计时推断。去重记录随状态持久化，设置页提供测试通知入口。系统通知是否展示仍由系统通知设置控制，桌面端没有应用内授权弹窗。
 
+设置页的“版本”区块会读取 GitHub Releases 的最新正式版本并与当前版本比较：有新版本时显示版本号并提供“前往下载”，点击后用系统浏览器打开发布页；只检查、不下载、不自动安装。应用启动时也会静默检查一次，发现新版本时在总览顶部提示。请求只包含固定 User-Agent，不携带账户或本机数据。同一会话内复用首次结果，手动点击“检查更新”会重新查询；离线、无正式版本或接口限流时会显示对应提示。
+
 尚未实现：
 
 - 百炼 Token Plan、Coding Plan 接入。
 - 独立账户凭证的系统级安全存储（当前依赖 Codex CLI 在隔离目录中维护的授权文件）。
 - 平台限流退避参数、休眠唤醒后的补偿策略。
 - 菜单栏常驻、弹窗定位和窗口焦点策略。
+- 应用内自动下载与安装更新（当前只检查版本并跳转下载页）。
 - 原生 Liquid Glass 与旧系统材质回退。目前没有将 CSS 毛玻璃伪称为系统 Liquid Glass。
 
 前端不应持有账户密钥或在日志中输出凭证。后续平台请求和凭证访问优先放在 Rust / 系统层。

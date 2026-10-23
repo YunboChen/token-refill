@@ -45,9 +45,16 @@
 
 ### 3.1 macOS 首发与后续 Windows
 
-建议将凭证存储、菜单栏或托盘、窗口定位、通知等系统相关能力与额度业务分离；macOS 首发只实现本期实际需要的能力。后续 Windows 替换对应系统实现，不要求为尚未确认的行为预先建立复杂框架。
+系统相关能力（凭证存储、菜单栏或托盘、窗口定位、通知）与额度业务保持分离；macOS 首发只实现本期实际需要的能力，不预先搭建跨平台抽象层。
 
-Windows 不进入本次首发验收。用户已确认 macOS 首版同时支持 Apple Silicon 与 Intel；最低版本和实际验证环境仍待确定。建议分架构构建并分别运行验收，不把交叉编译通过等同于 Intel 运行已验证。
+Windows 兼容层已落地，变化集中在四处，业务状态模型不变：
+
+- Codex CLI 查找按平台区分候选名（`codex` 与 `codex.exe` / `.cmd` / `.bat` / `.com`）、可执行判定与常见安装目录，覆盖 npm、pnpm、Volta、Bun、Scoop、nvm-windows、fnm 及官方安装包。
+- 授权链接在 Windows 上交给 `ShellExecuteW`，避免 `cmd /C start` 把 URL 查询串里的 `&` 当作命令分隔符。
+- 数据继续写入 `app_data_dir()`（Windows 为 `%APPDATA%\<identifier>`）；Unix 权限位保持不变，Windows 依赖该目录的按用户 ACL。
+- 窗口在 Windows 使用系统标题栏；前端读取 `get_app_info().platform` 后收窄侧栏顶部留白。
+
+Windows 安装包与界面运行验收尚未完成，最低 Windows 版本待确定。macOS 仍须分架构构建并分别运行验收，不把交叉编译通过等同于 Intel 运行已验证。详见 [Windows 兼容设计](./windows-support.md)。
 
 ## 4. 平台接入验证
 
@@ -159,18 +166,18 @@ Windows 不进入本次首发验收。用户已确认 macOS 首版同时支持 A
 - 移除账户时明确凭证、缓存与配置各自的删除范围。
 - 遥测、云同步与诊断上报不默认引入；如确有需求，单独讨论数据与授权范围。
 
-首发系统已确定为 macOS，Keychain 仍为后续系统级凭证存储的候选方案。当前 Codex 独立账户由 Codex CLI 在应用数据目录的 `codex-profiles/<accountId>/` 中维护授权文件，目录权限 0700；应用本身不解析或复制令牌。移除账户时删除对应目录，不影响本机默认登录。后续 Windows 需要对应的安全存储与目录权限方案。用户已接受主动导入已有授权的产品方向，但每种来源的具体读取范围、系统权限及续期方式仍需明确，实际读取应由用户主动授权。
+首发系统已确定为 macOS，Keychain 仍为后续系统级凭证存储的候选方案。当前 Codex 独立账户由 Codex CLI 在应用数据目录的 `codex-profiles/<accountId>/` 中维护授权文件，目录权限 0700；应用本身不解析或复制令牌。移除账户时删除对应目录，不影响本机默认登录。Windows 使用同一目录结构，授权目录与状态文件继承 `%APPDATA%\dev.tokenrefill.desktop\` 的按用户 ACL，不额外设置 ACL；若 `APPDATA` 被重定向到权限更宽的目录，本应用不做加固。用户已接受主动导入已有授权的产品方向，但每种来源的具体读取范围、系统权限及续期方式仍需明确，实际读取应由用户主动授权。
 
 ### 6.1 本地持久化方案建议
 
-- 鉴于首版没有历史统计、云同步或复杂检索，已使用 Rust 管理的带版本 JSON 状态文件保存账户元数据、设置、所需最新快照与查询状态，未引入数据库。当前实现为先写临时文件再原子替换，文件权限设为 0600；损坏或版本不兼容时先备份原文件再回到默认状态。
+- 鉴于首版没有历史统计、云同步或复杂检索，已使用 Rust 管理的带版本 JSON 状态文件保存账户元数据、设置、所需最新快照与查询状态，未引入数据库。当前实现为先写临时文件再原子替换，Unix 下文件权限设为 0600（Windows 沿用 `%APPDATA%` 的按用户 ACL）；损坏或版本不兼容时先备份原文件再回到默认状态。
 - 以上数据虽不是凭证，仍包含账户及用量隐私，应位于应用专属数据目录、限制访问、不进入源码目录、共享导出或普通日志。
 - 凭证单独放入 macOS Keychain，后端按账户及授权用途隔离访问；普通状态文件只存后端内部引用，前端不可取得密钥或安全引用。
 - 使用单写入入口与原子替换，防止两个窗口或刷新任务并发覆盖设置；备份与恢复只处理非凭证文件，格式版本不兼容时不直接覆盖旧数据。
 - Keychain 与普通文件不是一个原子事务。添加失败、更新失败或移除失败需要可恢复步骤，不得把写入失败报告为成功，也不能误删其他产品仍使用的凭证。
 - 移除账户时先停止后续查询并使旧任务失效，再清理本应用的数据与适当的自有凭证；不清理源工具配置，不默认触发全局注销。
 - 不保存完整平台原始响应或长期明细来代替字段设计。测试、错误报告和发布材料必须使用明确的合成数据或脱敏内容。
-- 具体 JSON 格式、安全存储库及数据迁移步骤在实现前核实；Windows 后续通过同一安全存储职责边界适配，不把 macOS Keychain API 泄漏到前端。
+- 具体 JSON 格式、安全存储库及数据迁移步骤在实现前核实；Windows 通过同一职责边界适配，不把 macOS Keychain API 泄漏到前端。
 
 ## 7. 交互设计
 
@@ -289,7 +296,7 @@ Windows 不进入本次首发验收。用户已确认 macOS 首版同时支持 A
 
 ## 10. IPC 与平台适配契约草案
 
-下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`cancel_account_login`、`rename_account`、`remove_account`、`open_external_url`。其余仍为计划名称。
+下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`cancel_account_login`、`rename_account`、`remove_account`、`open_external_url`、`check_for_update`。其余仍为计划名称。
 
 ### 10.1 前端命令边界
 
@@ -304,6 +311,7 @@ Windows 不进入本次首发验收。用户已确认 macOS 首版同时支持 A
 | update_preferences | 经校验的设置变更 | 保存常规设置并协调系统操作；系统拒绝通知或自启时如实返回实际状态 | REQ-004、REQ-006、REQ-010 |
 | get_system_permissions / request_notification_permission | 读取状态或用户明确触发的权限请求 | 区分应用设置与系统许可；不在额度查询失败时反复弹出权限申请 | REQ-006、REQ-010 |
 | open_management_window / quit_app | 用户明确操作 | 窗口复用或退出清理，不能把关闭管理窗口等同于退出 | REQ-005、REQ-009 |
+| check_for_update（已实现） | 无敏感输入 | 读取 GitHub Releases 最新正式版本的版本号与发布页地址；只比较与跳转，不下载、不安装 | REQ-012 |
 
 授权输入通道必须按平台实际能力设计；不为方便而把 Keychain 内容或原始响应回传前端。若某平台需要手动输入秘密，应先设计合适的受控输入通道，而不是在普通前端状态或日志中保存。
 

@@ -2,6 +2,8 @@ name: release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
@@ -17,8 +19,79 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # 发布判定：分支推送只有在 tauri.conf.json 的版本号相对推送前发生变化时才构建；
+  # tag 推送与手动触发视为显式发布，直接构建。
+  prepare:
+    name: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      should_build: ${{ steps.decide.outputs.should_build }}
+      version: ${{ steps.decide.outputs.version }}
+      tag: ${{ steps.decide.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Decide whether to build
+        id: decide
+        shell: bash
+        run: |
+          version=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json', 'utf8')).version")
+          tag="v${version}"
+          prev_version=""
+          should_build=false
+          reason=""
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            should_build=true
+            reason="tag push: ${GITHUB_REF_NAME}"
+          elif [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            should_build=true
+            reason="manual dispatch"
+          elif [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            before="${{ github.event.before }}"
+            if [ -n "$before" ] && [ "$before" != "0000000000000000000000000000000000000000" ] \
+              && git cat-file -e "${before}^{commit}" 2>/dev/null; then
+              prev_version=$(git show "${before}:src-tauri/tauri.conf.json" 2>/dev/null \
+                | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version" 2>/dev/null || true)
+            fi
+            if [ -z "$prev_version" ]; then
+              should_build=true
+              reason="no previous version to compare"
+            elif [ "$prev_version" != "$version" ]; then
+              should_build=true
+              reason="version changed: ${prev_version} -> ${version}"
+            else
+              reason="version unchanged: ${version}"
+            fi
+          else
+            reason="unsupported event: ${GITHUB_EVENT_NAME}"
+          fi
+
+          {
+            echo "should_build=${should_build}"
+            echo "version=${version}"
+            echo "tag=${tag}"
+          } >> "${GITHUB_OUTPUT}"
+
+          {
+            echo "### 发布判定"
+            echo ""
+            echo "- 结果：**${should_build}**"
+            echo "- 版本：\`${version}\`"
+            if [ -n "$prev_version" ]; then
+              echo "- 上一版本：\`${prev_version}\`"
+            fi
+            echo "- 原因：${reason}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
   check:
     name: check
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -28,26 +101,31 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
-      # tauri.conf.json 的 version 就是安装包版本；三处版本或 tag 不一致时直接失败，
-      # 避免出现 tag 是 v0.2.0、安装包却仍然自称 0.1.0 的产物。
+      # tauri.conf.json 的 version 就是安装包版本：三处版本必须一致；
+      # tag 推送时还要与 tag 一致，避免安装包与 release 版本不符。
       # Cargo.toml 版本变动会让 Cargo.lock 过期，而下面的检查用的是 --locked，所以一并在这里挡掉。
       - name: Check versions are in sync
-        if: github.ref_type == 'tag'
         shell: bash
         run: |
           conf_version=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json', 'utf8')).version")
           pkg_version=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
           cargo_version=$(awk -F'"' '/^version = /{print $2; exit}' src-tauri/Cargo.toml)
-          tag_version="${GITHUB_REF_NAME#v}"
           for entry in "tauri.conf.json:$conf_version" "package.json:$pkg_version" "Cargo.toml:$cargo_version"; do
-            if [ "${entry#*:}" != "$tag_version" ]; then
-              echo "::error::tag ${GITHUB_REF_NAME} 应为 ${tag_version}，但 ${entry%%:*} 是 ${entry#*:}。请统一三处版本（改完 Cargo.toml 后重新生成 Cargo.lock）再重新打 tag。"
+            if [ "${entry#*:}" != "$conf_version" ]; then
+              echo "::error::${entry%%:*} 的版本是 ${entry#*:}，与 tauri.conf.json 的 ${conf_version} 不一致。请统一三处版本（改完 Cargo.toml 后重新生成 Cargo.lock）。"
               exit 1
             fi
           done
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [ "$conf_version" != "$tag_version" ]; then
+              echo "::error::tag ${GITHUB_REF_NAME} 应为 ${tag_version}，但 tauri.conf.json 是 ${conf_version}。"
+              exit 1
+            fi
+          fi
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -70,7 +148,8 @@ jobs:
 
   build-macos:
     name: build macos (universal)
-    needs: check
+    needs: [prepare, check]
+    if: needs.prepare.outputs.should_build == 'true'
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
@@ -80,7 +159,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
@@ -117,8 +196,73 @@ jobs:
           # 用 cargo tauri 而不是 pnpm tauri，见上面 tauri#15315 的说明。
           tauriScript: cargo tauri
           # tag 推送时沿用该 tag；手动触发时按 app version 生成 vX.Y.Z。
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
-          releaseName: Token Refill v__VERSION__
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseName: Token Refill v${{ needs.prepare.outputs.version }}
           releaseDraft: true
           prerelease: false
           args: --target universal-apple-darwin
+
+  build-windows:
+    name: build windows (x64)
+    needs: [prepare, check]
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # windows-latest 默认就是 stable-x86_64-pc-windows-msvc；
+      # 不要用 GNU 目标（缺 dlltool，且与本项目的 Windows 适配无关）。
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: windows
+
+      - run: pnpm install --frozen-lockfile
+
+      # Windows 专属分支（exe/cmd 查找、ShellExecuteW、10013 映射）只在 Windows 上编译执行；
+      # 这里同时跑方式与 macOS 一致的 --locked 测试。
+      - run: pnpm test:rust
+
+      # 产物一：免安装单文件 exe。--no-bundle 只产出可执行文件，不生成安装器。
+      # 依赖系统 WebView2（Win10/11 通常已预装），数据仍写入 %APPDATA%。
+      - name: Build portable exe
+        shell: pwsh
+        run: |
+          pnpm tauri build --no-bundle
+          $version = "${{ needs.prepare.outputs.version }}"
+          New-Item -ItemType Directory -Force portable | Out-Null
+          Copy-Item "src-tauri/target/release/token-refill.exe" "portable/Token.Refill_${version}_x64.exe"
+
+      # 产物二：NSIS 安装器（.exe）。不含 MSI。
+      # 未配置代码签名证书：两个产物均未签名，首次运行会有 SmartScreen 提示。
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: pnpm tauri
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseName: Token Refill v${{ needs.prepare.outputs.version }}
+          releaseDraft: true
+          prerelease: false
+          args: --bundles nsis
+
+      # 把免安装 exe 追加到同一个 draft Release。tauri-action 只上传它自己构建的安装器。
+      - uses: softprops/action-gh-release@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: Token Refill v${{ needs.prepare.outputs.version }}
+          draft: true
+          prerelease: false
+          files: portable/Token.Refill_${{ needs.prepare.outputs.version }}_x64.exe

@@ -1,6 +1,13 @@
 import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
 import { Info } from '@phosphor-icons/react';
-import { sendTestNotification, type Preferences } from '../lib/desktop';
+import { version as appVersion } from '../../package.json';
+import {
+  checkForUpdate,
+  openExternalUrl,
+  sendTestNotification,
+  type Preferences,
+  type UpdateStatus,
+} from '../lib/desktop';
 import {
   loadTheme,
   saveTheme,
@@ -61,12 +68,18 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
 type TestState = 'idle' | 'sending' | 'sent' | 'error';
 
+type UpdateState = 'idle' | 'checking' | 'done' | 'error';
+
 export default function SettingsPanel() {
   const { state, savePreferences, setAutoLaunch, desktop } = useAppState();
   const [prefs, setPrefs] = useState<Preferences>(state.preferences);
   const [theme, setTheme] = useState<ThemePref>(loadTheme);
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [testState, setTestState] = useState<TestState>('idle');
+  const [updateInfo, setUpdateInfo] = useState<UpdateStatus | null>(null);
+  const [updateState, setUpdateState] = useState<UpdateState>('idle');
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [openingRelease, setOpeningRelease] = useState(false);
   const [autoLaunchBusy, setAutoLaunchBusy] = useState(false);
   const [autoLaunchError, setAutoLaunchError] = useState<string | null>(null);
   const dirty = useRef(false);
@@ -139,6 +152,54 @@ export default function SettingsPanel() {
       () => setTestState('error'),
     );
   }
+
+  // 打开设置页时自动查一次；desktop.ts 有 module 级缓存，
+  // 重复进入设置页不会反复请求 GitHub，失败后下次仍可重试。
+  useEffect(() => {
+    if (desktop) void runUpdateCheck(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desktop]);
+
+  async function runUpdateCheck(force: boolean) {
+    if (!desktop || updateState === 'checking') return;
+    setUpdateState('checking');
+    setUpdateError(null);
+    try {
+      setUpdateInfo(await checkForUpdate(force));
+      setUpdateState('done');
+    } catch (err) {
+      setUpdateError(
+        typeof err === 'string' ? err : '检查更新失败，请稍后重试。',
+      );
+      setUpdateState('error');
+    }
+  }
+
+  async function openReleasePage() {
+    const url = updateInfo?.releaseUrl;
+    if (!url || openingRelease) return;
+    setOpeningRelease(true);
+    try {
+      await openExternalUrl(url);
+    } catch (err) {
+      setUpdateError(typeof err === 'string' ? err : '无法打开下载页。');
+    } finally {
+      setOpeningRelease(false);
+    }
+  }
+
+  const updateStatusText =
+    updateState === 'checking'
+      ? '正在检查 GitHub Releases…'
+      : updateState === 'error'
+        ? (updateError ?? '检查更新失败，请稍后重试。')
+        : updateInfo?.updateAvailable
+          ? `发现新版本 v${updateInfo.latestVersion}${
+              updateInfo.publishedAt ? `（${updateInfo.publishedAt.slice(0, 10)} 发布）` : ''
+            }。只跳转下载页，不会自动安装。`
+          : updateInfo
+            ? `已是最新版本（v${updateInfo.currentVersion}）。`
+            : '检查最新正式版本；只跳转下载页，不自动下载或安装。';
 
   return (
     <section>
@@ -335,6 +396,47 @@ export default function SettingsPanel() {
           </p>
         ) : null}
       </section>
+
+      <h2 id="settings-version" className={styles.groupTitle}>版本</h2>
+      <section className={`${styles.card} ${styles.listCard}`} aria-labelledby="settings-version">
+        <div className={styles.settingRowStatic}>
+          <div className={styles.settingText}>
+            <span className={styles.settingLabel}>当前版本 v{appVersion}</span>
+            <span
+              className={styles.settingHint}
+              role="status"
+              data-danger={updateState === 'error' ? 'true' : undefined}
+            >
+              {updateStatusText}
+            </span>
+          </div>
+          <div className={styles.buttonRow}>
+            {updateInfo?.updateAvailable && updateInfo.releaseUrl ? (
+              <button
+                type="button"
+                className={styles.testButton}
+                data-primary
+                onClick={() => void openReleasePage()}
+                disabled={openingRelease}
+              >
+                {openingRelease ? '打开中…' : '前往下载'}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={styles.testButton}
+              onClick={() => void runUpdateCheck(true)}
+              disabled={!desktop || updateState === 'checking'}
+              title={desktop ? '向 GitHub Releases 查询最新正式版本' : '浏览器预览无法调用 Rust'}
+            >
+              {updateState === 'checking' ? '检查中…' : '检查更新'}
+            </button>
+          </div>
+        </div>
+      </section>
+      <p className={`${styles.settingHint} ${styles.groupNote}`}>
+        检查只读取版本号与发布页地址，不下载文件、不修改本地数据。
+      </p>
     </section>
   );
 }
