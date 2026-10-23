@@ -1,8 +1,9 @@
-import { useState, type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { Gauge, GearSix, Info, UsersThree, type Icon } from '@phosphor-icons/react';
 import { version as appVersion } from '../package.json';
 import logoWordmark from './assets/logo-text.png';
+import { getAppInfo } from './lib/desktop';
 import { useAppState } from './lib/store';
 import OverviewPanel from './panels/OverviewPanel';
 import AccountsPanel from './panels/AccountsPanel';
@@ -47,15 +48,34 @@ const PANELS: {
 
 export default function App() {
   const [active, setActive] = useState<PanelKey>('overview');
+  const [platform, setPlatform] = useState<string | null>(null);
   const { error } = useAppState();
   const desktop = isTauri();
   const current = PANELS.find((panel) => panel.key === active) ?? PANELS[0];
   const activeIndex = Math.max(0, PANELS.findIndex((panel) => panel.key === active));
 
+  // 标题栏形态按平台区分：macOS 是 Overlay（红绿灯浮在内容上），
+  // Windows 用系统标题栏。取不到平台时保持 macOS 布局，浏览器预览不受影响。
+  useEffect(() => {
+    if (!desktop) return;
+    let mounted = true;
+    getAppInfo()
+      .then((info) => {
+        if (mounted) setPlatform(info.platform);
+      })
+      .catch(() => {
+        // 平台信息只影响留白，读取失败时不阻塞界面。
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [desktop]);
+
   return (
-    <div className={styles.app}>
+    <div className={styles.app} data-platform={platform ?? undefined}>
       <aside className={styles.sidebar}>
-        {/* macOS Overlay 标题栏：顶部安全区留给红绿灯，同时作为窗口拖拽区 */}
+        {/* macOS Overlay 标题栏：顶部安全区留给红绿灯，同时作为窗口拖拽区。
+            Windows 用系统标题栏，这段只保留极小的顶部留白。 */}
         <div className={styles.titlebarSafeArea} data-tauri-drag-region aria-hidden="true" />
         <img
           className={styles.wordmark}

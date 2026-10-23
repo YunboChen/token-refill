@@ -18,6 +18,7 @@
 - [需求文档](./docs/requirements.md)
 - [软件设计文档](./docs/software-design.md)
 - [开发计划文档](./docs/development-plan.md)
+- [Windows 兼容设计](./docs/windows-support.md)
 
 ## 环境准备
 
@@ -25,9 +26,9 @@
 - pnpm 12。
 - Rust 稳定版，包含 Cargo、rustfmt 和 Clippy。
 - macOS：Xcode Command Line Tools，可使用 `xcode-select --install` 安装。
-- Windows 后续开发还需要 MSVC 构建工具及 WebView2，参见 [Tauri 环境要求](https://v2.tauri.app/start/prerequisites/)。当前未在 Windows 上验证。
+- Windows：MSVC 构建工具（Visual Studio Build Tools 的「使用 C++ 的桌面开发」）与 WebView2 运行时，参见 [Tauri 环境要求](https://v2.tauri.app/start/prerequisites/)；Rust 目标使用 `x86_64-pc-windows-msvc`。GNU 目标未验证。
 
-当前 macOS 打包配置最低版本为 12.0，不代表已完成该版本的运行验证。
+macOS 打包配置最低版本为 12.0，Windows 尚未确认最低版本，均不代表已完成对应系统的运行验证。
 
 ## 开发
 
@@ -38,7 +39,7 @@ pnpm tauri dev
 
 桌面应用启动后进入总览页：先展示 Rust 侧缓存（首次为空时显示查询中），随后按设置自动刷新。Codex 需要本机已安装官方 CLI；本机账户沿用 CLI 已有登录态，未安装或未登录时界面会显示对应错误，其他界面仍可用。
 
-在“账户”页可以添加独立账户：应用会为每个账户创建单独的 `CODEX_HOME`，通过 Codex 官方浏览器授权登录。各账户的登录令牌由 Codex CLI 保存在应用数据目录下的独立授权目录中（目录权限 0700），应用不读取、不复制、也不向前端展示令牌；添加独立账户不会修改本机 Codex 的默认登录态。本机账户也会读取当前 CLI 登录的脱敏邮箱与套餐档位，便于确认正在查看的是哪个账号。
+在“账户”页可以添加独立账户：应用会为每个账户创建单独的 `CODEX_HOME`，通过 Codex 官方浏览器授权登录。各账户的登录令牌由 Codex CLI 保存在应用数据目录下的独立授权目录中（macOS/Linux 目录权限 0700，Windows 继承 `%APPDATA%` 的按用户 ACL），应用不读取、不复制、也不向前端展示令牌；添加独立账户不会修改本机 Codex 的默认登录态。本机账户也会读取当前 CLI 登录的脱敏邮箱与套餐档位，便于确认正在查看的是哪个账号。
 
 只预览网页：
 
@@ -46,7 +47,29 @@ pnpm tauri dev
 pnpm dev
 ```
 
-访问 `http://127.0.0.1:1420`。浏览器预览使用内置默认状态，不会调用 Rust 或读取真实额度；设置仅在当前页面内存中生效。
+访问 `http://127.0.0.1:5173`。浏览器预览使用内置默认状态，不会调用 Rust 或读取真实额度；设置仅在当前页面内存中生效。
+
+### Windows 说明
+
+- Codex CLI 查找顺序：`CODEX_BIN` → `PATH` → nvm-windows / fnm 的版本目录 → npm、pnpm、Volta、Bun、Scoop、`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` 等默认安装位置。候选文件为 `codex.exe`、`codex.cmd`、`codex.bat`、`codex.com`，优先原生可执行文件；找不到时设置 `CODEX_BIN` 指向完整路径。
+- 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立账户的 `CODEX_HOME`。
+- 窗口使用系统标题栏，前端按 `get_app_info().platform` 收窄侧栏顶部留白。
+- 授权链接通过 `ShellExecuteW` 交给系统浏览器，不经过 `cmd.exe`，URL 中的 `&` 不会被当作命令分隔符。
+- `pnpm tauri build` 在 Windows 上产出 MSI 与 NSIS 安装包；两者尚未做安装与卸载验收。详见 [Windows 兼容设计](./docs/windows-support.md)。
+
+#### Windows 开发排错
+
+- **`EACCES: permission denied 127.0.0.1:5173`**：Hyper-V / WinNAT 会在开机时预留若干 TCP 端口段，落在预留区间的端口无法监听。用 `netsh interface ipv4 show excludedportrange protocol=tcp` 查看本机区间。开发端口在 `vite.config.ts`（`server.port` / `server.hmr.port`）与 `src-tauri/tauri.conf.json`（`build.devUrl`、`app.security.devCsp`）两处，换成空闲端口时需要同时修改。
+- **`error calling dlltool 'dlltool.exe': program not found`**：默认 Rust 工具链是 GNU 目标，缺少 MinGW 组件，`tauri dev` 生成的 `cargo run` 也不会采用 `RUSTUP_TOOLCHAIN` 环境变量（本机实测仍走 GNU）。请改用 MSVC：`rustup default stable-x86_64-pc-windows-msvc`，或只对本仓库生效 `rustup override set stable-x86_64-pc-windows-msvc --path src-tauri`（撤销：`rustup override unset --path src-tauri`）。
+- **添加账户报 `failed to start login server … (os error 10013)`**：Codex CLI 的 OAuth 回调固定监听 `127.0.0.1:1455`（1457 仅在端口被占用时回退），Windows 预留区间覆盖这两个端口时绑定被拒。以管理员身份执行：
+
+  ```powershell
+  net stop winnat
+  netsh int ipv4 add excludedportrange protocol=tcp startport=1455 numberofports=3
+  net start winnat
+  ```
+
+  之后 `netsh interface ipv4 show excludedportrange protocol=tcp` 应出现带 `*` 的 `1455 1457`。这是系统级问题：直接用 `codex login` 也会同样失败，应用会把该错误翻译成这段修复提示；macOS 没有这种预留机制。
 
 ## 检查与构建
 
