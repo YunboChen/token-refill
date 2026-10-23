@@ -3952,7 +3952,9 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-autostart",
  "tauri-plugin-notification",
+ "time",
  "ureq",
+ "url",
  "windows-sys 0.61.2",
 ]
 

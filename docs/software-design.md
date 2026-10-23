@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | 前端界面 | 总览、账户、设置三页；读取统一状态并订阅变更事件 | `src/panels/` |
 | 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences`、账户授权/改名/移除命令与 `app-state-changed`、`account-login-changed` 事件 | `src/lib/desktop.ts`、`src/lib/store.tsx` |
-| 本地后端 | Rust 状态存储、后台刷新调度、Codex 适配器与独立授权目录协调 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs` |
+| 本地后端 | Rust 状态存储、后台刷新调度、Codex 适配器、中转网关密钥额度适配器（`src-tauri/src/quota/`）与独立授权目录协调 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/quota/` |
 | 桌面配置 | 窗口、构建、安全策略及打包配置 | `src-tauri/tauri.conf.json` |
 | 权限声明 | 窗口权限与事件监听权限 | `src-tauri/capabilities/` |
 
@@ -101,6 +101,15 @@ Windows 安装包与界面运行验收尚未完成，最低 Windows 版本待确
 初查对设计的关键约束：Token Plan 个人版资料按 Credits 与订阅月描述；Coding Plan 资料按调用次数及多个窗口描述；Codex 有 app-server 额度协议候选线索，但不能直接视作公开 HTTP API。Token Plan 席位统计还有使用 AccessKey/RAM 的 OpenAPI 线索，适用范围必须验证，不能默认覆盖个人版或 Coding Plan。具体见记录中的来源与限制。
 
 不能使用“所有套餐都是 token 余额”“一个推理 Key 即可查询全部用量”或“所有平台只有一种周期”的固定假设。
+
+### 4.4 中转网关密钥额度适配器
+
+除首批平台外，Rust 侧已按同一原则实现两类只需 API Key 即可查询密钥实时额度的适配器，代码在 `src-tauri/src/quota/`（`newapi.rs`、`sub2api.rs`），尚未接入账户配置与界面：
+
+- **New API**：`GET /api/usage/token/`（Bearer）返回 `total_granted` / `total_used` / `total_available` / `unlimited_quota` / `expires_at`；额度单位为平台内部 quota，用公开接口 `GET /api/status` 的 `data.quota_per_unit` 换算美元，取不到时按上游默认 `500000` 兜底。密钥允许时额外返回 `user_quota`，作为账户额度展示。
+- **Sub2API**：`GET /v1/usage`（Bearer）按 `mode` 返回三种口径：`quota_limited` 为密钥总额度与 5h/1d/7d 限速窗口；`unrestricted` + `subscription` 为日/周/月用量与上限（`remaining = -1` 表示无限额度，日/月重置边界平台不提供，不推算）；`unrestricted` + `balance` 为钱包余额。
+
+两类适配器都只把规范化后的金额、窗口与到期时间交给调用方，密钥仅存在于 Rust 内存，不进入前端状态、日志或错误消息；错误信息不回显响应正文。服务地址仅允许 HTTPS，本机回环地址例外。真实服务端验证仍待用户提供自部署地址后进行。
 
 ## 5. 数据设计待定项
 
