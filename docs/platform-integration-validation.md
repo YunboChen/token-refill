@@ -120,7 +120,7 @@
 
 1. 已完成：用户确认实际使用 Token Plan 个人版、Coding Plan 中国站。优先按这两类验证；不自动承诺团队版、国际站或其他存量套餐兼容。
 2. 取得可访问的官方原文或公开源码，核实候选方法、许可及适用范围；未能访问的项目保留为待验证。
-3. 给三类套餐分别列出允许的查询授权、最小权限、独立账户隔离及续期方式。
+3. 给各套餐分别列出允许的查询授权、最小权限、独立账户隔离及续期方式。
 4. 在单独明确操作授权后，使用用户选择的测试账户验证；不扫描或改写现有工具配置，不保存未脱敏样例。
 5. 对照平台真实显示，验证额度、周期、时间、查询错误与部分数据缺失，再确定字段级 IPC 与持久化设计。
 
@@ -167,3 +167,57 @@
 - Token Plan 与 Coding Plan 同时存在时的账号关系已按“同一账户两个产品”实现；其他套餐组合未验证。
 - 未订阅 Coding Plan 时接口返回空列表，已按数据缺口处理；未订阅 Token Plan 时该接口的返回尚未验证，不能据此断言为零额度。
 - 阿里云登录名（如控制台右上角展示的 `aliyunId`）来自浏览器页面配置或 Cookie，控制台令牌接口不返回该值。应用只在 `nickName` 是真实昵称时展示它，否则回退为脱敏 UID；如需显示完整登录名，需要另行确认是否允许浏览器 Cookie 导入或手动填写。
+
+## 8. 百炼 Token Plan 团队版接入验证（2026-10-23）
+
+本轮在用户本人环境、使用已登录的团队版账号完成协议核实。记录只保留接口名、字段语义与验证结论，不保存令牌、AccessKey、组织 ID、UID 或真实额度数值。
+
+### 8.1 控制台令牌不可用于团队版
+
+团队版订阅页（`bailian.console.aliyun.com/cn-beijing/subscription/token-plan/enterprise`）实际请求：
+
+| 动作 | 网关与参数 |
+| --- | --- |
+| 席位订阅摘要 | `POST https://bailian.console.aliyun.com/data/api.json?action=GetSeatSubscriptionSummary&product=BssOpenAPI-V3`，`params = { ProductCode: "sfm_tokenplanteams_dp_cn" }` |
+| 订阅摘要 | 同上，`action=GetSubscriptionSummary` |
+| 组织与席位明细 | `action=GetOrganization` / `GetSubscriptionSeatDetails&product=ModelStudio` |
+| 共享包明细 | `action=PageQuerySubscriptionPackDetail&product=ModelStudio` |
+| 自动续费检查 | `action=CheckTokenPlanAutoRenewal&product=BssOpenApi` |
+
+这些请求的表单体都带 `sec_token`、`collina`（控制台风控指纹）与 `umid`，依赖浏览器 Cookie 会话，而不是 `Authorization: Bearer`。
+
+验证方法：通过官方 `console-login?notice=127.0.0.1:<port>?state=<state>` 回环流程取得一个真实控制台令牌，再用 `Authorization: Bearer <token>` 调用 `data/api.json?action=GetSubscriptionSummary&product=BssOpenAPI-V3`。响应为：
+
+```
+successResponse = false
+code = ConsoleNeedLogin
+message = 请登录
+```
+
+结论：控制台令牌（CLI 授权用）不能访问团队版 BSS/ModelStudio 控制台动作；应用不能复用现有百炼浏览器授权，也不能复制 `sec_token` / `collina` / Cookie。
+
+### 8.2 采用的接入路径
+
+官方为团队版提供 AccessKey 签名的 OpenAPI：
+
+- `GET https://modelstudio.cn-beijing.aliyuncs.com/tokenplan/subscription/stats`
+- 动作 `GetSubscriptionStats`，版本 `2026-02-10`
+- 签名算法 `ACS3-HMAC-SHA256`；请求头包含 `host`、`x-acs-action`、`x-acs-content-sha256`、`x-acs-date`、`x-acs-signature-nonce`、`x-acs-version` 与 `Authorization`
+- 不支持 `Authorization: Bearer {API_KEY}`；建议为 RAM 用户授予 `AliyunTokenPlanReadOnlyAccess`
+
+响应字段（应用口径）：
+
+| 字段 | 语义 | 应用展示 |
+| --- | --- | --- |
+| `SubscriptionStartTime` / `SubscriptionEndTime` | 订阅起止（Unix 毫秒） | 仅在数据缺口中提及到期时间 |
+| `Items[].SeatType` | `standard` / `pro` / `max` | 标准坐席 / 高级坐席 / 尊享坐席 |
+| `Items[].TotalSeats` / `AssignedSeats` | 席位总数与已分配数 | 拼进窗口名称 |
+| `Items[].SeatCredits` / `SeatRemainingCredits` | 该席位类型的 Credits 总量与剩余量 | 绝对值展示，已用与比例由两者派生 |
+| `Items[].SeatRefreshTime` | 本周期刷新时间（Unix 毫秒） | 重置时间 |
+
+### 8.3 仍未验证
+
+- 尚未用真实企业版 AccessKey 完成一次端到端读取；签名实现已与独立计算出的固定向量比对，并通过本地模拟网关测试。
+- 共享用量包（`ListSubscriptionSharedPackages`）、席位明细（`GetSubscriptionSeatDetails`）与成员级用量未纳入首版展示。
+- AccessKey 的权限边界、轮换流程与限流行为需要按实际企业账号确认；当前把 `InvalidAccessKeyId` / `SignatureDoesNotMatch` 视为需要重新授权，把 `Forbidden` / `NoPermission` 视为权限不足。
+- 团队版只对所有者与管理员可见全量用量；被分配席位的成员无法在自己账号下查询。

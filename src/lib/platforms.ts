@@ -35,10 +35,18 @@ const PLATFORMS: Record<string, PlatformMeta> = {
     description: 'Token Plan 个人版 · Coding Plan 中国站',
     available: true,
   },
+  'bailian-team': {
+    key: 'bailian-team',
+    name: '百炼团队版',
+    vendor: '阿里云',
+    mark: '百',
+    description: 'Token Plan 团队版 · AccessKey 只读查询',
+    available: true,
+  },
 };
 
 /** 已知平台的固定展示顺序；未知平台按名称排在最后。 */
-const PLATFORM_ORDER = ['codex', 'bailian'];
+const PLATFORM_ORDER = ['codex', 'bailian', 'bailian-team'];
 
 export function platformMeta(platform: string): PlatformMeta {
   return (

@@ -27,7 +27,8 @@ function windowLabel(mins: number | null, name: string | null = null): string {
 
 function amountLabel(window: QuotaWindow): string | null {
   if (window.usedAmount === null || window.totalAmount === null) return null;
-  const unit = window.unit === 'calls' ? '次' : window.unit;
+  const unit =
+    window.unit === 'calls' ? '次' : window.unit === 'credits' ? 'Credits' : window.unit;
   return `已用 ${window.usedAmount} / ${window.totalAmount} ${unit}`;
 }
 
@@ -307,6 +308,8 @@ function AccountCard({
             ) : null}
             {account.platform === 'bailian' ? (
               <span>百炼控制台授权</span>
+            ) : account.platform === 'bailian-team' ? (
+              <span>AccessKey 只读查询</span>
             ) : account.source === 'managed' ? (
               <span>独立授权</span>
             ) : (

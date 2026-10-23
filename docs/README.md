@@ -11,7 +11,7 @@
 | [开发计划文档](./development-plan.md) | 跟踪阶段、任务、依赖、验证方式与交付条件 |
 | [macOS 发布参考](./macos-release-reference.md) | devup 双架构打包、ad-hoc 签名及公证预留的核实结果 |
 | [Windows 兼容设计](./windows-support.md) | CLI 查找、子进程、数据目录、权限、标题栏与打包的 Windows 适配及验证记录 |
-| [平台接入可行性记录](./platform-integration-validation.md) | 三类套餐的资料证据、计量差异、授权未决项及验证清单 |
+| [平台接入可行性记录](./platform-integration-validation.md) | 各套餐的资料证据、计量差异、授权未决项及验证清单 |
 
 ## 协作规则
 
@@ -38,11 +38,12 @@
 - 已确认：macOS 首版同时支持 Apple Silicon 与 Intel，签名公证先参考 devup。
 - 已核实：devup 当前工作流按架构构建、默认 ad-hoc 签名且未启用公证，正式签名公证只是预留路径；详见发布参考文档。
 - 已确认：Apple Silicon、Intel 分别提供 DMG，ad-hoc 签名暂不公证并说明安装限制，正式签名公证后续升级。
-- 已完成：三个套餐的接入核实（含百炼控制台网关与登录回调）；最低系统版本、发布渠道及双架构验证条件待进一步确定。
+- 已完成：各套餐的接入核实（含百炼控制台网关、登录回调与团队版 OpenAPI）；最低系统版本、发布渠道及双架构验证条件待进一步确定。
 - 已实现：Codex 订阅垂直链路（Rust 适配器 + 假 app-server 端到端测试通过）；用户本机运行的应用已返回真实快照，剩余/已用口径仍待与客户端对照，文档不记录额度值。
 - 已实现：Rust 侧统一状态层（账户、套餐、额度快照、查询状态、偏好）、缓存优先读取、后台自动刷新（默认 5 分钟可调）、手动刷新去重与失败保留上次成功数据；前端通过 `get_app_state` 读取状态并订阅 `app-state-changed` 事件。
 - 已接入：总览页按账户展示缓存/查询中/失败组合状态；账户页支持添加独立授权账户、取消授权、改名、重新授权与移除；设置页刷新间隔与提醒阈值写入 Rust 状态。
 - 已实现：Codex 多账户。每账户使用独立 `CODEX_HOME` 与官方 `account/login/start` 浏览器授权，登录令牌由 Codex CLI 保存在隔离目录，应用不读取或复制本机默认凭证。
+- 已实现：百炼 Token Plan 团队版。控制台令牌无法访问团队版接口（实测 `ConsoleNeedLogin`），应用改用 AccessKey 签名的 OpenAPI `GetSubscriptionStats`，按席位类型展示 Credits 总量、剩余量、席位分配与刷新时间；AccessKey 只写入应用私有目录。
 - 已实现：百炼 Token Plan 个人版与 Coding Plan 中国站。应用在 `127.0.0.1` 回环地址接收官方控制台登录回传的令牌并存入私有目录，直接调用控制台网关读取额度；不依赖 `bl` CLI，也不读取其配置。同一账户下两类套餐作为两个产品展示，Token Plan 为订阅月比例，Coding Plan 保留调用次数与三个窗口。
 - 已实现：Windows 兼容层。按平台查找 `codex.exe` / `codex.cmd` 及常见安装目录，授权链接改用 `ShellExecuteW`，数据目录沿用 `%APPDATA%`，标题栏按平台留白；Windows 本机构建、单元测试、真实 CLI 握手与启动验证通过，详见 [Windows 兼容设计](./windows-support.md)。
 - 已实现：版本检查。设置页读取 GitHub Releases 最新正式版本并与当前版本比较，有新版本时提供发布页跳转；只检查、不下载、不自动安装，同一会话复用结果。

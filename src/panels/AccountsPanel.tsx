@@ -28,7 +28,7 @@ const AUTH_LABELS: Record<AuthState, string> = {
   'needs-reauth': '需要重新授权',
 };
 
-type DialogPlatform = 'codex' | 'bailian';
+type DialogPlatform = 'codex' | 'bailian' | 'bailian-team';
 
 const PLATFORM_CHOICES: {
   key: DialogPlatform;
@@ -48,10 +48,17 @@ const PLATFORM_CHOICES: {
     hint: 'Token Plan · Coding Plan · 阿里云控制台',
     note: '接下来会打开阿里云百炼控制台登录页。登录成功后，控制台会话令牌会通过本机回环地址直接交给应用，不经过前端，也不会写入外部工具的配置。',
   },
+  {
+    key: 'bailian-team',
+    name: '百炼团队版',
+    hint: 'Token Plan 团队版 · AccessKey',
+    note: '团队版额度只能通过阿里云 OpenAPI 读取，需要一对只读 AccessKey。建议单独创建 RAM 用户并只授予 AliyunTokenPlanReadOnlyAccess；AccessKey 只写入应用私有目录，不进入状态文件、事件或日志。',
+  },
 ];
 
 type DialogState =
   | { kind: 'add-form'; platform: DialogPlatform }
+  | { kind: 'team-reauth'; accountId: string; displayName: string }
   | {
       kind: 'login';
       platform: DialogPlatform;
@@ -68,6 +75,11 @@ function checkedAtLabel(epoch: number | null): string {
     minute: '2-digit',
     second: '2-digit',
   })}`;
+}
+
+/** 已知平台映射到对话框；未知平台按 Codex 处理，与分组顺序一致。 */
+function toDialogPlatform(platform: string): DialogPlatform {
+  return platform === 'bailian' || platform === 'bailian-team' ? platform : 'codex';
 }
 
 function planTierLabel(tier: string): string {
@@ -90,6 +102,8 @@ export default function AccountsPanel() {
     refresh,
     beginLogin,
     beginBailianLogin,
+    addBailianTeamAccount,
+    updateBailianTeamCredentials,
     cancelLogin,
     renameAccount,
     removeAccount,
@@ -97,6 +111,9 @@ export default function AccountsPanel() {
   } = useAppState();
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [draftName, setDraftName] = useState('');
+  const [accessKeyId, setAccessKeyId] = useState('');
+  const [accessKeySecret, setAccessKeySecret] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [renaming, setRenaming] = useState<{ accountId: string; value: string } | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -136,7 +153,40 @@ export default function AccountsPanel() {
     };
   }, [desktop]);
 
+  /**
+   * 提交团队版 AccessKey。`reauthAccountId` 为空时新增账户，否则替换原账户凭证。
+   * Secret 在提交后立即从组件状态清空，不保留到下一次渲染之后。
+   */
+  const submitTeamCredentials = async (reauthAccountId: string | null) => {
+    if (starting) return;
+    const id = accessKeyId.trim();
+    const secret = accessKeySecret.trim();
+    if (!id || !secret) {
+      setFormError('请填写 AccessKey ID 与 AccessKey Secret。');
+      return;
+    }
+    setFormError(null);
+    setStarting(true);
+    const error = reauthAccountId
+      ? await updateBailianTeamCredentials(reauthAccountId, id, secret)
+      : await addBailianTeamAccount(id, secret, draftName.trim() || undefined);
+    setStarting(false);
+    setAccessKeySecret('');
+    if (error) {
+      setFormError(error);
+      return;
+    }
+    setAccessKeyId('');
+    setDraftName('');
+    setDialog(null);
+  };
+
   const startAdd = async (platform: DialogPlatform) => {
+    if (starting) return;
+    if (platform === 'bailian-team') {
+      await submitTeamCredentials(null);
+      return;
+    }
     setStarting(true);
     const name = draftName.trim() || undefined;
     const start =
@@ -160,6 +210,17 @@ export default function AccountsPanel() {
   };
 
   const startReauth = async (account: AccountState) => {
+    if (account.platform === 'bailian-team') {
+      setAccessKeyId('');
+      setAccessKeySecret('');
+      setFormError(null);
+      setDialog({
+        kind: 'team-reauth',
+        accountId: account.accountId,
+        displayName: account.displayName,
+      });
+      return;
+    }
     const platform: DialogPlatform = account.platform === 'bailian' ? 'bailian' : 'codex';
     const start =
       platform === 'bailian'
@@ -181,6 +242,10 @@ export default function AccountsPanel() {
     if (dialog?.kind === 'login' && dialog.phase === 'waiting') {
       void cancelLogin(dialog.start.loginId);
     }
+    // 关闭时清掉输入框，避免密钥停留在组件状态里。
+    setAccessKeyId('');
+    setAccessKeySecret('');
+    setFormError(null);
     setDialog(null);
   };
 
@@ -200,11 +265,18 @@ export default function AccountsPanel() {
 
   const openAddDialog = (platform: DialogPlatform = 'codex') => {
     setDraftName('');
+    setAccessKeyId('');
+    setAccessKeySecret('');
+    setFormError(null);
     setDialog({ kind: 'add-form', platform });
   };
 
-  const dialogPlatform =
-    dialog?.kind === 'add-form' ? dialog.platform : dialog?.platform ?? 'codex';
+  const dialogPlatform: DialogPlatform =
+    dialog?.kind === 'add-form'
+      ? dialog.platform
+      : dialog?.kind === 'login'
+        ? dialog.platform
+        : 'codex';
   const choice =
     PLATFORM_CHOICES.find((item) => item.key === dialogPlatform) ?? PLATFORM_CHOICES[0];
 
@@ -248,9 +320,7 @@ export default function AccountsPanel() {
                   <button
                     type="button"
                     className={styles.platformAddButton}
-                    onClick={() =>
-                      openAddDialog(group.platform === 'bailian' ? 'bailian' : 'codex')
-                    }
+                    onClick={() => openAddDialog(toDialogPlatform(group.platform))}
                     disabled={!desktop}
                     title={
                       desktop
@@ -345,9 +415,11 @@ export default function AccountsPanel() {
                   <p className={styles.accountMeta}>
                     {account.platform === 'bailian'
                       ? '控制台授权'
-                      : managed
-                        ? '独立授权'
-                        : '本机登录态'}
+                      : account.platform === 'bailian-team'
+                        ? 'AccessKey 只读'
+                        : managed
+                          ? '独立授权'
+                          : '本机登录态'}
                     {account.identityHint ? ` · ${account.identityHint}` : ''}
                   </p>
                   <div className={styles.planList}>
@@ -510,9 +582,12 @@ export default function AccountsPanel() {
                           className={styles.platformPick}
                           data-active={dialog.platform === item.key || undefined}
                           aria-pressed={dialog.platform === item.key}
-                          onClick={() =>
-                            setDialog({ kind: 'add-form', platform: item.key })
-                          }
+                          onClick={() => {
+                            setAccessKeyId('');
+                            setAccessKeySecret('');
+                            setFormError(null);
+                            setDialog({ kind: 'add-form', platform: item.key });
+                          }}
                         >
                           <span className={styles.platformPickName}>{item.name}</span>
                           <span className={styles.platformPickHint}>{item.hint}</span>
@@ -520,42 +595,139 @@ export default function AccountsPanel() {
                       ))}
                     </div>
                     <p className={styles.usageNote}>{choice.note}</p>
-                    <label className={styles.field}>
-                      <span className={styles.fieldLabel}>账户名称（可选）</span>
-                      <input
-                        className={styles.textInput}
-                        value={draftName}
-                        onChange={(event) => setDraftName(event.target.value)}
-                        placeholder={
-                          dialog.platform === 'bailian'
-                            ? '留空则显示为“百炼账户”'
-                            : '留空则使用授权后的脱敏邮箱'
-                        }
-                        maxLength={60}
-                        autoFocus
-                      />
-                    </label>
-                    <div className={styles.dialogActions}>
-                      <button
-                        type="button"
-                        className={styles.buttonGhost}
-                        onClick={() => setDialog(null)}
-                      >
-                        取消
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.button}
-                        onClick={() => void startAdd(dialog.platform)}
-                        disabled={starting}
-                      >
-                        {starting
-                          ? '正在启动…'
-                          : dialog.platform === 'bailian'
-                            ? '前往阿里云授权'
-                            : '前往浏览器授权'}
-                      </button>
-                    </div>
+                    <form
+                      className={styles.dialogForm}
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void startAdd(dialog.platform);
+                      }}
+                    >
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabel}>账户名称（可选）</span>
+                        <input
+                          className={styles.textInput}
+                          value={draftName}
+                          onChange={(event) => setDraftName(event.target.value)}
+                          placeholder={
+                            dialog.platform === 'bailian'
+                              ? '留空则显示为“百炼账户”'
+                              : dialog.platform === 'bailian-team'
+                                ? '留空则显示为“百炼团队版账户”'
+                                : '留空则使用授权后的脱敏邮箱'
+                          }
+                          maxLength={60}
+                          autoFocus={dialog.platform !== 'bailian-team'}
+                        />
+                      </label>
+                      {dialog.platform === 'bailian-team' ? (
+                        <>
+                          <label className={styles.field}>
+                            <span className={styles.fieldLabel}>AccessKey ID</span>
+                            <input
+                              className={styles.textInput}
+                              value={accessKeyId}
+                              onChange={(event) => setAccessKeyId(event.target.value)}
+                              placeholder="LTAI…"
+                              autoComplete="off"
+                              spellCheck={false}
+                              maxLength={128}
+                              autoFocus
+                            />
+                          </label>
+                          <label className={styles.field}>
+                            <span className={styles.fieldLabel}>AccessKey Secret</span>
+                            <input
+                              className={styles.textInput}
+                              type="password"
+                              value={accessKeySecret}
+                              onChange={(event) => setAccessKeySecret(event.target.value)}
+                              placeholder="仅用于本机签名请求"
+                              autoComplete="off"
+                              spellCheck={false}
+                              maxLength={256}
+                            />
+                          </label>
+                        </>
+                      ) : null}
+                      {formError ? (
+                        <p className={styles.noticeDanger} role="alert">
+                          {formError}
+                        </p>
+                      ) : null}
+                      <div className={styles.dialogActions}>
+                        <button
+                          type="button"
+                          className={styles.buttonGhost}
+                          onClick={closeDialog}
+                        >
+                          取消
+                        </button>
+                        <button type="submit" className={styles.button} disabled={starting}>
+                          {starting
+                            ? '正在接入…'
+                            : dialog.platform === 'bailian-team'
+                              ? '接入团队版'
+                              : dialog.platform === 'bailian'
+                                ? '前往阿里云授权'
+                                : '前往浏览器授权'}
+                        </button>
+                      </div>
+                    </form>
+                  </>
+                ) : dialog.kind === 'team-reauth' ? (
+                  <>
+                    <h2 id="account-dialog-title">重新输入 AccessKey</h2>
+                    <p className={styles.usageNote}>
+                      为「{dialog.displayName}」提供新的只读 AccessKey。保存成功后旧凭证会被替换；
+                      建议使用只授予 AliyunTokenPlanReadOnlyAccess 的 RAM 用户。
+                    </p>
+                    <form
+                      className={styles.dialogForm}
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void submitTeamCredentials(dialog.accountId);
+                      }}
+                    >
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabel}>AccessKey ID</span>
+                        <input
+                          className={styles.textInput}
+                          value={accessKeyId}
+                          onChange={(event) => setAccessKeyId(event.target.value)}
+                          placeholder="LTAI…"
+                          autoComplete="off"
+                          spellCheck={false}
+                          maxLength={128}
+                          autoFocus
+                        />
+                      </label>
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabel}>AccessKey Secret</span>
+                        <input
+                          className={styles.textInput}
+                          type="password"
+                          value={accessKeySecret}
+                          onChange={(event) => setAccessKeySecret(event.target.value)}
+                          placeholder="仅用于本机签名请求"
+                          autoComplete="off"
+                          spellCheck={false}
+                          maxLength={256}
+                        />
+                      </label>
+                      {formError ? (
+                        <p className={styles.noticeDanger} role="alert">
+                          {formError}
+                        </p>
+                      ) : null}
+                      <div className={styles.dialogActions}>
+                        <button type="button" className={styles.buttonGhost} onClick={closeDialog}>
+                          取消
+                        </button>
+                        <button type="submit" className={styles.button} disabled={starting}>
+                          {starting ? '正在保存…' : '保存并刷新'}
+                        </button>
+                      </div>
+                    </form>
                   </>
                 ) : (
                   <>

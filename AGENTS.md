@@ -10,13 +10,14 @@
 - 应用标识 `dev.tokenrefill.desktop`；数据目录由 Tauri `app_data_dir()` 决定：
   - macOS `~/Library/Application Support/dev.tokenrefill.desktop/`
   - Windows `%APPDATA%\dev.tokenrefill.desktop\`
-  - 目录内：`state.json`（设置、账户、额度快照、提醒去重）与 `codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）。
-- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、系统提醒、开机自启、版本检查。
-- 尚未实现：百炼 Token Plan / Coding Plan、菜单栏常驻、系统级凭证存储、应用内自动下载安装更新。
+  - 目录内：`state.json`（设置、账户、额度快照、提醒去重）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`bailian-profiles/<accountId>/`（百炼控制台令牌）与 `bailian-team-profiles/<accountId>/`（百炼团队版 AccessKey）。
+- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 Token Plan 个人版 / Coding Plan 中国站、百炼 Token Plan 团队版（AccessKey OpenAPI）、系统提醒、开机自启、版本检查。
+- 尚未实现：菜单栏常驻、系统级凭证存储、应用内自动下载安装更新。
 
 ## 2. 数据与凭证边界
 
 - 任何令牌、Cookie、密钥、邮箱原文都不得进入前端状态、日志、错误消息、测试样例或提交内容。
+- 唯一例外（用户已确认）：百炼团队版 AccessKey 可在添加或重新授权时通过前端密码框一次性提交，提交后立即清空输入框；不得写入 `localStorage`、`sessionStorage`、持久化状态、事件或日志，只由 Rust 写入应用私有目录。
 - Codex 只通过官方 CLI 的 `app-server --stdio` JSON-RPC 交互；不解析、不复制、不迁移授权文件，令牌由 Codex CLI 维护在隔离目录。
 - 独立账户必须使用自己的 `CODEX_HOME`；本机账户只沿用本机登录态，不得修改或覆盖它。
 - 移除账户只清理本应用目录，不触发源工具注销，不影响其他账户。
@@ -24,7 +25,7 @@
 
 ## 3. 架构与安全约束
 
-- 网络请求放在 Rust 侧（目前是版本检查的 ureq 请求）；前端不直连第三方接口，不为了方便放宽 CSP 的 `connect-src`。
+- 网络请求放在 Rust 侧（版本检查、百炼额度、团队版 OpenAPI、中转站额度均使用 Rust 侧 ureq）；前端不直连第三方接口，不为了方便放宽 CSP 的 `connect-src`。
 - 不新增 filesystem / shell / http 类 Tauri 插件；**禁止**把任意路径、命令行或 URL 交给系统 shell 拼接执行。
 - `open_external_url` 只接受 `https://`、长度受限且无控制字符的地址；Windows 用 `ShellExecuteW`，不得改回 `cmd /C start`（URL 中的 `&` 会被当作命令分隔符）。
 - capabilities 保持最小：`core:default`、`core:event:default`、`core:window:allow-start-dragging`。新增能力必须说明理由并验证。

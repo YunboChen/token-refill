@@ -22,7 +22,7 @@ type PanelKey = 'overview' | 'accounts' | 'relay' | 'settings';
 
 /* 侧栏底部的说明文案：只在悬浮/聚焦 tip 图标时出现 */
 const LOCAL_ONLY_NOTE =
-  '本地运行。本机账户沿用 Codex CLI 登录态；独立账户通过官方浏览器授权，各自使用隔离的本地授权目录，令牌不在界面中展示。';
+  '本地运行。本机账户沿用 Codex CLI 登录态；独立账户通过官方浏览器授权或只读 AccessKey 接入，各自使用隔离的本地授权目录，凭证不在界面中保留。';
 
 const PANELS: {
   key: PanelKey;

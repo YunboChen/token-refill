@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import {
+  addBailianTeamAccount as addBailianTeamAccountCommand,
   beginAccountLogin,
   beginBailianLogin as beginBailianLoginCommand,
   cancelAccountLogin,
@@ -20,6 +21,7 @@ import {
   removeAccount as removeAccountCommand,
   renameAccount as renameAccountCommand,
   setAutoLaunch as setAutoLaunchCommand,
+  updateBailianTeamCredentials as updateBailianTeamCredentialsCommand,
   updatePreferences,
   type AppState,
   type LoginStart,
@@ -38,6 +40,17 @@ interface AppStateContextValue {
   savePreferences: (preferences: Preferences) => Promise<boolean>;
   beginLogin: (accountId?: string, displayName?: string) => Promise<LoginStart | null>;
   beginBailianLogin: (accountId?: string, displayName?: string) => Promise<LoginStart | null>;
+  /** 返回 null 表示成功，否则为可直接展示的错误信息。 */
+  addBailianTeamAccount: (
+    accessKeyId: string,
+    accessKeySecret: string,
+    displayName?: string,
+  ) => Promise<string | null>;
+  updateBailianTeamCredentials: (
+    accountId: string,
+    accessKeyId: string,
+    accessKeySecret: string,
+  ) => Promise<string | null>;
   cancelLogin: (loginId: string) => Promise<void>;
   renameAccount: (accountId: string, displayName: string) => Promise<boolean>;
   removeAccount: (accountId: string) => Promise<boolean>;
@@ -203,6 +216,48 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [desktop],
   );
 
+  const addBailianTeamAccount = useCallback(
+    async (accessKeyId: string, accessKeySecret: string, displayName?: string) => {
+      if (!desktop) return '浏览器预览无法接入团队版。';
+      try {
+        const next = await addBailianTeamAccountCommand(
+          accessKeyId,
+          accessKeySecret,
+          displayName,
+        );
+        applyState(next);
+        setError(null);
+        return null;
+      } catch (err) {
+        const message = errorMessage(err);
+        setError(message);
+        return message;
+      }
+    },
+    [desktop, applyState],
+  );
+
+  const updateBailianTeamCredentials = useCallback(
+    async (accountId: string, accessKeyId: string, accessKeySecret: string) => {
+      if (!desktop) return '浏览器预览无法修改团队版凭证。';
+      try {
+        const next = await updateBailianTeamCredentialsCommand(
+          accountId,
+          accessKeyId,
+          accessKeySecret,
+        );
+        applyState(next);
+        setError(null);
+        return null;
+      } catch (err) {
+        const message = errorMessage(err);
+        setError(message);
+        return message;
+      }
+    },
+    [desktop, applyState],
+  );
+
   const cancelLogin = useCallback(
     async (loginId: string) => {
       if (!desktop) return;
@@ -286,6 +341,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       savePreferences,
       beginLogin,
       beginBailianLogin,
+      addBailianTeamAccount,
+      updateBailianTeamCredentials,
       cancelLogin,
       renameAccount,
       removeAccount,
@@ -302,6 +359,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       savePreferences,
       beginLogin,
       beginBailianLogin,
+      addBailianTeamAccount,
+      updateBailianTeamCredentials,
       cancelLogin,
       renameAccount,
       removeAccount,

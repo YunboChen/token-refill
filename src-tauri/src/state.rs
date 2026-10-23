@@ -22,6 +22,7 @@ use crate::bailian::{
     self, BailianError, BailianReadout, CodingPlanUsage, CodingPlanWindow, TokenPlanSubscription,
     TokenPlanUsage,
 };
+use crate::bailian_team::{self, TeamUsage};
 use crate::codex::{self, CodexIdentity, CodexUsage, UsageError};
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -31,6 +32,9 @@ pub const DEFAULT_ACCOUNT_ID: &str = "codex-local";
 pub const DEFAULT_PRODUCT_ID: &str = "codex-subscription";
 pub const BAILIAN_TOKEN_PLAN_ID: &str = "bailian-token-plan";
 pub const BAILIAN_CODING_PLAN_ID: &str = "bailian-coding-plan";
+/// 团队版走 AccessKey OpenAPI，与控制台授权的个人版分开建账户。
+pub const BAILIAN_TEAM_PLATFORM: &str = "bailian-team";
+pub const BAILIAN_TEAM_PRODUCT_ID: &str = "bailian-token-plan-team";
 
 /// 与前端设置页的可选项保持一致；后端在这里再次校验，不信任前端传入值。
 pub const REFRESH_OPTIONS: [i64; 5] = [1, 5, 15, 30, 60];
@@ -43,6 +47,7 @@ const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 const DISPLAY_NAME_MAX_CHARS: usize = 60;
 const PROFILES_DIR_NAME: &str = "codex-profiles";
 const BAILIAN_PROFILES_DIR_NAME: &str = "bailian-profiles";
+const BAILIAN_TEAM_PROFILES_DIR_NAME: &str = "bailian-team-profiles";
 static ACCOUNT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 // ---------- 脱敏状态模型 ----------
@@ -392,13 +397,17 @@ fn is_bailian_product(product: &ProductState) -> bool {
     )
 }
 
+fn is_bailian_team_product(product: &ProductState) -> bool {
+    product.kind == BAILIAN_TEAM_PRODUCT_ID
+}
+
 /// 调度与提醒需要覆盖所有已接入的产品；未识别平台不参与自动刷新。
 fn is_refreshable_product(product: &ProductState) -> bool {
-    is_codex_product(product) || is_bailian_product(product)
+    is_codex_product(product) || is_bailian_product(product) || is_bailian_team_product(product)
 }
 
 fn is_supported_platform(platform: &str) -> bool {
-    matches!(platform, "codex" | "bailian")
+    matches!(platform, "codex" | "bailian" | BAILIAN_TEAM_PLATFORM)
 }
 
 fn bailian_products() -> Vec<ProductState> {
@@ -422,6 +431,18 @@ fn bailian_products() -> Vec<ProductState> {
             query: QueryState::default(),
         },
     ]
+}
+
+fn bailian_team_products() -> Vec<ProductState> {
+    vec![ProductState {
+        product_id: BAILIAN_TEAM_PRODUCT_ID.to_string(),
+        kind: BAILIAN_TEAM_PRODUCT_ID.to_string(),
+        display_name: "Token Plan 团队版".to_string(),
+        plan_tier: Some("团队版".to_string()),
+        active: None,
+        snapshot: None,
+        query: QueryState::default(),
+    }]
 }
 
 fn clamp_percent(value: i64) -> i64 {
@@ -550,6 +571,129 @@ fn coding_plan_snapshot(usage: &CodingPlanUsage, checked_at: i64) -> QuotaSnapsh
             windows,
         }],
         capability_gaps,
+    }
+}
+
+fn seat_type_label(seat_type: &str) -> &str {
+    match seat_type {
+        "standard" => "标准坐席",
+        "pro" => "高级坐席",
+        "max" => "尊享坐席",
+        other => other,
+    }
+}
+
+/// 团队版额度按席位类型分组返回 Credits 总量与剩余量；比例由两者派生，
+/// 平台没有提供百分比字段。没有订阅时返回空分组，由前端展示为数据缺口。
+fn team_snapshot(usage: &TeamUsage, checked_at: i64) -> QuotaSnapshot {
+    if !usage.found && usage.seats.is_empty() {
+        return QuotaSnapshot {
+            checked_at_epoch: checked_at,
+            groups: Vec::new(),
+            capability_gaps: vec!["未找到有效的 Token Plan 团队版订阅".to_string()],
+        };
+    }
+
+    let mut capability_gaps = Vec::new();
+    let mut windows = Vec::new();
+    for seat in &usage.seats {
+        let total = seat.total_credits.filter(|total| *total > 0);
+        let remaining = seat.remaining_credits;
+        let used = match (total, remaining) {
+            (Some(total), Some(remaining)) => Some((total - remaining).max(0)),
+            _ => None,
+        };
+        let used_percent = match (used, total) {
+            (Some(used), Some(total)) if total > 0 => Some(clamp_percent(
+                ((used as f64 / total as f64) * 100.0).round() as i64,
+            )),
+            _ => None,
+        };
+        if total.is_none() || remaining.is_none() {
+            capability_gaps.push(format!(
+                "平台未返回{}的完整 Credits 额度",
+                seat_type_label(&seat.seat_type)
+            ));
+        }
+        if seat.resets_at_epoch.is_none() {
+            capability_gaps.push(format!(
+                "平台未返回{}的刷新时间",
+                seat_type_label(&seat.seat_type)
+            ));
+        }
+        let label = match (seat.assigned_seats, seat.total_seats) {
+            (Some(assigned), Some(total)) => format!(
+                "{}（已分配 {assigned}/{total} 席）",
+                seat_type_label(&seat.seat_type)
+            ),
+            _ => seat_type_label(&seat.seat_type).to_string(),
+        };
+        windows.push(QuotaWindow {
+            window_id: format!("team-{}", seat.seat_type),
+            source_window_id: seat.seat_type.clone(),
+            window_name: Some(label),
+            unit: "credits".to_string(),
+            used_percent,
+            remaining_percent: used_percent.map(|used| clamp_percent(100 - used)),
+            used_amount: used,
+            total_amount: total,
+            window_duration_mins: None,
+            resets_at_epoch: seat.resets_at_epoch,
+        });
+    }
+    if windows.is_empty() {
+        capability_gaps.push("平台未返回席位额度明细".to_string());
+    }
+    if usage.end_at_epoch.is_none() {
+        capability_gaps.push("平台未返回团队版订阅到期时间".to_string());
+    }
+
+    QuotaSnapshot {
+        checked_at_epoch: checked_at,
+        groups: vec![QuotaGroup {
+            limit_id: Some("token-plan-team".to_string()),
+            limit_name: Some("团队版额度".to_string()),
+            plan_type: None,
+            windows,
+        }],
+        capability_gaps,
+    }
+}
+
+/// 把一次团队版查询结果写入对应产品；授权失败时标记账户需要重新输入 AccessKey。
+fn apply_bailian_team_readout(
+    state: &mut PersistedState,
+    account_id: &str,
+    result: &Result<TeamUsage, BailianError>,
+    now: i64,
+) {
+    let Some(account) = account_mut(state, account_id) else {
+        return;
+    };
+    for product in account
+        .products
+        .iter_mut()
+        .filter(|product| is_bailian_team_product(product))
+    {
+        product.query.refreshing = false;
+        product.query.last_attempt_epoch = Some(now);
+        match result {
+            Ok(usage) => {
+                product.active = Some(usage.found || !usage.seats.is_empty());
+                product.snapshot = Some(team_snapshot(usage, now));
+                product.query.last_error = None;
+                account.auth_state = AuthState::Ok;
+            }
+            Err(error) => {
+                if error.is_auth_error() {
+                    account.auth_state = AuthState::NeedsReauth;
+                }
+                product.query.last_error = Some(QueryError {
+                    code: error.code.clone(),
+                    message: error.message.clone(),
+                });
+            }
+        }
     }
 }
 
@@ -1213,6 +1357,7 @@ pub struct StateStore {
     path: PathBuf,
     profiles_dir: PathBuf,
     bailian_dir: PathBuf,
+    bailian_team_dir: PathBuf,
     app: AppHandle,
     in_flight: Mutex<HashSet<String>>,
     logins: Mutex<HashMap<String, PendingLogin>>,
@@ -1229,11 +1374,15 @@ impl StateStore {
         let bailian_dir = parent
             .map(|parent| parent.join(BAILIAN_PROFILES_DIR_NAME))
             .unwrap_or_else(|| PathBuf::from(BAILIAN_PROFILES_DIR_NAME));
+        let bailian_team_dir = parent
+            .map(|parent| parent.join(BAILIAN_TEAM_PROFILES_DIR_NAME))
+            .unwrap_or_else(|| PathBuf::from(BAILIAN_TEAM_PROFILES_DIR_NAME));
         Self {
             inner: Mutex::new(state),
             path,
             profiles_dir,
             bailian_dir,
+            bailian_team_dir,
             app,
             in_flight: Mutex::new(HashSet::new()),
             logins: Mutex::new(HashMap::new()),
@@ -1408,6 +1557,100 @@ impl StateStore {
             return None;
         }
         Some(self.bailian_dir.join(account_id))
+    }
+
+    fn private_bailian_team_dir(&self, account_id: &str) -> Option<PathBuf> {
+        if !is_valid_account_id(account_id) {
+            return None;
+        }
+        Some(self.bailian_team_dir.join(account_id))
+    }
+
+    /// 新增团队版账户：AccessKey 先落到独立目录，再写入账户列表并触发首次查询。
+    /// 密钥只经过命令参数，不进入状态、事件或返回值。
+    pub fn add_bailian_team_account(
+        self: &Arc<Self>,
+        access_key_id: String,
+        access_key_secret: String,
+        display_name: Option<String>,
+    ) -> Result<PersistedState, String> {
+        let name = display_name
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "百炼团队版账户".to_string());
+        if name.chars().count() > DISPLAY_NAME_MAX_CHARS {
+            return Err(format!("账户名称不能超过 {DISPLAY_NAME_MAX_CHARS} 个字符"));
+        }
+
+        let account_id = new_account_id("bailian-team");
+        let profile = self
+            .private_bailian_team_dir(&account_id)
+            .ok_or_else(|| "账户标识无效".to_string())?;
+        if let Err(message) =
+            bailian_team::save_credentials(&profile, &access_key_id, &access_key_secret)
+        {
+            let _ = fs::remove_dir_all(&profile);
+            return Err(message);
+        }
+
+        let state = match self.update_strict(|state| {
+            state.accounts.push(AccountState {
+                account_id: account_id.clone(),
+                platform: BAILIAN_TEAM_PLATFORM.to_string(),
+                display_name: name,
+                auth_state: AuthState::Unknown,
+                source: AccountSource::Managed,
+                identity_hint: None,
+                products: bailian_team_products(),
+            });
+        }) {
+            Ok(state) => state,
+            Err(err) => {
+                // 状态落盘失败时不留下没有账户记录的凭证目录。
+                let _ = fs::remove_dir_all(&profile);
+                return Err(err);
+            }
+        };
+        let _ = self.request_refresh(Some(&account_id));
+        Ok(state)
+    }
+
+    /// 重新输入 AccessKey。旧凭证在保存成功后被原子替换。
+    pub fn update_bailian_team_credentials(
+        self: &Arc<Self>,
+        account_id: &str,
+        access_key_id: String,
+        access_key_secret: String,
+    ) -> Result<PersistedState, String> {
+        let state = self.snapshot();
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)
+            .ok_or_else(|| format!("未知账户：{account_id}"))?;
+        if account.platform != BAILIAN_TEAM_PLATFORM {
+            return Err("该账户不是百炼团队版账户。".to_string());
+        }
+        if account.source != AccountSource::Managed {
+            return Err("该百炼团队版账户不能重新授权。".to_string());
+        }
+        let profile = self
+            .private_bailian_team_dir(account_id)
+            .ok_or_else(|| "账户标识无效".to_string())?;
+        bailian_team::save_credentials(&profile, &access_key_id, &access_key_secret)?;
+
+        let state = self.update_strict(|state| {
+            if let Some(account) = account_mut(state, account_id) {
+                account.auth_state = AuthState::Unknown;
+                for product in account.products.iter_mut() {
+                    if is_bailian_team_product(product) {
+                        product.query.last_error = None;
+                    }
+                }
+            }
+        })?;
+        let _ = self.request_refresh(Some(account_id));
+        Ok(state)
     }
 
     /// 发起官方浏览器授权。新账户授权成功后加入列表；重新授权复用原账户记录。
@@ -1768,6 +2011,7 @@ impl StateStore {
         let profile = match account.platform.as_str() {
             "codex" => self.private_profile_dir(account_id),
             "bailian" => self.private_bailian_dir(account_id),
+            BAILIAN_TEAM_PLATFORM => self.private_bailian_team_dir(account_id),
             _ => None,
         }
         .ok_or_else(|| "账户标识无效".to_string())?;
@@ -1824,6 +2068,18 @@ impl StateStore {
             return None;
         }
         self.private_bailian_dir(account_id)
+    }
+
+    fn bailian_team_profile_dir_for(&self, account_id: &str) -> Option<PathBuf> {
+        let state = self.snapshot();
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)?;
+        if account.platform != BAILIAN_TEAM_PLATFORM || account.source != AccountSource::Managed {
+            return None;
+        }
+        self.private_bailian_team_dir(account_id)
     }
 
     /// 手动刷新入口。`account_id` 为空时刷新全部已接入账户；
@@ -1886,6 +2142,7 @@ fn spawn_refresh(store: Arc<StateStore>, account_id: String) {
         match store.account_platform(&account_id).as_deref() {
             Some("codex") => refresh_codex(&store, &account_id),
             Some("bailian") => refresh_bailian(&store, &account_id),
+            Some(BAILIAN_TEAM_PLATFORM) => refresh_bailian_team(&store, &account_id),
             // 账户在排队期间被移除：不发起查询，也不回写旧任务。
             _ => {
                 store.update_soft(|state| clear_refreshing(state, &account_id));
@@ -1980,6 +2237,57 @@ fn refresh_bailian(store: &Arc<StateStore>, account_id: &str) {
     }
     for notice in &reset_notices {
         store.notify_reset(notice);
+    }
+}
+
+fn refresh_bailian_team(store: &Arc<StateStore>, account_id: &str) {
+    let Some(profile) = store.bailian_team_profile_dir_for(account_id) else {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    };
+    let finished_at = epoch_now();
+    let credentials = match bailian_team::load_credentials(&profile) {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            store.update_soft(|state| {
+                apply_bailian_team_readout(state, account_id, &Err(error), finished_at);
+            });
+            return;
+        }
+    };
+    let result = bailian_team::read_usage(&credentials);
+    // 重新授权期间旧凭证的结果可能晚到；凭证已被替换时丢弃本次结果。
+    let credentials_unchanged =
+        bailian_team::load_credentials(&profile).is_ok_and(|current| current == credentials);
+    if !credentials_unchanged || store.has_pending_login(account_id) {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    }
+
+    let mut low_notices = Vec::new();
+    let mut reset_notices = Vec::new();
+    let mut auth_notice = None;
+    store.update_soft(|state| {
+        let was_reauth = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)
+            .map(|account| account.auth_state == AuthState::NeedsReauth)
+            .unwrap_or(true);
+        let previous_resets = window_resets(state, account_id);
+        apply_bailian_team_readout(state, account_id, &result, finished_at);
+        low_notices = low_quota_notices(state, account_id);
+        reset_notices = collect_reset_notices(state, account_id, &previous_resets);
+        auth_notice = auth_expired_notice(state, account_id, was_reauth);
+    });
+    for notice in &low_notices {
+        store.notify_low_quota(notice);
+    }
+    for notice in &reset_notices {
+        store.notify_reset(notice);
+    }
+    if let Some(notice) = auth_notice {
+        store.notify_auth_expired(&notice);
     }
 }
 
@@ -3099,6 +3407,134 @@ mod tests {
         let mut state = default_state();
         state.accounts.push(account);
         apply_bailian_readout(&mut state, "bailian-1", &bailian_readout(), 1_790_000_000);
+        let account = &state.accounts[1];
+        assert!(!is_account_due(account, 5, 1_790_000_100));
+        assert!(is_account_due(account, 5, 1_790_000_400));
+    }
+
+    fn bailian_team_account(id: &str) -> AccountState {
+        AccountState {
+            account_id: id.to_string(),
+            platform: BAILIAN_TEAM_PLATFORM.to_string(),
+            display_name: "团队版测试账户".to_string(),
+            auth_state: AuthState::Unknown,
+            source: AccountSource::Managed,
+            identity_hint: None,
+            products: bailian_team_products(),
+        }
+    }
+
+    fn team_usage() -> TeamUsage {
+        TeamUsage {
+            found: true,
+            start_at_epoch: Some(1_787_637_600),
+            end_at_epoch: Some(1_792_908_000),
+            seats: vec![
+                crate::bailian_team::TeamSeatUsage {
+                    seat_type: "standard".to_string(),
+                    total_seats: Some(2),
+                    assigned_seats: Some(1),
+                    total_credits: Some(25_000),
+                    remaining_credits: Some(18_750),
+                    resets_at_epoch: Some(1_792_908_000),
+                },
+                crate::bailian_team::TeamSeatUsage {
+                    seat_type: "pro".to_string(),
+                    total_seats: Some(1),
+                    assigned_seats: Some(1),
+                    total_credits: Some(60_000),
+                    remaining_credits: Some(60_000),
+                    resets_at_epoch: Some(1_792_908_000),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn team_readout_builds_one_window_per_seat_type() {
+        let mut state = default_state();
+        state.accounts.push(bailian_team_account("team-1"));
+
+        apply_bailian_team_readout(&mut state, "team-1", &Ok(team_usage()), 1_790_000_100);
+
+        let account = &state.accounts[1];
+        assert_eq!(account.auth_state, AuthState::Ok);
+        assert_eq!(account.products.len(), 1);
+        let product = &account.products[0];
+        assert_eq!(product.active, Some(true));
+        assert_eq!(product.plan_tier.as_deref(), Some("团队版"));
+
+        let windows = &product.snapshot.as_ref().unwrap().groups[0].windows;
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].unit, "credits");
+        assert_eq!(
+            windows[0].window_name.as_deref(),
+            Some("标准坐席（已分配 1/2 席）")
+        );
+        assert_eq!(windows[0].used_amount, Some(6_250));
+        assert_eq!(windows[0].total_amount, Some(25_000));
+        assert_eq!(windows[0].used_percent, Some(25));
+        assert_eq!(windows[0].remaining_percent, Some(75));
+        assert_eq!(windows[0].resets_at_epoch, Some(1_792_908_000));
+
+        assert_eq!(windows[1].used_percent, Some(0));
+        assert_eq!(windows[1].remaining_percent, Some(100));
+    }
+
+    #[test]
+    fn team_auth_error_marks_account_but_keeps_last_snapshot() {
+        let mut state = default_state();
+        state.accounts.push(bailian_team_account("team-1"));
+        apply_bailian_team_readout(&mut state, "team-1", &Ok(team_usage()), 1_790_000_100);
+
+        let error = BailianError {
+            code: "auth-expired".to_string(),
+            message: "团队版 AccessKey 无效".to_string(),
+        };
+        apply_bailian_team_readout(&mut state, "team-1", &Err(error), 1_790_000_200);
+
+        let account = &state.accounts[1];
+        assert_eq!(account.auth_state, AuthState::NeedsReauth);
+        assert!(account.products[0].snapshot.is_some());
+        assert_eq!(
+            account.products[0].query.last_error.as_ref().unwrap().code,
+            "auth-expired"
+        );
+    }
+
+    #[test]
+    fn team_without_subscription_is_a_gap_not_an_error() {
+        let mut state = default_state();
+        state.accounts.push(bailian_team_account("team-1"));
+
+        apply_bailian_team_readout(
+            &mut state,
+            "team-1",
+            &Ok(TeamUsage::default()),
+            1_790_000_100,
+        );
+
+        let account = &state.accounts[1];
+        assert_eq!(account.auth_state, AuthState::Ok);
+        let product = &account.products[0];
+        assert_eq!(product.active, Some(false));
+        assert!(product.query.last_error.is_none());
+        let snapshot = product.snapshot.as_ref().unwrap();
+        assert!(snapshot.groups.is_empty());
+        assert_eq!(
+            snapshot.capability_gaps,
+            vec!["未找到有效的 Token Plan 团队版订阅"]
+        );
+    }
+
+    #[test]
+    fn team_account_without_snapshot_is_due_immediately() {
+        let account = bailian_team_account("team-1");
+        assert!(is_account_due(&account, 5, 1_790_000_000));
+
+        let mut state = default_state();
+        state.accounts.push(account);
+        apply_bailian_team_readout(&mut state, "team-1", &Ok(team_usage()), 1_790_000_000);
         let account = &state.accounts[1];
         assert!(!is_account_due(account, 5, 1_790_000_100));
         assert!(is_account_due(account, 5, 1_790_000_400));

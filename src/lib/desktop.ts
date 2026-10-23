@@ -154,6 +154,35 @@ export function beginBailianLogin(
   });
 }
 
+/**
+ * 新增百炼 Token Plan 团队版账户。AccessKey 只作为命令参数传给 Rust，
+ * 不写入前端持久状态，也不进入事件或日志。
+ */
+export function addBailianTeamAccount(
+  accessKeyId: string,
+  accessKeySecret: string,
+  displayName?: string,
+): Promise<AppState> {
+  return invoke<AppState>('add_bailian_team_account', {
+    accessKeyId,
+    accessKeySecret,
+    displayName: displayName ?? null,
+  });
+}
+
+/** 重新输入团队版 AccessKey；保存成功后由 Rust 原子替换旧凭证。 */
+export function updateBailianTeamCredentials(
+  accountId: string,
+  accessKeyId: string,
+  accessKeySecret: string,
+): Promise<AppState> {
+  return invoke<AppState>('update_bailian_team_credentials', {
+    accountId,
+    accessKeyId,
+    accessKeySecret,
+  });
+}
+
 export function cancelAccountLogin(loginId: string): Promise<void> {
   return invoke<void>('cancel_account_login', { loginId });
 }

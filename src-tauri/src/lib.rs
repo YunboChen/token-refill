@@ -1,4 +1,5 @@
 mod bailian;
+mod bailian_team;
 mod codex;
 mod discovery;
 pub mod quota;
@@ -89,6 +90,30 @@ fn begin_bailian_login(
 ) -> Result<LoginStartPayload, String> {
     let store = Arc::clone(&store);
     store.begin_bailian_login(account_id, display_name)
+}
+
+/// 新增百炼 Token Plan 团队版账户。AccessKey 只写入应用私有目录，不进入前端状态。
+#[tauri::command]
+fn add_bailian_team_account(
+    store: tauri::State<'_, Arc<StateStore>>,
+    access_key_id: String,
+    access_key_secret: String,
+    display_name: Option<String>,
+) -> Result<PersistedState, String> {
+    let store = Arc::clone(&store);
+    store.add_bailian_team_account(access_key_id, access_key_secret, display_name)
+}
+
+/// 重新输入团队版 AccessKey；保存成功后原子替换旧凭证。
+#[tauri::command]
+fn update_bailian_team_credentials(
+    store: tauri::State<'_, Arc<StateStore>>,
+    account_id: String,
+    access_key_id: String,
+    access_key_secret: String,
+) -> Result<PersistedState, String> {
+    let store = Arc::clone(&store);
+    store.update_bailian_team_credentials(&account_id, access_key_id, access_key_secret)
 }
 
 #[tauri::command]
@@ -300,6 +325,8 @@ pub fn run() {
             update_preferences,
             begin_account_login,
             begin_bailian_login,
+            add_bailian_team_account,
+            update_bailian_team_credentials,
             cancel_account_login,
             rename_account,
             remove_account,

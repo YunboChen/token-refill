@@ -46,26 +46,26 @@ pub struct BailianError {
 }
 
 impl BailianError {
-    fn new(code: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_string(),
             message: message.into(),
         }
     }
 
-    fn auth(message: impl Into<String>) -> Self {
+    pub(crate) fn auth(message: impl Into<String>) -> Self {
         Self::new("auth-expired", message)
     }
 
-    fn network(message: impl Into<String>) -> Self {
+    pub(crate) fn network(message: impl Into<String>) -> Self {
         Self::new("network", message)
     }
 
-    fn gateway(message: impl Into<String>) -> Self {
+    pub(crate) fn gateway(message: impl Into<String>) -> Self {
         Self::new("gateway", message)
     }
 
-    fn decode(message: impl Into<String>) -> Self {
+    pub(crate) fn decode(message: impl Into<String>) -> Self {
         Self::new("decode", message)
     }
 
@@ -630,12 +630,18 @@ impl ConsoleLogin {
                 return Err(BailianError::new("timeout", "等待浏览器授权超时，请重试。"));
             }
             match self.listener.accept() {
-                Ok((mut stream, _)) => match handle_callback(&mut stream, &self.state) {
-                    Callback::Token(token) => return Ok(token),
-                    Callback::Preflight => {}
-                    Callback::BadState => {}
-                    Callback::Ignored => {}
-                },
+                Ok((mut stream, _)) => {
+                    // 部分平台（含 macOS）的 accepted socket 会继承监听套接字的
+                    // O_NONBLOCK；若浏览器数据还没到，read 会立刻返回 WouldBlock
+                    // 并把这次回调误判为无效请求。这里改回阻塞，让 3 秒读超时生效。
+                    let _ = stream.set_nonblocking(false);
+                    match handle_callback(&mut stream, &self.state) {
+                        Callback::Token(token) => return Ok(token),
+                        Callback::Preflight => {}
+                        Callback::BadState => {}
+                        Callback::Ignored => {}
+                    }
+                }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(CALLBACK_POLL_INTERVAL);
                 }

@@ -20,8 +20,12 @@ semver = "1"
 ureq = "3.5"
 getrandom = "0.3"
 url = "2"
-# Sub2API 的时间字段是 RFC 3339（Go time.Time），统一解析为 Unix 秒。
-time = { version = "0.3", features = ["parsing"] }
+# Sub2API 的时间字段是 RFC 3339（Go time.Time），统一解析为 Unix 秒；
+# formatting 用于百炼团队版 OpenAPI 的 x-acs-date 请求头。
+time = { version = "0.3", features = ["parsing", "formatting"] }
+# 百炼团队版只提供 AccessKey 签名的 OpenAPI，需要 SHA-256 与 HMAC-SHA256。
+sha2 = "0.10"
+hmac = "0.12"
 # 读取 Codex 的 config.toml（只取 provider 的 base_url 与密钥来源）。
 toml = "1"
 tauri-plugin-notification = "2.7.0"

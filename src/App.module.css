@@ -1808,6 +1808,11 @@
   background: var(--sunken);
 }
 
+.dialogForm {
+  display: grid;
+  gap: 12px;
+}
+
 .dialogActions {
   display: flex;
   flex-wrap: wrap;
@@ -1845,6 +1850,11 @@
   border-color: var(--accent);
   background: var(--accent-soft);
   box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* 三个平台时让最后一个占满整行，避免落单的半格。 */
+.platformPick:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
 }
 
 .platformPickName {

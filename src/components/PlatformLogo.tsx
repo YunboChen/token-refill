@@ -20,7 +20,9 @@ interface PlatformLogoProps {
 }
 
 export default function PlatformLogo({ platform, fallback }: PlatformLogoProps) {
-  const logo = PLATFORM_LOGOS[platform];
+  // 团队版与个人版同属百炼，共用厂商图形，平台名称区分授权方式。
+  const logo =
+    PLATFORM_LOGOS[platform] ?? PLATFORM_LOGOS[platform.replace(/-team$/, '')];
   if (!logo) {
     return <span className={styles.platformLogoFallback}>{fallback}</span>;
   }
