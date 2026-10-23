@@ -13,8 +13,6 @@ interface PlatformHeadingProps {
   description?: string;
   /** 标题行右侧的操作按钮。 */
   action?: ReactNode;
-  /** 渲染为卡片内的标题带，而不是独立标题行。 */
-  embedded?: boolean;
   /** 平台是否已有账户；决定徽标是否使用强调色。 */
   active?: boolean;
 }
@@ -26,14 +24,13 @@ export default function PlatformHeading({
   status,
   description,
   action,
-  embedded = false,
   active,
 }: PlatformHeadingProps) {
   const meta = platformMeta(platform);
   const isActive = active ?? meta.available;
 
   return (
-    <div className={embedded ? styles.platformCardHead : styles.platformHeading}>
+    <div className={styles.platformHeading}>
       <span
         className={styles.platformBadge}
         data-active={isActive || undefined}

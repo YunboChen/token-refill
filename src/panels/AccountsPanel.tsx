@@ -82,6 +82,24 @@ function planStateLabel(product: ProductState): string {
   return '待查询';
 }
 
+/** 套餐状态的语义，用于给右侧时间/提示上色，不参与文案。 */
+function planStateKey(
+  product: ProductState,
+): 'inactive' | 'busy' | 'error' | 'ok' | 'idle' {
+  if (product.active === false) return 'inactive';
+  if (product.query.refreshing) return 'busy';
+  if (product.snapshot) return 'ok';
+  if (product.query.lastError) return 'error';
+  return 'idle';
+}
+
+/** 账户徽标取名称首字符，西文统一大写，与平台徽标区分开。 */
+function accountMark(name: string): string {
+  const first = Array.from(name.trim())[0];
+  if (!first) return '?';
+  return /[a-z]/i.test(first) ? first.toUpperCase() : first;
+}
+
 export default function AccountsPanel() {
   const {
     state,
@@ -234,74 +252,113 @@ export default function AccountsPanel() {
 
       <div className={styles.platformStack}>
         {groups.map((group) => (
-          <article
-            className={`${styles.card} ${styles.platformCard}`}
-            key={group.platform}
-          >
-            <PlatformHeading
-              embedded
-              active
-              platform={group.platform}
-              count={group.accounts.length}
-              action={
-                group.meta.available ? (
-                  <button
-                    type="button"
-                    className={styles.platformAddButton}
-                    onClick={() =>
-                      openAddDialog(group.platform === 'bailian' ? 'bailian' : 'codex')
-                    }
-                    disabled={!desktop}
-                    title={
-                      desktop
-                        ? `添加 ${group.meta.name} 账户`
-                        : '浏览器预览无法发起授权'
-                    }
-                  >
-                    <Plus size={13} weight="bold" aria-hidden />
-                    添加账户
-                  </button>
-                ) : null
-              }
-            />
-            {group.accounts.map((account) => {
-              const managed = account.source === 'managed';
-              const busy = account.products.some((product) => product.query.refreshing);
-              // 只列已开通的套餐；尚未确认（active === null）的也先展示。
-              // 若平台确认全部未开通，则保留列表并标记为“未开通”。
-              const activated = account.products.filter(
-                (product) => product.active !== false,
-              );
-              const plans = activated.length > 0 ? activated : account.products;
-              return (
-                <div className={styles.accountRow} key={account.accountId}>
-                  <div className={styles.accountRowHead}>
-                    <div className={styles.accountTitle}>
-                      <h3>{account.displayName}</h3>
-                      <span
-                        className={styles.authStatus}
-                        data-state={account.authState}
-                      >
-                        <span className={styles.authDot} aria-hidden="true" />
-                        {AUTH_LABELS[account.authState]}
+          <section className={styles.platformPanel} key={group.platform}>
+            <div className={styles.platformSectionHead}>
+              <PlatformHeading
+                active
+                platform={group.platform}
+                count={group.accounts.length}
+              />
+            </div>
+
+            <div className={styles.accountGrid}>
+              {group.accounts.map((account) => {
+                const managed = account.source === 'managed';
+                const busy = account.products.some(
+                  (product) => product.query.refreshing,
+                );
+                // 只列已开通的套餐；尚未确认（active === null）的也先展示。
+                // 若平台确认全部未开通，则保留列表并标记为“未开通”。
+                const activated = account.products.filter(
+                  (product) => product.active !== false,
+                );
+                const plans = activated.length > 0 ? activated : account.products;
+                return (
+                  <article className={styles.accountTile} key={account.accountId}>
+                    <div className={styles.accountIdentityCell}>
+                      <span className={styles.accountMark} aria-hidden="true">
+                        {accountMark(account.displayName)}
                       </span>
+                      <div className={styles.accountIdentity}>
+                        <div className={styles.accountNameRow}>
+                          <h3 className={styles.accountName}>
+                            {account.displayName}
+                          </h3>
+                          <span
+                            className={styles.authStatus}
+                            data-state={account.authState}
+                          >
+                            <span className={styles.authDot} aria-hidden="true" />
+                            {AUTH_LABELS[account.authState]}
+                          </span>
+                        </div>
+                        <p className={styles.accountMeta}>
+                          {account.platform === 'bailian'
+                            ? '控制台授权'
+                            : managed
+                              ? '独立授权'
+                              : '本机登录态'}
+                          {account.identityHint ? ` · ${account.identityHint}` : ''}
+                        </p>
+                      </div>
                     </div>
-                    <div className={styles.accountActions}>
+
+                    {plans.length > 0 ? (
+                      <div className={styles.planPanel}>
+                        {plans.map((product) => {
+                          const state = planStateKey(product);
+                          return (
+                            <div
+                              className={styles.planRow}
+                              key={product.productId}
+                              data-inactive={
+                                product.active === false || undefined
+                              }
+                            >
+                              <span className={styles.planRowMain}>
+                                <span className={styles.planRowName}>
+                                  {product.displayName}
+                                </span>
+                                {product.planTier ? (
+                                  <span className={styles.planTier}>
+                                    {planTierLabel(product.planTier)}
+                                  </span>
+                                ) : null}
+                              </span>
+                              <span
+                                className={styles.planRowState}
+                                data-state={state}
+                              >
+                                {planStateLabel(product)}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className={styles.accountEmptyNote}>
+                        该账户暂无已接入的套餐。
+                      </p>
+                    )}
+
+                    <div className={styles.accountFoot}>
                       <button
                         type="button"
-                        className={styles.miniButton}
+                        className={styles.accountRefresh}
                         onClick={() => void refresh(account.accountId)}
                         disabled={!desktop || busy}
                         aria-label={`刷新 ${account.displayName} 的额度`}
                         title="刷新额度"
                       >
                         <ArrowClockwise
-                          size={14}
+                          size={13}
                           className={busy ? styles.spin : undefined}
+                          aria-hidden
                         />
+                        刷新
                       </button>
                       {managed ? (
-                        <>
+                        <div className={styles.accountActions}>
                           <button
                             type="button"
                             className={styles.miniButton}
@@ -338,117 +395,112 @@ export default function AccountsPanel() {
                           >
                             <Trash size={14} />
                           </button>
-                        </>
+                        </div>
                       ) : null}
                     </div>
-                  </div>
-                  <p className={styles.accountMeta}>
-                    {account.platform === 'bailian'
-                      ? '控制台授权'
-                      : managed
-                        ? '独立授权'
-                        : '本机登录态'}
-                    {account.identityHint ? ` · ${account.identityHint}` : ''}
-                  </p>
-                  <div className={styles.planList}>
-                    {plans.map((product) => (
-                      <div
-                        className={styles.planRow}
-                        key={product.productId}
-                        data-inactive={product.active === false || undefined}
-                      >
-                        <span className={styles.planRowName}>
-                          {product.displayName}
-                        </span>
-                        {product.planTier ? (
-                          <span className={styles.planTag}>
-                            {planTierLabel(product.planTier)}
-                          </span>
-                        ) : null}
-                        <span className={styles.planRowState}>
-                          {planStateLabel(product)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
 
-                  {renaming?.accountId === account.accountId ? (
-                    <form
-                      className={styles.inlineForm}
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        void saveRename();
-                      }}
-                    >
-                      <input
-                        className={styles.textInput}
-                        value={renaming.value}
-                        onChange={(event) =>
-                          setRenaming({ ...renaming, value: event.target.value })
-                        }
-                        maxLength={60}
-                        aria-label="账户名称"
-                        autoFocus
-                      />
-                      <button type="submit" className={styles.button} disabled={!desktop}>
-                        保存
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.buttonGhost}
-                        onClick={() => setRenaming(null)}
+                    {renaming?.accountId === account.accountId ? (
+                      <form
+                        className={styles.inlineForm}
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void saveRename();
+                        }}
                       >
-                        取消
-                      </button>
-                    </form>
-                  ) : null}
-
-                  {confirming === account.accountId ? (
-                    <div className={styles.inlineConfirm}>
-                      <span className={styles.usageNote}>
-                        移除后本应用会删除该账户在本地的授权副本；
-                        外部工具与百炼账号的登录状态不受影响。
-                      </span>
-                      <div className={styles.inlineConfirmActions}>
+                        <input
+                          className={styles.textInput}
+                          value={renaming.value}
+                          onChange={(event) =>
+                            setRenaming({ ...renaming, value: event.target.value })
+                          }
+                          maxLength={60}
+                          aria-label="账户名称"
+                          autoFocus
+                        />
                         <button
-                          type="button"
-                          className={styles.dangerButton}
-                          onClick={() => void confirmRemove(account.accountId)}
+                          type="submit"
+                          className={styles.button}
                           disabled={!desktop}
                         >
-                          确认移除
+                          保存
                         </button>
                         <button
                           type="button"
                           className={styles.buttonGhost}
-                          onClick={() => setConfirming(null)}
+                          onClick={() => setRenaming(null)}
                         >
                           取消
                         </button>
+                      </form>
+                    ) : null}
+
+                    {confirming === account.accountId ? (
+                      <div className={styles.inlineConfirm}>
+                        <span className={styles.usageNote}>
+                          移除后本应用会删除该账户在本地的授权副本；
+                          外部工具与百炼账号的登录状态不受影响。
+                        </span>
+                        <div className={styles.inlineConfirmActions}>
+                          <button
+                            type="button"
+                            className={styles.dangerButton}
+                            onClick={() => void confirmRemove(account.accountId)}
+                            disabled={!desktop}
+                          >
+                            确认移除
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.buttonGhost}
+                            onClick={() => setConfirming(null)}
+                          >
+                            取消
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </article>
+                    ) : null}
+                  </article>
+                );
+              })}
+
+              {/* 添加位补在网格末尾：单账户时也能撑满一行，不必回到页头找入口 */}
+              {group.meta.available ? (
+                <button
+                  type="button"
+                  className={styles.accountAddTile}
+                  onClick={() =>
+                    openAddDialog(group.platform === 'bailian' ? 'bailian' : 'codex')
+                  }
+                  disabled={!desktop}
+                  title={
+                    desktop
+                      ? `添加 ${group.meta.name} 账户`
+                      : '浏览器预览无法发起授权'
+                  }
+                >
+                  <span className={styles.accountAddIcon} aria-hidden="true">
+                    <Plus size={15} weight="bold" />
+                  </span>
+                  <span className={styles.accountAddLabel}>添加账户</span>
+                </button>
+              ) : null}
+            </div>
+          </section>
         ))}
 
         {unavailable.map((meta) => (
-          <article
-            key={meta.key}
-            className={`${styles.card} ${styles.platformCard} ${styles.platformCardMuted}`}
-          >
-            <PlatformHeading
-              embedded
-              platform={meta.key}
-              status="待接入"
-              active={false}
-            />
+          <section className={styles.platformSection} key={meta.key}>
+            <div className={styles.platformSectionHead}>
+              <PlatformHeading
+                platform={meta.key}
+                status="待接入"
+                active={false}
+              />
+            </div>
             <p className={styles.plannedNote}>
               {meta.name}账户尚未开放接入。开放后会在这里单独管理，与现有账户互不影响。
             </p>
-          </article>
+          </section>
         ))}
       </div>
 

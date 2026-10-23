@@ -34,6 +34,7 @@
   --accent-text: #f7faff;
   --accent-soft: #e7eefb;
   --ok: #167a4a;
+  --ok-soft: #e6f4ec;
   --danger: #b4233b;
   --danger-soft: #fbeaed;
   --focus: #0b63ce;
@@ -58,6 +59,7 @@
   --accent-text: #06121f;
   --accent-soft: #18293f;
   --ok: #4fbf82;
+  --ok-soft: #13281d;
   --danger: #ff8b9c;
   --danger-soft: #341c23;
   --focus: #79b8ff;
@@ -81,6 +83,7 @@
     --accent-text: #06121f;
     --accent-soft: #18293f;
     --ok: #4fbf82;
+    --ok-soft: #13281d;
     --danger: #ff8b9c;
     --danger-soft: #341c23;
     --focus: #79b8ff;

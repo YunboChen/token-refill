@@ -1272,33 +1272,322 @@
   margin-top: 6px;
 }
 
-/* ---------- 平台分组：标题带 + 列表，平台靠徽标与名称区分 ---------- */
+/* ---------- 平台分组：标题 + 账户卡片网格，平台靠徽标与名称区分 ---------- */
 
 .platformStack {
   display: grid;
-  gap: 14px;
-  margin-top: 16px;
+  gap: 18px;
+  margin-top: 20px;
 }
 
 .platformGroup {
   min-width: 0;
 }
 
-/* 独立标题行（总览）与卡片内标题带（账户）共用同一套排版 */
+/* 账户页：平台是一张下沉的容器，账户卡用面板色上浮。
+   平台只负责分组，视觉重心留给账户本身。 */
+.platformPanel {
+  min-width: 0;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--sunken);
+}
+
+/* 待接入平台仍是轻量段落，不套容器卡 */
+.platformSection {
+  min-width: 0;
+}
+
+.platformSectionHead {
+  padding: 0;
+}
+
+/* 容器卡内压掉标题自身的外边距，让徽标与下方卡片左缘对齐；
+   平台徽标去掉色块、字号降一档，避免和账户卡抢视线 */
+.platformPanel .platformHeading {
+  gap: 9px;
+  padding: 0;
+}
+
+.platformPanel .platformBadge,
+.platformPanel .platformBadge[data-active] {
+  width: 24px;
+  height: 24px;
+  border-radius: 0;
+  color: var(--muted);
+  background: transparent;
+}
+
+.platformPanel .platformLogo {
+  width: 16px;
+  height: 16px;
+}
+
+.platformPanel .platformName {
+  font-size: 13px;
+}
+
+.platformPanel .platformVendor,
+.platformPanel .platformDescription,
+.platformPanel .platformCount {
+  font-size: 11px;
+}
+
+.accountGrid {
+  display: grid;
+  /* 按容器宽度自动排 1/2/3 列：250px 是卡片舒适下限，
+     默认窗口两列，拉宽到内容区上限后三列，窄预览退一列 */
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+/* 账户卡：用面板色浮在下沉容器上，是这一页真正的主体。
+   身份、套餐、操作自上而下三段，同排等高，操作行吸底。 */
+.accountTile {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 15px 16px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  transition: border-color 160ms ease-out;
+}
+
+.accountTile:hover {
+  border-color: var(--border-strong);
+}
+
+.accountIdentityCell {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+/* 名称首字符做账户徽标：用强调色承接原来平台徽标的视觉重量 */
+.accountMark {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.accountIdentity {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.accountNameRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 账户名是页面的第一层信息，字号高于平台标题；过长时省略，状态标签不换行 */
+.accountTile .accountName {
+  overflow: hidden;
+  font-size: 15.5px;
+  letter-spacing: -0.012em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountTile .authStatus {
+  flex-shrink: 0;
+}
+
+/* 套餐区：不再套内层盒子，只用留白和发丝线分隔，卡内层次更轻 */
+.planPanel {
+  display: grid;
+  min-width: 0;
+  margin-top: 14px;
+}
+
+.accountTile > .planPanel,
+.accountTile > .accountEmptyNote {
+  margin-bottom: 14px;
+}
+
+/* 套餐名与更新时间同排：左侧名称可省略，右侧时间固定不被压缩 */
+.planRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.planRow:first-child {
+  padding-top: 0;
+}
+
+.planRow + .planRow {
+  border-top: 1px solid var(--border);
+}
+
+.planRow[data-inactive] {
+  opacity: 0.55;
+}
+
+.planRowMain {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.planRowName {
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planTier {
+  flex-shrink: 0;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  background: var(--sunken);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.planRowState {
+  flex-shrink: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planRowState[data-state='busy'] {
+  color: var(--accent);
+}
+
+.planRowState[data-state='error'] {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* 操作行：刷新在左、账户级操作在右；吸底后用一条发丝线与内容分开 */
+.accountFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* 刷新是本卡最常用的动作，给文字标签而不是裸图标，窄卡里也一眼可见 */
+.accountRefresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  margin-left: -7px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  background: transparent;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 150ms ease-out, background-color 150ms ease-out,
+    transform 100ms ease-out;
+}
+
+.accountRefresh:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.accountRefresh:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.accountRefresh:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* 添加位：与账户卡同宽同高补满网格，但只用虚线描边，属于次要动作 */
+.accountAddTile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 118px;
+  padding: 16px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 150ms ease-out, border-color 150ms ease-out,
+    background-color 150ms ease-out, transform 100ms ease-out;
+}
+
+.accountAddLabel {
+  color: inherit;
+  line-height: 1.4;
+}
+
+.accountAddIcon {
+  display: grid;
+  place-items: center;
+  color: inherit;
+}
+
+.accountAddTile:hover:not(:disabled) {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.accountAddTile:active:not(:disabled) {
+  transform: scale(0.995);
+}
+
+.accountAddTile:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* 平台标题行：总览与账户页共用 */
 .platformHeading {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 0 4px;
-}
-
-.platformCardHead {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 13px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
 }
 
 /* 徽标高度与两行文字块（名称 + 说明）等高，视觉上成为一个整体 */
@@ -1395,61 +1684,10 @@
   white-space: nowrap;
 }
 
-.platformAddButton {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 26px;
-  padding: 3px 8px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  color: var(--accent);
-  background: transparent;
-  font-size: 11.5px;
-  font-weight: 600;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background-color 150ms ease-out, color 150ms ease-out;
-}
-
-.platformAddButton:hover:not(:disabled) {
-  background: var(--accent-soft);
-}
-
-.platformAddButton:disabled {
-  color: var(--muted);
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-/* 平台卡片：标题带 + 行列表，圆角由外卡统一裁切 */
-.platformCard {
-  margin-top: 0;
-  padding: 0;
-  overflow: hidden;
-}
-
-/* 待接入平台：去掉填充，让它在视觉上退到已接入账户之后 */
-.platformCardMuted {
-  background: transparent;
-}
-
-.platformCard > .accountRow {
-  padding: 14px 16px;
-  transition: background-color 120ms ease-out;
-}
-
-.platformCard > .accountRow:hover {
-  background: var(--hover);
-}
-
-.platformCard > .accountRow + .accountRow {
-  border-top: 1px solid var(--border);
-}
 
 .plannedNote {
-  margin: 0;
-  padding: 14px 16px;
+  margin: 12px 0 0;
+  padding: 0 2px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.65;
@@ -1502,42 +1740,18 @@
   white-space: nowrap;
 }
 
-.accountRow {
-  display: grid;
-  gap: 4px;
-  padding: 12px 0;
-}
-
-.accountRowHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.accountTitle {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.accountTitle h3 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.008em;
-}
-
-/* 授权状态用语义圆点 + 文字，不再占用一枚药丸 */
+/* 授权状态：语义圆点 + 文字的轻量标签，颜色只在异常态出现 */
 .authStatus {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
   color: var(--muted);
-  font-size: 11.5px;
+  background: var(--sunken);
+  font-size: 11px;
   font-weight: 500;
+  line-height: 1.5;
   white-space: nowrap;
 }
 
@@ -1545,19 +1759,26 @@
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--border-strong);
+  background: currentColor;
+  opacity: 0.75;
+}
+
+.authStatus[data-state='ok'] {
+  color: var(--ok);
+  background: var(--ok-soft);
 }
 
 .authStatus[data-state='ok'] .authDot {
-  background: var(--ok);
+  opacity: 1;
 }
 
 .authStatus[data-state='needs-reauth'] {
   color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .authStatus[data-state='needs-reauth'] .authDot {
-  background: var(--danger);
+  opacity: 1;
 }
 
 .accountMeta {
@@ -1570,48 +1791,24 @@
   white-space: nowrap;
 }
 
-/* 账户下已开通的套餐逐条列出：名称 + 档位 + 更新时间/状态。 */
-.planList {
-  display: grid;
-  gap: 2px;
-  margin-top: 2px;
-}
-
-.planRow {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
+.accountEmptyNote {
+  margin: 14px 0 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.6;
-}
-
-.planRow[data-inactive] {
-  opacity: 0.55;
-}
-
-.planRowName {
-  flex-shrink: 0;
-  color: var(--text);
-  font-weight: 600;
-}
-
-.planRowState {
-  overflow: hidden;
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .accountActions {
   display: flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
+}
+
+/* 重命名与移除确认在卡片内就地展开，接在操作行下方 */
+.accountTile > .inlineForm,
+.accountTile > .inlineConfirm {
+  margin-top: 10px;
 }
 
 .miniButton {
@@ -1621,7 +1818,7 @@
   height: 26px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--muted);
   background: transparent;
   cursor: pointer;
@@ -1647,20 +1844,21 @@
 
 .inlineForm {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin-top: 8px;
+  gap: 6px;
+  margin-top: 12px;
 }
 
 .inlineForm .textInput {
-  flex: 1;
+  flex: 1 1 120px;
   min-width: 0;
 }
 
 .inlineConfirm {
   display: grid;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 12px;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
