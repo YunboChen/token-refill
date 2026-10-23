@@ -10,6 +10,7 @@ import {
 import { isTauri } from '@tauri-apps/api/core';
 import {
   beginAccountLogin,
+  beginBailianLogin as beginBailianLoginCommand,
   cancelAccountLogin,
   checkForUpdate,
   getAppState,
@@ -36,6 +37,7 @@ interface AppStateContextValue {
   refresh: (accountId?: string) => Promise<void>;
   savePreferences: (preferences: Preferences) => Promise<boolean>;
   beginLogin: (accountId?: string, displayName?: string) => Promise<LoginStart | null>;
+  beginBailianLogin: (accountId?: string, displayName?: string) => Promise<LoginStart | null>;
   cancelLogin: (loginId: string) => Promise<void>;
   renameAccount: (accountId: string, displayName: string) => Promise<boolean>;
   removeAccount: (accountId: string) => Promise<boolean>;
@@ -186,6 +188,21 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [desktop],
   );
 
+  const beginBailianLogin = useCallback(
+    async (accountId?: string, displayName?: string) => {
+      if (!desktop) return null;
+      try {
+        const start = await beginBailianLoginCommand(accountId, displayName);
+        setError(null);
+        return start;
+      } catch (err) {
+        setError(errorMessage(err));
+        return null;
+      }
+    },
+    [desktop],
+  );
+
   const cancelLogin = useCallback(
     async (loginId: string) => {
       if (!desktop) return;
@@ -268,6 +285,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       refresh,
       savePreferences,
       beginLogin,
+      beginBailianLogin,
       cancelLogin,
       renameAccount,
       removeAccount,
@@ -283,6 +301,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       refresh,
       savePreferences,
       beginLogin,
+      beginBailianLogin,
       cancelLogin,
       renameAccount,
       removeAccount,

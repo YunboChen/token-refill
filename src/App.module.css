@@ -452,6 +452,47 @@
   line-height: 1.65;
 }
 
+/* 一个账户下可有多类套餐：每类单独一块，用发丝线分隔，不合并单位与周期。 */
+.productBlock {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.productBlock:first-of-type {
+  margin-top: 16px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.productHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.productTitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.productName {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+}
+
+.productBusy {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .quotaGroup {
   margin-top: 18px;
 }
@@ -1463,6 +1504,42 @@
   white-space: nowrap;
 }
 
+/* 账户下已开通的套餐逐条列出：名称 + 档位 + 更新时间/状态。 */
+.planList {
+  display: grid;
+  gap: 3px;
+  margin-top: 2px;
+}
+
+.planRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.planRow[data-inactive] {
+  opacity: 0.55;
+}
+
+.planRowName {
+  flex-shrink: 0;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.planRowState {
+  overflow: hidden;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .accountActions {
   display: flex;
   flex-shrink: 0;
@@ -1605,6 +1682,54 @@
   justify-content: flex-end;
   gap: 8px;
   margin-top: 4px;
+}
+
+.platformPicker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.platformPick {
+  display: grid;
+  gap: 3px;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  background: var(--background);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 150ms ease-out, background-color 150ms ease-out,
+    box-shadow 150ms ease-out;
+}
+
+.platformPick:hover {
+  border-color: var(--border-strong);
+}
+
+.platformPick[data-active] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.platformPickName {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.platformPickHint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+@media (max-width: 460px) {
+  .platformPicker {
+    grid-template-columns: 1fr;
+  }
 }
 
 .field {

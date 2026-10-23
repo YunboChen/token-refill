@@ -33,7 +33,7 @@ const PLATFORMS: Record<string, PlatformMeta> = {
     vendor: '阿里云',
     mark: '百',
     description: 'Token Plan 个人版 · Coding Plan 中国站',
-    available: false,
+    available: true,
   },
 };
 

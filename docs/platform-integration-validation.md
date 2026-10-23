@@ -1,7 +1,7 @@
 # 平台接入可行性记录
 
-- 记录日期：2026-10-21
-- 阶段：资料初查，不是接入验证通过
+- 记录日期：2026-10-21；百炼补充验证：2026-10-23
+- 阶段：百炼两类套餐已通过本机控制台会话完成真实读取验证（见第 7 节）；Codex 已实现适配器
 - 范围：公开搜索结果、本地已安装技术资料与原始文档快照；无账户操作
 - 关联：[需求文档](./requirements.md)、[软件设计](./software-design.md)、[开发计划](./development-plan.md)
 
@@ -114,7 +114,7 @@
 - 多账户、独立授权及后台续期是能力验证的核心，而不是 UI 完成后再解决的细节。
 - 查询授权与推理授权分开设计。不能为验证额度功能调用计费模型，也不要求用户把主账号高权限凭证交给应用。
 - 平台规则及版本可能变化，适配层需要保留可识别的能力与失败信息，不让 UI 固定假设所有套餐都具有相同窗口。
-- 原计划 PLAN-003 仍未通过；目前仅资料初查，三类套餐都没有完成真实接入验证。
+- 百炼两类套餐已于 2026-10-23 完成真实读取验证并接入（见第 7 节）；Codex 适配器此前已完成。剩余待验证项主要是跨账号隔离、令牌续期与限流。
 
 ## 6. 下一步验证清单
 
@@ -123,3 +123,47 @@
 3. 给三类套餐分别列出允许的查询授权、最小权限、独立账户隔离及续期方式。
 4. 在单独明确操作授权后，使用用户选择的测试账户验证；不扫描或改写现有工具配置，不保存未脱敏样例。
 5. 对照平台真实显示，验证额度、周期、时间、查询错误与部分数据缺失，再确定字段级 IPC 与持久化设计。
+
+## 7. 百炼接入验证（2026-10-23）
+
+本节的真实读取由用户本人环境中的控制台会话完成；文档只记录协议与字段语义，不保存令牌、账号、UID 或具体额度数值。合成样例用于单元测试。
+
+### 7.1 鉴权与查询路径
+
+- 两类订阅额度都属于控制台（Console）数据，推理 API Key 不能替代。控制台令牌通过请求头 `Authorization: Bearer <access_token>` 使用。
+- 网关：`https://bailian-cs.console.aliyun.com/cli/api.json?action=BroadScopeAspnGateway&product=sfm_bailian&api=<API 名>`。
+- 请求体为 `application/x-www-form-urlencoded`：`params=<JSON>&region=cn-beijing`。`params` 包含 `Api`、`V: "1.0"` 与 `Data`；`Data.cornerstoneParam` 需包含 `protocol: "V2"`、`console: "ONE_CONSOLE"`、`productCode: "p_efm"`、`switchUserType: 3`、`consoleSite: "BAILIAN_ALIYUN"`。
+- Token Plan 用量：API 名 `zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage`，请求数据为空对象。
+- Token Plan 订阅：API 名 `zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/subscription`，请求 `queryInstanceInfoRequest = { commodityCode: "sfm_tokenplansolo_public_cn" }`，返回 `specCode`（lite / essential / standard / pro）、`status`、`remainingDays` 与 `endTime`。
+- 控制台登录信息：API 名 `zeldaEasy.cornerstone-portal.cs-console.loginInfo`，返回 `aliyun.uid` 与 `aliyun.nickName`，可作为账号提示。
+- Coding Plan：API 名 `zeldaEasy.broadscope-bailian.codingPlan.queryCodingPlanInstanceInfoV2`，请求 `queryCodingPlanInstanceInfoRequest = { commodityCode: "sfm_codingplan_public_cn", onlyLatestOne: true }`。
+- 会话失效时，网关可能返回 HTTP 200 且在 `data.errorCode` 中包含 `NotLogined`；适配层据此归类为需要重新授权，而不是普通网络错误。
+
+### 7.2 登录回调
+
+官方控制台登录页支持 CLI 使用的回环回调：
+
+1. 应用在 `127.0.0.1` 随机端口监听，生成随机 `state`。
+2. 打开 `https://bailian.console.aliyun.com/console-login?notice=127.0.0.1:<port>?state=<state>`。
+3. 登录成功后，控制台页面把 `access_token` 回传到该地址；应用校验 `state` 后只保存令牌。
+
+应用没有修改 `bl` 配置，也不读取本机 `~/.bailian/config.json`。多账户场景需要在浏览器中切换对应的阿里云账号后重新授权。
+
+### 7.3 字段语义
+
+| 产品 | 返回字段 | 应用口径 | 能力缺口 |
+| --- | --- | --- | --- |
+| Token Plan 个人版 | `per1MonthPercentage`（0..1）、`per1MonthResetTime`（Unix 毫秒）；订阅接口的 `specCode`、`status`、`remainingDays` | 已用百分比四舍五入，剩余比例由应用派生；`specCode` 作为档位（Lite / Essential / Standard / Pro）展示；订阅月重置 | 用量接口不返回绝对 Credits 余额；订阅月按购买日滚动，不提供固定时长；无有效订阅时订阅接口可能缺少 `specCode` |
+| Coding Plan 中国站 | `codingPlanInstanceInfos[]`，取 `status = VALID`；`codingPlanQuotaInfo.per5Hour / perWeek / perBillMonth` 各自的 `UsedQuota`、`TotalQuota`、`QuotaNextRefreshTime`；`instanceType` | 保留原始调用次数，分别展示 5 小时、1 周、订阅月三个窗口；比例由已用/总量派生 | 只提供调用次数，不提供 token 消耗或单模型用量；无有效订阅时返回空列表，展示为数据缺口而非错误 |
+| 两者 | `cs-console.loginInfo` 的 `aliyun.nickName` / `aliyun.uid`；Coding Plan 响应中的 `userId` | `nickName` 不是纯数字时直接作为账号提示；否则用 `UID ***末四位` | 控制台网关拿不到阿里云登录名（`ACCOUNT_NAME` / `login_aliyunid`），该值只存在于浏览器页面配置或 Cookie；`nickName` 可能退化为数字 UID |
+
+`per1MonthPercentage` 与 Coding Plan 的百分比都按“已用”解释；应用展示剩余比例时使用 `100 - used`，并在界面中明确标注“已用”。
+
+### 7.4 仍未验证
+
+- 第二个阿里云账号的独立授权与数据隔离，需要用户实际切换账号验证。
+- 控制台令牌的有效期、续期方式以及过期后的页面行为；当前按“需要重新授权”处理。
+- 限流阈值与合适的失败退避参数。
+- Token Plan 与 Coding Plan 同时存在时的账号关系已按“同一账户两个产品”实现；其他套餐组合未验证。
+- 未订阅 Coding Plan 时接口返回空列表，已按数据缺口处理；未订阅 Token Plan 时该接口的返回尚未验证，不能据此断言为零额度。
+- 阿里云登录名（如控制台右上角展示的 `aliyunId`）来自浏览器页面配置或 Cookie，控制台令牌接口不返回该值。应用只在 `nickName` 是真实昵称时展示它，否则回退为脱敏 UID；如需显示完整登录名，需要另行确认是否允许浏览器 Cookie 导入或手动填写。

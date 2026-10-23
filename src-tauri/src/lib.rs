@@ -1,3 +1,4 @@
+mod bailian;
 mod codex;
 mod state;
 mod update;
@@ -74,6 +75,17 @@ fn cancel_account_login(
     login_id: String,
 ) -> Result<(), String> {
     store.cancel_login(&login_id)
+}
+
+/// 发起百炼控制台浏览器授权；令牌只写入应用私有目录，不经过前端。
+#[tauri::command]
+fn begin_bailian_login(
+    store: tauri::State<'_, Arc<StateStore>>,
+    account_id: Option<String>,
+    display_name: Option<String>,
+) -> Result<LoginStartPayload, String> {
+    let store = Arc::clone(&store);
+    store.begin_bailian_login(account_id, display_name)
 }
 
 #[tauri::command]
@@ -229,6 +241,7 @@ pub fn run() {
             refresh_usage,
             update_preferences,
             begin_account_login,
+            begin_bailian_login,
             cancel_account_login,
             rename_account,
             remove_account,

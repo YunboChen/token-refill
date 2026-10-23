@@ -40,6 +40,7 @@ export function defaultAppState(): AppState {
             kind: 'codex-subscription',
             displayName: 'Codex 订阅',
             planTier: null,
+            active: null,
             snapshot: null,
             query: {
               refreshing: false,

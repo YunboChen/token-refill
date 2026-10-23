@@ -1,10 +1,9 @@
 import { ArrowClockwise, Gauge } from '@phosphor-icons/react';
 import { m, useReducedMotion } from 'motion/react';
-import type { AccountState } from '../lib/desktop';
+import type { AccountState, ProductState, QuotaWindow } from '../lib/desktop';
 import { groupAccountsByPlatform } from '../lib/platforms';
 import { useAppState } from '../lib/store';
 import PlatformHeading from '../components/PlatformHeading';
-import PlatformLogo from '../components/PlatformLogo';
 import styles from '../App.module.css';
 
 const RING_SIZE = 64;
@@ -20,9 +19,16 @@ function durationLabel(mins: number | null): string {
   return `${Math.round(mins / 1440)} 天`;
 }
 
-function windowLabel(mins: number | null): string {
+function windowLabel(mins: number | null, name: string | null = null): string {
+  if (name) return `${name}额度`;
   const duration = durationLabel(mins);
   return duration ? `${duration}窗口` : '额度窗口';
+}
+
+function amountLabel(window: QuotaWindow): string | null {
+  if (window.usedAmount === null || window.totalAmount === null) return null;
+  const unit = window.unit === 'calls' ? '次' : window.unit;
+  return `已用 ${window.usedAmount} / ${window.totalAmount} ${unit}`;
 }
 
 function resetLabel(epoch: number | null): string {
@@ -126,71 +132,43 @@ function UsageSkeleton() {
   );
 }
 
-function CodexAccountCard({
+function ProductSection({
   account,
+  product,
   desktop,
   threshold,
   lowQuotaEnabled,
-  refresh,
   ready,
 }: {
   account: AccountState;
+  product: ProductState;
   desktop: boolean;
   threshold: number;
   lowQuotaEnabled: boolean;
-  refresh: (accountId?: string) => Promise<void>;
   ready: boolean;
 }) {
-  const product =
-    account.products.find((item) => item.kind === 'codex-subscription')
-    ?? account.products[0]
-    ?? null;
-  const snapshot = product?.snapshot ?? null;
-  const query = product?.query ?? null;
-  const busy = query?.refreshing ?? false;
-  const lastError = query?.lastError ?? null;
-  const planLabel = product?.planTier
+  const snapshot = product.snapshot;
+  const query = product.query;
+  const busy = query.refreshing;
+  const lastError = query.lastError;
+  const planLabel = product.planTier
     ? product.planTier[0].toUpperCase() + product.planTier.slice(1)
     : null;
 
   return (
-    <article className={styles.accountCard} aria-live="polite">
-      <header className={styles.accountHead}>
-        <div className={styles.accountTitleBlock}>
-          <h3 className={styles.accountName}>{account.displayName}</h3>
-          <p className={styles.accountMetaLine}>
-            <span>{product?.displayName ?? 'Codex 订阅'}</span>
-            {planLabel ? <span className={styles.planBadge}>{planLabel}</span> : null}
-            {account.identityHint ? (
-              <span className={styles.accountHint} title={account.identityHint}>
-                {account.identityHint}
-              </span>
-            ) : null}
-          </p>
-        </div>
-        <div className={styles.accountTools}>
+    <section className={styles.productBlock} aria-live="polite">
+      <div className={styles.productHead}>
+        <div className={styles.productTitle}>
+          <span className={styles.productName}>{product.displayName}</span>
+          {planLabel ? <span className={styles.planBadge}>{planLabel}</span> : null}
           {snapshot ? (
             <span className={styles.updatedAt}>
               更新于 {clockLabel(snapshot.checkedAtEpoch)}
-              {busy ? ' · 刷新中' : ''}
             </span>
           ) : null}
-          <button
-            type="button"
-            className={styles.refreshButton}
-            onClick={() => void refresh(account.accountId)}
-            disabled={!desktop || busy}
-            aria-label={`刷新 ${account.displayName} 的额度`}
-            title={desktop ? '刷新额度' : '浏览器预览无法调用 Rust'}
-          >
-            <ArrowClockwise
-              size={16}
-              weight="regular"
-              className={busy ? styles.spin : undefined}
-            />
-          </button>
+          {busy ? <span className={styles.productBusy}>刷新中</span> : null}
         </div>
-      </header>
+      </div>
 
       {!desktop ? (
         <p className={styles.accountNote}>
@@ -212,7 +190,7 @@ function CodexAccountCard({
           {snapshot ? (
             <>
               {snapshot.groups.length === 0 ? (
-                <p className={styles.accountNote}>当前账号未返回额度窗口数据。</p>
+                <p className={styles.accountNote}>当前账号未返回该类套餐的额度数据。</p>
               ) : (
                 snapshot.groups.map((group, groupIndex) => (
                   <section
@@ -230,13 +208,17 @@ function CodexAccountCard({
                           lowQuotaEnabled
                           && remaining !== null
                           && remaining <= threshold;
-                        const label = windowLabel(window.windowDurationMins);
+                        const label = windowLabel(
+                          window.windowDurationMins,
+                          window.windowName,
+                        );
+                        const amount = amountLabel(window);
                         return (
                           <div className={styles.quotaTile} key={window.windowId}>
                             <QuotaRing
                               value={remaining}
                               low={low}
-                              label={`${account.displayName} ${label}剩余比例`}
+                              label={`${account.displayName} ${product.displayName} ${label}剩余比例`}
                             />
                             <div className={styles.quotaCopy}>
                               <div className={styles.quotaTitleRow}>
@@ -244,7 +226,11 @@ function CodexAccountCard({
                               </div>
                               <span className={styles.quotaMeta}>
                                 {resetLabel(window.resetsAtEpoch)}
-                                {used !== null ? ` · 已用 ${used}%` : ''}
+                                {amount
+                                  ? ` · ${amount}`
+                                  : used !== null
+                                    ? ` · 已用 ${used}%`
+                                    : ''}
                               </span>
                               {low ? (
                                 <span className={styles.quotaLowNote}>
@@ -268,7 +254,7 @@ function CodexAccountCard({
           ) : busy ? (
             <>
               <UsageSkeleton />
-              <p className={styles.accountNote}>正在通过 Codex CLI 查询额度…</p>
+              <p className={styles.accountNote}>正在查询额度…</p>
             </>
           ) : lastError ? (
             <p className={styles.noticeDanger}>
@@ -281,6 +267,91 @@ function CodexAccountCard({
             </p>
           )}
         </>
+      )}
+    </section>
+  );
+}
+
+function AccountCard({
+  account,
+  desktop,
+  threshold,
+  lowQuotaEnabled,
+  refresh,
+  ready,
+}: {
+  account: AccountState;
+  desktop: boolean;
+  threshold: number;
+  lowQuotaEnabled: boolean;
+  refresh: (accountId?: string) => Promise<void>;
+  ready: boolean;
+}) {
+  const busy = account.products.some((product) => product.query.refreshing);
+  const updated = account.products.reduce<number | null>((latest, product) => {
+    const current = product.snapshot?.checkedAtEpoch ?? null;
+    if (current === null) return latest;
+    return latest === null ? current : Math.max(latest, current);
+  }, null);
+
+  return (
+    <article className={styles.accountCard} aria-live="polite">
+      <header className={styles.accountHead}>
+        <div className={styles.accountTitleBlock}>
+          <h3 className={styles.accountName}>{account.displayName}</h3>
+          <p className={styles.accountMetaLine}>
+            {account.identityHint ? (
+              <span className={styles.accountHint} title={account.identityHint}>
+                {account.identityHint}
+              </span>
+            ) : null}
+            {account.platform === 'bailian' ? (
+              <span>百炼控制台授权</span>
+            ) : account.source === 'managed' ? (
+              <span>独立授权</span>
+            ) : (
+              <span>本机登录态</span>
+            )}
+          </p>
+        </div>
+        <div className={styles.accountTools}>
+          {updated !== null ? (
+            <span className={styles.updatedAt}>
+              更新于 {clockLabel(updated)}
+              {busy ? ' · 刷新中' : ''}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            className={styles.refreshButton}
+            onClick={() => void refresh(account.accountId)}
+            disabled={!desktop || busy}
+            aria-label={`刷新 ${account.displayName} 的额度`}
+            title={desktop ? '刷新额度' : '浏览器预览无法调用 Rust'}
+          >
+            <ArrowClockwise
+              size={16}
+              weight="regular"
+              className={busy ? styles.spin : undefined}
+            />
+          </button>
+        </div>
+      </header>
+
+      {account.products.length === 0 ? (
+        <p className={styles.accountNote}>该账户暂无已接入的套餐。</p>
+      ) : (
+        account.products.map((product) => (
+          <ProductSection
+            key={product.productId}
+            account={account}
+            product={product}
+            desktop={desktop}
+            threshold={threshold}
+            lowQuotaEnabled={lowQuotaEnabled}
+            ready={ready}
+          />
+        ))
       )}
     </article>
   );
@@ -315,7 +386,7 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
               />
               <div className={styles.accountStack}>
                 {group.accounts.map((account) => (
-                  <CodexAccountCard
+                  <AccountCard
                     key={account.accountId}
                     account={account}
                     desktop={desktop}
@@ -329,17 +400,6 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
             </section>
           ))
         )}
-
-        <footer className={styles.upcoming}>
-          <span className={styles.upcomingBadge} aria-hidden="true">
-            <PlatformLogo platform="bailian" fallback="百" />
-          </span>
-          <p className={styles.upcomingNote}>
-            <span className={styles.upcomingName}>百炼</span>
-            Token Plan 与 Coding Plan 正在验证接入，开放后会在这里按账户分别展示。
-          </p>
-          <span className={styles.upcomingStatus}>待接入</span>
-        </footer>
       </div>
     </section>
   );
