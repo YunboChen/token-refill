@@ -193,5 +193,6 @@
 - 查询：调用官方 CLI 打印模式 `agy -p /usage --output-format json`，读取 `command.data.groups[].buckets[]` 的 `window`、`remaining_fraction` 与 `reset_time`。
 - 版本门槛：仅 `agy` ≥ 1.1.11 支持；旧版会把 `/usage` 当成普通提示词并消耗额度，因此应用先执行 `agy --version`，不满足则拒绝查询。
 - 过程控制：设置 `AGY_CLI_DISABLE_AUTO_UPDATE=true`，标准输入置空；查询带 60 秒超时，未登录等待交互时会被终止并归类为需要登录。
+- 代理：每次查询前读取系统代理（Windows `ProxyEnable` / `ProxyServer` / `ProxyOverride`，macOS `scutil --proxy`），仅在进程环境没有 `HTTP(S)_PROXY` 时注入子进程；`ProxyOverride` 转为 `NO_PROXY`。PAC/自动配置脚本不解析，需要用户改用手动代理或 TUN 模式。
 - 边界：不读取 `agy` 的钥匙串、`~/.gemini/...` 令牌文件、IDE SQLite 或浏览器会话；账户来自用户本机 CLI 登录态。移除应用内账户不会退出 `agy`。
 - 未验证：用户本机是否安装 `agy`、CLI 输出是否在所有版本保持蛇形字段、免费版与 Google AI 订阅的窗口差异。若后续版本改变字段，应在 `antigravity.rs` 的解析测试中更新合成样例。

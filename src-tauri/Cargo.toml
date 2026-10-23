@@ -29,4 +29,4 @@ tauri-plugin-autostart = "2.7.0"
 
 # 打开授权链接直接调 ShellExecuteW，避免经 cmd.exe 解析 URL 里的 & 等字符。
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_Foundation"] }

@@ -3700,4 +3700,50 @@ mod tests {
         );
         assert_eq!(state.accounts[1].auth_state, AuthState::Ok);
     }
+
+    #[test]
+    fn antigravity_snapshot_keeps_model_groups_and_windows() {
+        // 结构与 `agy -p /usage --output-format json` 实际返回一致。
+        let usage = AntigravityUsage {
+            checked_at_epoch: 1_792_759_583,
+            account: None,
+            plan_tier: None,
+            groups: vec![
+                antigravity::AntigravityGroup {
+                    name: "Gemini Models".to_string(),
+                    windows: vec![antigravity::AntigravityWindow {
+                        source_id: "gemini-weekly".to_string(),
+                        name: "Weekly Limit Remaining".to_string(),
+                        window_duration_mins: Some(10_080),
+                        remaining_percent: Some(0),
+                        resets_at_epoch: Some(1_792_888_105),
+                    }],
+                },
+                antigravity::AntigravityGroup {
+                    name: "Claude and GPT models".to_string(),
+                    windows: vec![antigravity::AntigravityWindow {
+                        source_id: "3p-5h".to_string(),
+                        name: "Five Hour Limit Remaining".to_string(),
+                        window_duration_mins: Some(300),
+                        remaining_percent: Some(50),
+                        resets_at_epoch: Some(1_792_777_576),
+                    }],
+                },
+            ],
+        };
+
+        let snapshot = antigravity_snapshot(&usage);
+        assert_eq!(snapshot.groups.len(), 2);
+        assert_eq!(
+            snapshot.groups[0].limit_name.as_deref(),
+            Some("Gemini Models")
+        );
+        let window = &snapshot.groups[0].windows[0];
+        assert_eq!(window.remaining_percent, Some(0));
+        assert_eq!(window.used_percent, Some(100));
+        assert_eq!(window.window_duration_mins, Some(10_080));
+        assert_eq!(window.resets_at_epoch, Some(1_792_888_105));
+        assert_eq!(snapshot.groups[1].windows[0].remaining_percent, Some(50));
+        assert_eq!(snapshot.groups[1].windows[0].used_percent, Some(50));
+    }
 }

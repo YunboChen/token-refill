@@ -5,6 +5,7 @@ mod codex;
 mod commandcode;
 mod discovery;
 mod opencode;
+mod proxy;
 pub mod quota;
 mod relay;
 mod state;
