@@ -55,7 +55,7 @@ pnpm dev
 - 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立账户的 `CODEX_HOME`。
 - 窗口使用系统标题栏，前端按 `get_app_info().platform` 收窄侧栏顶部留白。
 - 授权链接通过 `ShellExecuteW` 交给系统浏览器，不经过 `cmd.exe`，URL 中的 `&` 不会被当作命令分隔符。
-- `pnpm tauri build` 在 Windows 上默认产出 MSI 与 NSIS；本项目只发布 NSIS 安装器（`-setup.exe`）与免安装单文件 exe（`--no-bundle`）。两者尚未做安装与卸载验收。详见 [Windows 兼容设计](./docs/windows-support.md)。
+- `src-tauri/tauri.windows.conf.json` 把 Windows 的 `bundle.targets` 收窄为 `["nsis"]`：`pnpm tauri build` 只产出 NSIS 安装器（`-setup.exe`），不再生成 MSI；免安装单文件 exe 用 `pnpm tauri build --no-bundle`。两者尚未做安装与卸载验收。详见 [Windows 兼容设计](./docs/windows-support.md)。
 
 #### Windows 开发排错
 
