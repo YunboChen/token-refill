@@ -1272,29 +1272,24 @@
   margin-top: 6px;
 }
 
-/* ---------- 平台分组：标题 + 账户卡片网格，平台靠徽标与名称区分 ---------- */
+/* ---------- 平台分组：不套容器卡，靠标题行与留白分区 ---------- */
 
 .platformStack {
   display: grid;
-  gap: 18px;
-  margin-top: 20px;
+  gap: 26px;
 }
 
 .platformGroup {
   min-width: 0;
 }
 
-/* 账户页：平台是一张下沉的容器，账户卡用面板色上浮。
-   平台只负责分组，视觉重心留给账户本身。 */
+/* 账户页：平台只保留一行分组标题，账户卡直接落在画布上。
+   少一层容器后，页面的视觉重心完全交给账户卡本身。 */
 .platformPanel {
   min-width: 0;
-  padding: 14px 16px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--sunken);
 }
 
-/* 待接入平台仍是轻量段落，不套容器卡 */
+/* 待接入平台与已接入平台共用同一套标题样式 */
 .platformSection {
   min-width: 0;
 }
@@ -1303,34 +1298,43 @@
   padding: 0;
 }
 
-/* 容器卡内压掉标题自身的外边距，让徽标与下方卡片左缘对齐；
-   平台徽标去掉色块、字号降一档，避免和账户卡抢视线 */
-.platformPanel .platformHeading {
-  gap: 9px;
+/* 平台之间用一条通栏发丝线断开：分组不靠容器背景，
+   靠这条分隔线和比组内更大的间距，暗色画布上也不会叠出第二层灰 */
+.platformStack > * + * {
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+
+/* 标题行与下方账户卡左缘对齐；平台徽标去掉色块、字号降一档，
+   作为分组标签而不是和账户名抢视线 */
+.platformSectionHead .platformHeading {
+  gap: 10px;
   padding: 0;
 }
 
-.platformPanel .platformBadge,
-.platformPanel .platformBadge[data-active] {
-  width: 24px;
-  height: 24px;
+/* 品牌图形相对「名称 + 说明」整块文字垂直居中；
+   尺寸收到 20px，有识别度但不会像头像那样和账户卡抢分量 */
+.platformSectionHead .platformBadge,
+.platformSectionHead .platformBadge[data-active] {
+  width: 20px;
+  height: 20px;
   border-radius: 0;
   color: var(--muted);
   background: transparent;
 }
 
-.platformPanel .platformLogo {
-  width: 16px;
-  height: 16px;
+.platformSectionHead .platformLogo {
+  width: 100%;
+  height: 100%;
 }
 
-.platformPanel .platformName {
+.platformSectionHead .platformName {
   font-size: 13px;
 }
 
-.platformPanel .platformVendor,
-.platformPanel .platformDescription,
-.platformPanel .platformCount {
+.platformSectionHead .platformVendor,
+.platformSectionHead .platformDescription,
+.platformSectionHead .platformCount {
   font-size: 11px;
 }
 
@@ -1343,7 +1347,7 @@
   margin-top: 14px;
 }
 
-/* 账户卡：用面板色浮在下沉容器上，是这一页真正的主体。
+/* 账户卡：直接浮在画布上，是这一页唯一的主体。
    身份、套餐、操作自上而下三段，同排等高，操作行吸底。 */
 .accountTile {
   display: flex;
@@ -1351,7 +1355,7 @@
   min-width: 0;
   padding: 15px 16px 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   background: var(--surface);
   transition: border-color 160ms ease-out;
 }
@@ -1546,7 +1550,7 @@
   min-height: 118px;
   padding: 16px;
   border: 1px dashed var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   color: var(--muted);
   background: transparent;
   font-size: 11.5px;
