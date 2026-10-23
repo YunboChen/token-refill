@@ -391,11 +391,13 @@ export default function AccountsPanel() {
         <AnimatePresence>
           {dialog ? (
             <m.div
+              key="account-dialog"
               className={styles.dialogBackdrop}
               role="presentation"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              // 退场单独给定时长：蒙层比弹窗多留一点，避免弹窗还没退干净背景就亮了。
+              exit={{ opacity: 0, transition: { duration: 0.34, ease: 'easeIn' } }}
               transition={{ duration: 0.16, ease: 'easeOut' }}
               onMouseDown={(event) => {
                 if (event.target === event.currentTarget) closeDialog();
@@ -408,7 +410,13 @@ export default function AccountsPanel() {
                 aria-labelledby="account-dialog-title"
                 initial={{ opacity: 0, scale: 0.96, y: 10 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.98, y: 6 }}
+                // 与进场对称：退回进场起点并缓入淡出，退场才有可感知的“收回”动作。
+                exit={{
+                  opacity: 0,
+                  scale: 0.96,
+                  y: 10,
+                  transition: { duration: 0.3, ease: 'easeIn' },
+                }}
                 transition={{ type: 'spring', stiffness: 460, damping: 34 }}
               >
                 <button
