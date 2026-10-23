@@ -17,6 +17,7 @@
 - [文档索引](./docs/README.md)
 - [需求文档](./docs/requirements.md)
 - [软件设计文档](./docs/software-design.md)
+- [界面设计规范](./docs/design.md)
 - [开发计划文档](./docs/development-plan.md)
 - [Windows 兼容设计](./docs/windows-support.md)
 
