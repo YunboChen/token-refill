@@ -162,6 +162,35 @@ export function openExternalUrl(url: string): Promise<void> {
   return invoke<void>('open_external_url', { url });
 }
 
+// ---------- 版本检查 ----------
+
+export interface UpdateStatus {
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  releaseUrl: string | null;
+  releaseNotes?: string;
+  publishedAt: string | null;
+}
+
+/**
+ * 查询 GitHub 最新正式版本。同一会话内复用首次结果，避免每次打开设置页
+ * 都请求接口；失败时不缓存，下次可以重试。
+ */
+let pendingUpdateCheck: Promise<UpdateStatus> | null = null;
+
+export function checkForUpdate(force = false): Promise<UpdateStatus> {
+  if (force || !pendingUpdateCheck) {
+    pendingUpdateCheck = invoke<UpdateStatus>('check_for_update').catch(
+      (error: unknown) => {
+        pendingUpdateCheck = null;
+        throw error;
+      },
+    );
+  }
+  return pendingUpdateCheck;
+}
+
 export function onAccountLoginChanged(
   handler: (event: AccountLoginEvent) => void,
 ): Promise<UnlistenFn> {

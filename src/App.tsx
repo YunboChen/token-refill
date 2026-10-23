@@ -49,10 +49,15 @@ const PANELS: {
 export default function App() {
   const [active, setActive] = useState<PanelKey>('overview');
   const [platform, setPlatform] = useState<string | null>(null);
-  const { error } = useAppState();
+  const { error, update, openExternal } = useAppState();
   const desktop = isTauri();
   const current = PANELS.find((panel) => panel.key === active) ?? PANELS[0];
   const activeIndex = Math.max(0, PANELS.findIndex((panel) => panel.key === active));
+  // 启动检查只在有正式新版本时提示；设置页仍可手动重新检查。
+  const updateNotice =
+    update?.updateAvailable && update.releaseUrl
+      ? { version: update.latestVersion, url: update.releaseUrl }
+      : null;
 
   // 标题栏形态按平台区分：macOS 是 Overlay（红绿灯浮在内容上），
   // Windows 用系统标题栏。取不到平台时保持 macOS 布局，浏览器预览不受影响。
@@ -144,6 +149,20 @@ export default function App() {
         </header>
 
         <div className={styles.mainScroll}>
+          {updateNotice ? (
+            <div className={styles.noticeUpdate} role="status">
+              <span className={styles.noticeUpdateText}>
+                发现新版本 v{updateNotice.version}，当前 v{appVersion}。
+              </span>
+              <button
+                type="button"
+                className={styles.noticeUpdateAction}
+                onClick={() => void openExternal(updateNotice.url)}
+              >
+                前往下载
+              </button>
+            </div>
+          ) : null}
           {error ? (
             <p className={`${styles.noticeDanger} ${styles.globalNotice}`} role="alert">
               {error}

@@ -1,5 +1,6 @@
 mod codex;
 mod state;
+mod update;
 
 use std::fs;
 #[cfg(not(target_os = "windows"))]
@@ -187,6 +188,15 @@ fn open_in_browser(url: &str) -> Result<(), String> {
         .map_err(|err| format!("打开浏览器失败：{err}"))
 }
 
+/// 查询 GitHub Releases 的最新正式版本；只比较版本与返回下载页，不下载文件。
+/// 网络请求是阻塞的，放到专用线程，避免占用 IPC 处理线程。
+#[tauri::command]
+async fn check_for_update() -> Result<update::UpdateStatus, String> {
+    tauri::async_runtime::spawn_blocking(update::check_for_update)
+        .await
+        .map_err(|err| format!("检查更新失败：{err}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -224,7 +234,8 @@ pub fn run() {
             remove_account,
             open_external_url,
             send_test_notification,
-            set_auto_launch
+            set_auto_launch,
+            check_for_update
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Token Refill");

@@ -24,6 +24,7 @@
 | 核心问题与产品方向 | 已确认 | 减少在软件与 CLI 之间切换，集中查看三类 AI 套餐 |
 | 首发系统与形态 | 已确认 | macOS，菜单栏快速查看 + 独立管理窗口；后续 Windows |
 | Windows 兼容层 | 已实现 | CLI 查找、授权链接、数据目录、标题栏按平台适配；Windows 本机构建、单元测试、真实 CLI 握手与启动验证通过，安装包与运行验收未完成，详见 [Windows 兼容设计](./windows-support.md) |
+| 版本检查 | 已实现 | 设置页查询 GitHub Releases 最新正式版本并与当前版本比较；有新版本时跳转发布页，不自动下载或安装 |
 | 展示信息与多账户 | 已确认 | 额度或比例、各周期、重置时间或倒计时、更新时间与状态都需要；支持多个账户 |
 | 接入原则 | 已确认 | 应用独立管理多账户、可选主动导入、CLI 非正式版强制依赖；不包含本机凭证读取操作授权 |
 | 刷新、后台运行与提醒 | 已确认 | 默认 5 分钟可调自动刷新 + 单账户/全部手动刷新；缓存与失败反馈；关闭窗口常驻、明确退出、自启可选默认关闭；低额度、授权失效及可选重置提醒 |
@@ -213,3 +214,5 @@
 本轮验证：Windows 10.0.26300 x64 + MSVC 目标，`cargo check --all-targets` 通过，`cargo test` 30 项通过（两个 Python 假 app-server 用例按平台跳过），`tsc --noEmit` 与 `vite build` 通过；真实 `codex.exe` 完成 `initialize` / `account/read` 握手，未登录时返回 `auth-expired`；应用二进制启动后生成 `%APPDATA%\dev.tokenrefill.desktop\state.json` 并写入查询状态；Windows 标题栏留白规则在 Chromium 中验证为 44px → 10px。`cargo clippy` 仍有 1 条既有告警（`apply_login_success` 参数个数），与本次改动无关。MSI/NSIS 安装包、已登录账户查询、实际窗口截图与 Windows 10 具体版本仍未验证；本机 GNU 目标因缺 `dlltool.exe` 无法编译，结论仅对 MSVC 目标成立。
 
 2026-10-23 Windows 产物调整为免安装单文件 exe（`--no-bundle`）与 NSIS 安装器（`--bundles nsis`），不再产出 MSI。本机验证：免安装 exe 10.1 MiB、可正常启动；NSIS 安装器 2.48 MiB。CI 的 `build-windows` job 用 `tauri-action` 创建 draft Release 并上传安装器，再用 `softprops/action-gh-release@v3` 追加免安装 exe；workflow 通过 actionlint，尚未在 GitHub Actions 实际运行。安装、卸载与升级验收仍未完成。
+
+2026-10-23 实现版本检查：新增 `check_for_update` 命令（Rust 侧用 ureq + rustls 请求 GitHub Releases `/releases/latest`，8 秒超时，semver 比较），设置页新增“版本”区块，自动查询并在有新版本时提供“前往下载”；只检查，不下载、不安装。验证：5 项单元测试覆盖版本比较、预发布/草稿与异常 tag；真实接口在无正式版本时返回 404 并映射为“发布仓库暂无正式版本”；临时指向其他公开仓库验证了“发现新版本”界面与按钮（已还原）。`cargo test` 52 项通过，`tsc --noEmit` 与 `vite build` 通过。

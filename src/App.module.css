@@ -583,6 +583,42 @@
   opacity: 0.72;
 }
 
+/* 版本更新提示：只在启动检查发现正式新版本时出现，可直接跳转发布页 */
+.noticeUpdate {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.noticeUpdateText {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.noticeUpdateAction {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid currentColor;
+  border-radius: 7px;
+  color: inherit;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.noticeUpdateAction:hover {
+  background: var(--surface);
+}
+
 /* 刷新失败但保留缓存：中性提示，避免错误条盖掉已有数据 */
 .noticeStale {
   margin: 16px 0 0;
@@ -799,6 +835,19 @@
 .testButton:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+/* 版本检查的按钮并排，避免把右侧说明文字挤成多行 */
+.buttonRow {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.testButton[data-primary] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 /* 单选药丸组（原生 radio，键盘方向键可用） */

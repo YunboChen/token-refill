@@ -296,7 +296,7 @@ Windows 安装包与界面运行验收尚未完成，最低 Windows 版本待确
 
 ## 10. IPC 与平台适配契约草案
 
-下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`cancel_account_login`、`rename_account`、`remove_account`、`open_external_url`。其余仍为计划名称。
+下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`cancel_account_login`、`rename_account`、`remove_account`、`open_external_url`、`check_for_update`。其余仍为计划名称。
 
 ### 10.1 前端命令边界
 
@@ -311,6 +311,7 @@ Windows 安装包与界面运行验收尚未完成，最低 Windows 版本待确
 | update_preferences | 经校验的设置变更 | 保存常规设置并协调系统操作；系统拒绝通知或自启时如实返回实际状态 | REQ-004、REQ-006、REQ-010 |
 | get_system_permissions / request_notification_permission | 读取状态或用户明确触发的权限请求 | 区分应用设置与系统许可；不在额度查询失败时反复弹出权限申请 | REQ-006、REQ-010 |
 | open_management_window / quit_app | 用户明确操作 | 窗口复用或退出清理，不能把关闭管理窗口等同于退出 | REQ-005、REQ-009 |
+| check_for_update（已实现） | 无敏感输入 | 读取 GitHub Releases 最新正式版本的版本号与发布页地址；只比较与跳转，不下载、不安装 | REQ-012 |
 
 授权输入通道必须按平台实际能力设计；不为方便而把 Keychain 内容或原始响应回传前端。若某平台需要手动输入秘密，应先设计合适的受控输入通道，而不是在普通前端状态或日志中保存。
 
