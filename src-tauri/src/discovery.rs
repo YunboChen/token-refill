@@ -76,10 +76,12 @@ fn is_first_party(base_url: &str) -> bool {
 
 fn home_dir() -> Option<PathBuf> {
     // Windows 优先 USERPROFILE：HOME 可能被 Git Bash 等环境改成 POSIX 路径。
-    #[cfg(target_os = "windows")]
-    let primary = env::var_os("USERPROFILE");
-    #[cfg(not(target_os = "windows"))]
-    let primary = env::var_os("HOME");
+    // 用 `cfg!` 而不是条件编译，让两个分支在所有平台上都参与类型检查。
+    let primary = if cfg!(target_os = "windows") {
+        env::var_os("USERPROFILE")
+    } else {
+        env::var_os("HOME")
+    };
 
     primary
         .or_else(|| env::var_os("HOME"))
