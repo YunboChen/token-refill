@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -1487,6 +1488,26 @@ fn clear_refreshing(state: &mut PersistedState, account_id: &str) {
     }
 }
 
+/// 查询线程 panic 的收尾：清掉“查询中”标记，并记录一次失败让调度器按刷新
+/// 间隔退避；否则没有快照的账户会被 5 秒一次的调度反复重试。
+fn apply_refresh_panic(state: &mut PersistedState, account_id: &str, now: i64) {
+    let Some(account) = account_mut(state, account_id) else {
+        return;
+    };
+    for product in account
+        .products
+        .iter_mut()
+        .filter(|p| is_refreshable_product(p))
+    {
+        product.query.refreshing = false;
+        product.query.last_attempt_epoch = Some(now);
+        product.query.last_error = Some(QueryError {
+            code: "internal".to_string(),
+            message: "查询过程中发生内部错误，请稍后重试。".to_string(),
+        });
+    }
+}
+
 fn load_state(path: &Path) -> PersistedState {
     let raw = match fs::read_to_string(path) {
         Ok(raw) => raw,
@@ -2503,20 +2524,29 @@ impl StateStore {
 fn spawn_refresh(store: Arc<StateStore>, account_id: String) {
     // 查询在独立线程执行，命令立即返回；UI 通过事件收到 refreshing 与结果。
     thread::spawn(move || {
-        match store.account_platform(&account_id).as_deref() {
-            Some("codex") => refresh_codex(&store, &account_id),
-            Some("bailian") => refresh_bailian(&store, &account_id),
-            Some(OPENCODE_GO_PLATFORM) => {
-                refresh_api_key(&store, &account_id, OPENCODE_GO_PLATFORM)
+        // 线程内任何 panic 都不能把账户永久留在“查询中”：没有兜底时线程展开会
+        // 跳过 clear_refreshing 与 in_flight 收尾，调度器随后永远跳过该账户。
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            match store.account_platform(&account_id).as_deref() {
+                Some("codex") => refresh_codex(&store, &account_id),
+                Some("bailian") => refresh_bailian(&store, &account_id),
+                Some(OPENCODE_GO_PLATFORM) => {
+                    refresh_api_key(&store, &account_id, OPENCODE_GO_PLATFORM)
+                }
+                Some(COMMAND_CODE_PLATFORM) => {
+                    refresh_api_key(&store, &account_id, COMMAND_CODE_PLATFORM)
+                }
+                Some(ANTIGRAVITY_PLATFORM) => refresh_antigravity(&store, &account_id),
+                // 账户在排队期间被移除：不发起查询，也不回写旧任务。
+                _ => {
+                    store.update_soft(|state| clear_refreshing(state, &account_id));
+                }
             }
-            Some(COMMAND_CODE_PLATFORM) => {
-                refresh_api_key(&store, &account_id, COMMAND_CODE_PLATFORM)
-            }
-            Some(ANTIGRAVITY_PLATFORM) => refresh_antigravity(&store, &account_id),
-            // 账户在排队期间被移除：不发起查询，也不回写旧任务。
-            _ => {
-                store.update_soft(|state| clear_refreshing(state, &account_id));
-            }
+        }));
+        if outcome.is_err() {
+            eprintln!("查询账户额度时发生内部错误，已重置该账户的刷新状态");
+            let now = epoch_now();
+            store.update_soft(|state| apply_refresh_panic(state, &account_id, now));
         }
         lock(&store.in_flight).remove(&account_id);
     });
@@ -3860,6 +3890,30 @@ mod tests {
         let account = &state.accounts[1];
         assert!(!is_account_due(account, 5, 1_790_000_100));
         assert!(is_account_due(account, 5, 1_790_000_400));
+    }
+
+    #[test]
+    fn refresh_panic_clears_refreshing_and_backs_off() {
+        let mut state = default_state();
+        state.accounts.push(bailian_account("bailian-1"));
+        let now = 1_790_000_000;
+        mark_refreshing(&mut state, "bailian-1", now);
+        assert!(state.accounts[1]
+            .products
+            .iter()
+            .all(|product| product.query.refreshing));
+
+        apply_refresh_panic(&mut state, "bailian-1", now + 1);
+
+        let account = &state.accounts[1];
+        for product in &account.products {
+            assert!(!product.query.refreshing);
+            assert_eq!(product.query.last_attempt_epoch, Some(now + 1));
+            assert_eq!(product.query.last_error.as_ref().unwrap().code, "internal");
+        }
+        // 即使没有快照也要按刷新间隔退避，不能每 5 秒重试一次。
+        assert!(!is_account_due(account, 5, now + 2));
+        assert!(is_account_due(account, 5, now + 301));
     }
 
     #[test]
