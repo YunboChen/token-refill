@@ -167,3 +167,33 @@
 - Token Plan 与 Coding Plan 同时存在时的账号关系已按“同一账户两个产品”实现；其他套餐组合未验证。
 - 未订阅 Coding Plan 时接口返回空列表，已按数据缺口处理；未订阅 Token Plan 时该接口的返回尚未验证，不能据此断言为零额度。
 - 阿里云登录名（如控制台右上角展示的 `aliyunId`）来自浏览器页面配置或 Cookie，控制台令牌接口不返回该值。应用只在 `nickName` 是真实昵称时展示它，否则回退为脱敏 UID；如需显示完整登录名，需要另行确认是否允许浏览器 Cookie 导入或手动填写。
+
+## 8. OpenCode Go、Command Code 与 Antigravity（2026-10-23）
+
+本轮新增三个平台，优先级与边界如下。三者均未使用真实账户完成本机端到端验证，协议字段来自官方文档、官方 CLI 行为或公开实现，接入后仍需用户实际账户复核。
+
+### 8.1 OpenCode Go
+
+- 查询：`GET https://opencode.ai/zen/go/v1/usage`，使用 Go API Key 作为 Bearer 令牌。
+- 返回：`usage.rolling` / `weekly` / `monthly`，每项包含 `status`、`percent`（已用百分比）与 `resetsAt`（RFC 3339）。`status = rate-limited` 时按 100% 处理。
+- 口径：API 返回账户维度的汇总百分比，不按模型拆分；`rolling` 为 5 小时窗口，`weekly` 为 1 周窗口，`monthly` 按订阅周期滚动，应用不写死 30 天。
+- 错误：401 视为 Key 失效；403 视为未开通 Go 订阅；429 与 5xx 分别提示稍后重试。
+- 本机检测：启动时调用 `opencode auth export`，从活动凭据中优先选择 `integrationID = opencode-go`，其次 `opencode`，只接受 `value.type = key`。检测到后创建本地账户并在每次刷新时重新读取；未检测到时由用户手动填写 API Key。不直接读取 SQLite 或系统密钥环。
+- 未验证：Go Plus 与 Go 的响应是否完全一致；订阅月重置时间是否始终返回；多工作区 Key 的口径差异。本机实测 `opencode auth export` 返回 `opencode` 集成下的 `oc_sk_…` Key，可直接用于 Go usage 接口。
+
+### 8.2 Command Code
+
+- 查询：使用 Provider API Key（`user_…`）访问 `GET https://api.commandcode.ai/alpha/billing/credits`，并可选调用 `/alpha/usage/summary` 与 `/alpha/billing/subscriptions`。
+- 字段：`credits.monthlyCredits`（剩余）、`purchasedCredits`、`windowLimits.fiveHour` / `weekly` 的 `used`、`cap`、`resetAt`；`summary.totalMonthlyCredits` 为本账期已用；订阅接口提供 `planId` 与 `currentPeriodEnd`。
+- 口径：月度上限由“已用 + 剩余”推导，百分比随已用/上限变化；滚动窗口直接使用已用/上限。辅助接口失败时保留 credits 窗口并记录能力缺口，不伪造月度上限。
+- 错误：401/403 视为 Key 失效；404 提示接口不可用；429 与 5xx 分别提示稍后重试。
+- 未验证：真实订阅账户的 `/alpha` 响应、Provider 计划（无窗口）与订阅计划之间的字段差异、月度账期与 `currentPeriodEnd` 的时区语义。
+
+### 8.3 Google Antigravity
+
+- 查询：调用官方 CLI 打印模式 `agy -p /usage --output-format json`，读取 `command.data.groups[].buckets[]` 的 `window`、`remaining_fraction` 与 `reset_time`。
+- 版本门槛：仅 `agy` ≥ 1.1.11 支持；旧版会把 `/usage` 当成普通提示词并消耗额度，因此应用先执行 `agy --version`，不满足则拒绝查询。
+- 过程控制：设置 `AGY_CLI_DISABLE_AUTO_UPDATE=true`，标准输入置空；查询带 60 秒超时，未登录等待交互时会被终止并归类为需要登录。
+- 代理：设置页提供跟随系统 / 不走代理 / 指定代理三种模式，作用于全部 HTTP 查询与外部 CLI。跟随系统读取 Windows `ProxyEnable` / `ProxyServer` / `ProxyOverride` 或 macOS `scutil --proxy`，环境变量优先；`ProxyOverride` 转为 `NO_PROXY`。指定代理需为不含凭据的 HTTP/HTTPS 地址；PAC/自动配置脚本不解析。
+- 边界：不读取 `agy` 的钥匙串、`~/.gemini/...` 令牌文件、IDE SQLite 或浏览器会话；账户来自用户本机 CLI 登录态。移除应用内账户不会退出 `agy`。
+- 未验证：用户本机是否安装 `agy`、CLI 输出是否在所有版本保持蛇形字段、免费版与 Google AI 订阅的窗口差异。若后续版本改变字段，应在 `antigravity.rs` 的解析测试中更新合成样例。

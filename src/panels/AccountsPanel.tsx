@@ -28,7 +28,14 @@ const AUTH_LABELS: Record<AuthState, string> = {
   'needs-reauth': '需要重新授权',
 };
 
-type DialogPlatform = 'codex' | 'bailian';
+type DialogPlatform =
+  | 'codex'
+  | 'bailian'
+  | 'opencode-go'
+  | 'commandcode'
+  | 'antigravity';
+
+type DialogMode = 'add' | 'reauth';
 
 const PLATFORM_CHOICES: {
   key: DialogPlatform;
@@ -48,10 +55,44 @@ const PLATFORM_CHOICES: {
     hint: 'Token Plan · Coding Plan · 阿里云控制台',
     note: '接下来会打开阿里云百炼控制台登录页。登录成功后，控制台会话令牌会通过本机回环地址直接交给应用，不经过前端，也不会写入外部工具的配置。',
   },
+  {
+    key: 'opencode-go',
+    name: 'OpenCode Go',
+    hint: 'Go / Go Plus · API Key',
+    note: '在 OpenCode 控制台订阅 Go 或 Go Plus 后复制 API Key。密钥只保存在本机账户目录，用于读取 5 小时、每周与订阅月额度。',
+  },
+  {
+    key: 'commandcode',
+    name: 'Command Code',
+    hint: '订阅额度 · Provider API Key',
+    note: '使用 Command Code 的 Provider API Key（通常以 user_ 开头）。密钥只保存在本机账户目录，用于读取滚动窗口与月度额度。',
+  },
+  {
+    key: 'antigravity',
+    name: 'Antigravity',
+    hint: 'Gemini / Claude · 本机 agy 登录',
+    note: '需要已安装并登录 Antigravity CLI（agy 1.1.11 或更高版本）。应用只调用 agy 官方的打印模式查询额度，不读取、不复制其登录令牌。',
+  },
 ];
 
+const API_KEY_PLATFORMS: DialogPlatform[] = ['opencode-go', 'commandcode'];
+
+function isApiKeyPlatform(platform: DialogPlatform): boolean {
+  return API_KEY_PLATFORMS.includes(platform);
+}
+
+function dialogPlatformFor(platform: string): DialogPlatform {
+  const known = PLATFORM_CHOICES.find((choice) => choice.key === platform);
+  return known?.key ?? 'codex';
+}
+
 type DialogState =
-  | { kind: 'add-form'; platform: DialogPlatform }
+  | {
+      kind: 'add-form';
+      platform: DialogPlatform;
+      mode: DialogMode;
+      accountId?: string;
+    }
   | {
       kind: 'login';
       platform: DialogPlatform;
@@ -90,6 +131,9 @@ export default function AccountsPanel() {
     refresh,
     beginLogin,
     beginBailianLogin,
+    addApiKeyAccount,
+    replaceApiKey,
+    addAntigravityAccount,
     cancelLogin,
     renameAccount,
     removeAccount,
@@ -97,6 +141,8 @@ export default function AccountsPanel() {
   } = useAppState();
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [draftName, setDraftName] = useState('');
+  const [draftKey, setDraftKey] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [renaming, setRenaming] = useState<{ accountId: string; value: string } | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
@@ -136,13 +182,16 @@ export default function AccountsPanel() {
     };
   }, [desktop]);
 
-  const startAdd = async (platform: DialogPlatform) => {
+  const startBrowserLogin = async (
+    platform: 'codex' | 'bailian',
+    accountId?: string,
+  ) => {
     setStarting(true);
-    const name = draftName.trim() || undefined;
+    const name = accountId ? undefined : draftName.trim() || undefined;
     const start =
       platform === 'bailian'
-        ? await beginBailianLogin(undefined, name)
-        : await beginLogin(undefined, name);
+        ? await beginBailianLogin(accountId, name)
+        : await beginLogin(accountId, name);
     setStarting(false);
     if (!start) {
       setDialog(null);
@@ -151,7 +200,7 @@ export default function AccountsPanel() {
     setDialog({
       kind: 'login',
       platform,
-      mode: 'add',
+      mode: accountId ? 'reauth' : 'add',
       start,
       phase: 'waiting',
       message: null,
@@ -159,22 +208,66 @@ export default function AccountsPanel() {
     void openExternal(start.authUrl);
   };
 
+  const submitAccountForm = async (dialog: Extract<DialogState, { kind: 'add-form' }>) => {
+    setFormError(null);
+    const name = draftName.trim() || undefined;
+    const platform = dialog.platform;
+
+    if (dialog.mode === 'reauth' && dialog.accountId) {
+      if (!isApiKeyPlatform(platform)) return;
+      if (!draftKey.trim()) {
+        setFormError('请填写新的 API Key。');
+        return;
+      }
+      setStarting(true);
+      const error = await replaceApiKey(dialog.accountId, draftKey.trim());
+      setStarting(false);
+      if (error) setFormError(error);
+      else setDialog(null);
+      return;
+    }
+
+    if (platform === 'antigravity') {
+      setStarting(true);
+      const error = await addAntigravityAccount(name);
+      setStarting(false);
+      if (error) setFormError(error);
+      else setDialog(null);
+      return;
+    }
+
+    if (isApiKeyPlatform(platform)) {
+      if (!draftKey.trim()) {
+        setFormError('请填写 API Key。');
+        return;
+      }
+      setStarting(true);
+      const error = await addApiKeyAccount(platform, name, draftKey.trim());
+      setStarting(false);
+      if (error) setFormError(error);
+      else setDialog(null);
+      return;
+    }
+
+    await startBrowserLogin(platform as 'codex' | 'bailian');
+  };
+
   const startReauth = async (account: AccountState) => {
-    const platform: DialogPlatform = account.platform === 'bailian' ? 'bailian' : 'codex';
-    const start =
-      platform === 'bailian'
-        ? await beginBailianLogin(account.accountId)
-        : await beginLogin(account.accountId);
-    if (!start) return;
-    setDialog({
-      kind: 'login',
-      platform,
-      mode: 'reauth',
-      start,
-      phase: 'waiting',
-      message: null,
-    });
-    void openExternal(start.authUrl);
+    const platform = dialogPlatformFor(account.platform);
+    if (platform === 'opencode-go' || platform === 'commandcode') {
+      setDraftName('');
+      setDraftKey('');
+      setFormError(null);
+      setDialog({
+        kind: 'add-form',
+        platform,
+        mode: 'reauth',
+        accountId: account.accountId,
+      });
+      return;
+    }
+    if (platform === 'antigravity') return;
+    await startBrowserLogin(platform, account.accountId);
   };
 
   const closeDialog = () => {
@@ -200,7 +293,9 @@ export default function AccountsPanel() {
 
   const openAddDialog = (platform: DialogPlatform = 'codex') => {
     setDraftName('');
-    setDialog({ kind: 'add-form', platform });
+    setDraftKey('');
+    setFormError(null);
+    setDialog({ kind: 'add-form', platform, mode: 'add' });
   };
 
   const dialogPlatform =
@@ -217,7 +312,7 @@ export default function AccountsPanel() {
           </span>
           <p className={styles.emptyTitle}>还没有接入账户</p>
           <p className={styles.usageNote}>
-            添加账户后，每个账户会使用独立的授权副本，互不影响。
+            添加账户后，各账户的授权与额度互不影响。
           </p>
           <button
             type="button"
@@ -249,7 +344,7 @@ export default function AccountsPanel() {
                     type="button"
                     className={styles.platformAddButton}
                     onClick={() =>
-                      openAddDialog(group.platform === 'bailian' ? 'bailian' : 'codex')
+                      openAddDialog(dialogPlatformFor(group.platform))
                     }
                     disabled={!desktop}
                     title={
@@ -266,6 +361,10 @@ export default function AccountsPanel() {
             />
             {group.accounts.map((account) => {
               const managed = account.source === 'managed';
+              // Antigravity 跟随本机 agy 登录态，没有应用内重新授权入口。
+              const canReauth = managed && account.platform !== 'antigravity';
+              // 本机 Codex 账户跟随 CLI 登录态，不能移除。
+              const canRemove = !(account.platform === 'codex' && !managed);
               const busy = account.products.some((product) => product.query.refreshing);
               // 只列已开通的套餐；尚未确认（active === null）的也先展示。
               // 若平台确认全部未开通，则保留列表并标记为“未开通”。
@@ -300,54 +399,62 @@ export default function AccountsPanel() {
                           className={busy ? styles.spin : undefined}
                         />
                       </button>
-                      {managed ? (
-                        <>
-                          <button
-                            type="button"
-                            className={styles.miniButton}
-                            onClick={() => void startReauth(account)}
-                            disabled={!desktop}
-                            aria-label="重新授权"
-                            title="重新授权"
-                          >
-                            <LinkSimple size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.miniButton}
-                            onClick={() =>
-                              setRenaming({
-                                accountId: account.accountId,
-                                value: account.displayName,
-                              })
-                            }
-                            disabled={!desktop}
-                            aria-label="重命名"
-                            title="重命名"
-                          >
-                            <PencilSimple size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.miniButton}
-                            onClick={() => setConfirming(account.accountId)}
-                            disabled={!desktop}
-                            aria-label="移除账户"
-                            title="移除账户"
-                            data-danger
-                          >
-                            <Trash size={14} />
-                          </button>
-                        </>
+                      {canReauth ? (
+                        <button
+                          type="button"
+                          className={styles.miniButton}
+                          onClick={() => void startReauth(account)}
+                          disabled={!desktop}
+                          aria-label="重新授权"
+                          title="重新授权"
+                        >
+                          <LinkSimple size={14} />
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className={styles.miniButton}
+                        onClick={() =>
+                          setRenaming({
+                            accountId: account.accountId,
+                            value: account.displayName,
+                          })
+                        }
+                        disabled={!desktop}
+                        aria-label="重命名"
+                        title="重命名"
+                      >
+                        <PencilSimple size={14} />
+                      </button>
+                      {canRemove ? (
+                        <button
+                          type="button"
+                          className={styles.miniButton}
+                          onClick={() => setConfirming(account.accountId)}
+                          disabled={!desktop}
+                          aria-label="移除账户"
+                          title="移除账户"
+                          data-danger
+                        >
+                          <Trash size={14} />
+                        </button>
                       ) : null}
                     </div>
                   </div>
                   <p className={styles.accountMeta}>
                     {account.platform === 'bailian'
                       ? '控制台授权'
-                      : managed
-                        ? '独立授权'
-                        : '本机登录态'}
+                      : account.platform === 'antigravity'
+                        ? '本机 agy 登录'
+                        : account.platform === 'opencode-go'
+                          ? managed
+                            ? 'API Key 授权'
+                            : '本机 CLI 登录'
+                          : account.platform === 'commandcode'
+                            ? 'API Key 授权'
+                            : managed
+                              ? '独立授权'
+                              : '本机登录态'}
                     {account.identityHint ? ` · ${account.identityHint}` : ''}
                   </p>
                   <div className={styles.planList}>
@@ -497,44 +604,83 @@ export default function AccountsPanel() {
 
                 {dialog.kind === 'add-form' ? (
                   <>
-                    <h2 id="account-dialog-title">添加账户</h2>
-                    <div
-                      className={styles.platformPicker}
-                      role="group"
-                      aria-label="选择平台"
-                    >
-                      {PLATFORM_CHOICES.map((item) => (
-                        <button
-                          type="button"
-                          key={item.key}
-                          className={styles.platformPick}
-                          data-active={dialog.platform === item.key || undefined}
-                          aria-pressed={dialog.platform === item.key}
-                          onClick={() =>
-                            setDialog({ kind: 'add-form', platform: item.key })
-                          }
-                        >
-                          <span className={styles.platformPickName}>{item.name}</span>
-                          <span className={styles.platformPickHint}>{item.hint}</span>
-                        </button>
-                      ))}
-                    </div>
+                    <h2 id="account-dialog-title">
+                      {dialog.mode === 'reauth' ? '重新授权' : '添加账户'}
+                    </h2>
+                    {dialog.mode === 'add' ? (
+                      <div
+                        className={styles.platformPicker}
+                        role="group"
+                        aria-label="选择平台"
+                      >
+                        {PLATFORM_CHOICES.map((item) => (
+                          <button
+                            type="button"
+                            key={item.key}
+                            className={styles.platformPick}
+                            data-active={dialog.platform === item.key || undefined}
+                            aria-pressed={dialog.platform === item.key}
+                            onClick={() => {
+                              setFormError(null);
+                              setDialog({
+                                kind: 'add-form',
+                                platform: item.key,
+                                mode: 'add',
+                              });
+                            }}
+                          >
+                            <span className={styles.platformPickName}>{item.name}</span>
+                            <span className={styles.platformPickHint}>{item.hint}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className={styles.usageNote}>
+                        {choice.name} · 更新该账户使用的凭据。
+                      </p>
+                    )}
                     <p className={styles.usageNote}>{choice.note}</p>
-                    <label className={styles.field}>
-                      <span className={styles.fieldLabel}>账户名称（可选）</span>
-                      <input
-                        className={styles.textInput}
-                        value={draftName}
-                        onChange={(event) => setDraftName(event.target.value)}
-                        placeholder={
-                          dialog.platform === 'bailian'
-                            ? '留空则显示为“百炼账户”'
-                            : '留空则使用授权后的脱敏邮箱'
-                        }
-                        maxLength={60}
-                        autoFocus
-                      />
-                    </label>
+                    {dialog.mode === 'add' ? (
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabel}>账户名称（可选）</span>
+                        <input
+                          className={styles.textInput}
+                          value={draftName}
+                          onChange={(event) => setDraftName(event.target.value)}
+                          placeholder={
+                            dialog.platform === 'bailian'
+                              ? '留空则显示为“百炼账户”'
+                              : '留空则使用默认名称'
+                          }
+                          maxLength={60}
+                          autoFocus
+                        />
+                      </label>
+                    ) : null}
+                    {isApiKeyPlatform(dialog.platform) ? (
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabel}>
+                          {dialog.platform === 'opencode-go'
+                            ? 'OpenCode Go API Key'
+                            : 'Command Code Provider API Key'}
+                        </span>
+                        <input
+                          className={styles.textInput}
+                          type="password"
+                          value={draftKey}
+                          onChange={(event) => setDraftKey(event.target.value)}
+                          placeholder={dialog.platform === 'opencode-go' ? 'sk-…' : 'user_…'}
+                          autoComplete="off"
+                          spellCheck={false}
+                          autoFocus={dialog.mode === 'reauth'}
+                        />
+                      </label>
+                    ) : null}
+                    {formError ? (
+                      <p className={styles.noticeDanger} role="alert">
+                        {formError}
+                      </p>
+                    ) : null}
                     <div className={styles.dialogActions}>
                       <button
                         type="button"
@@ -546,14 +692,20 @@ export default function AccountsPanel() {
                       <button
                         type="button"
                         className={styles.button}
-                        onClick={() => void startAdd(dialog.platform)}
+                        onClick={() => void submitAccountForm(dialog)}
                         disabled={starting}
                       >
                         {starting
-                          ? '正在启动…'
-                          : dialog.platform === 'bailian'
-                            ? '前往阿里云授权'
-                            : '前往浏览器授权'}
+                          ? '正在处理…'
+                          : dialog.mode === 'reauth'
+                            ? '验证并更新'
+                            : dialog.platform === 'antigravity'
+                              ? '接入本机 Antigravity'
+                              : isApiKeyPlatform(dialog.platform)
+                                ? '验证并添加'
+                                : dialog.platform === 'bailian'
+                                  ? '前往阿里云授权'
+                                  : '前往浏览器授权'}
                       </button>
                     </div>
                   </>

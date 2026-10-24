@@ -18,11 +18,17 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
 
+use crate::antigravity::{self, AntigravityUsage};
+use crate::api_key;
 use crate::bailian::{
     self, BailianError, BailianReadout, CodingPlanUsage, CodingPlanWindow, TokenPlanSubscription,
     TokenPlanUsage,
 };
 use crate::codex::{self, CodexIdentity, CodexUsage, UsageError};
+use crate::commandcode::{self, CommandCodeUsage};
+use crate::opencode::{self, OpencodeUsage};
+use crate::proxy::{self, ProxyMode};
+use crate::usage_api::ProviderError;
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const STATE_EVENT: &str = "app-state-changed";
@@ -31,6 +37,14 @@ pub const DEFAULT_ACCOUNT_ID: &str = "codex-local";
 pub const DEFAULT_PRODUCT_ID: &str = "codex-subscription";
 pub const BAILIAN_TOKEN_PLAN_ID: &str = "bailian-token-plan";
 pub const BAILIAN_CODING_PLAN_ID: &str = "bailian-coding-plan";
+pub const OPENCODE_GO_PLATFORM: &str = "opencode-go";
+pub const OPENCODE_GO_PRODUCT_ID: &str = "opencode-go";
+pub const OPENCODE_LOCAL_ACCOUNT_ID: &str = "opencode-local";
+pub const COMMAND_CODE_PLATFORM: &str = "commandcode";
+pub const COMMAND_CODE_PRODUCT_ID: &str = "commandcode";
+pub const ANTIGRAVITY_PLATFORM: &str = "antigravity";
+pub const ANTIGRAVITY_PRODUCT_ID: &str = "antigravity";
+pub const ANTIGRAVITY_ACCOUNT_ID: &str = "antigravity-local";
 
 /// 与前端设置页的可选项保持一致；后端在这里再次校验，不信任前端传入值。
 pub const REFRESH_OPTIONS: [i64; 5] = [1, 5, 15, 30, 60];
@@ -43,6 +57,7 @@ const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 const DISPLAY_NAME_MAX_CHARS: usize = 60;
 const PROFILES_DIR_NAME: &str = "codex-profiles";
 const BAILIAN_PROFILES_DIR_NAME: &str = "bailian-profiles";
+const API_PROFILES_DIR_NAME: &str = "api-profiles";
 static ACCOUNT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 // ---------- 脱敏状态模型 ----------
@@ -56,6 +71,12 @@ pub struct Preferences {
     pub auth_expired_enabled: bool,
     pub reset_notice_enabled: bool,
     pub auto_launch_enabled: bool,
+    /// 网络代理模式；旧状态文件缺省为跟随系统。
+    #[serde(default)]
+    pub proxy_mode: ProxyMode,
+    /// 指定代理地址；仅在 `proxy_mode = manual` 时生效。
+    #[serde(default)]
+    pub proxy_url: Option<String>,
 }
 
 impl Default for Preferences {
@@ -69,6 +90,8 @@ impl Default for Preferences {
             auth_expired_enabled: true,
             reset_notice_enabled: false,
             auto_launch_enabled: false,
+            proxy_mode: ProxyMode::System,
+            proxy_url: None,
         }
     }
 }
@@ -89,6 +112,13 @@ impl Preferences {
             return Err(format!(
                 "低额度阈值需在 {LOW_QUOTA_MIN}% 到 {LOW_QUOTA_MAX}% 之间"
             ));
+        }
+        if self.proxy_mode == ProxyMode::Manual {
+            let url = self
+                .proxy_url
+                .as_deref()
+                .ok_or_else(|| "指定代理时需要填写代理地址。".to_string())?;
+            proxy::normalize_proxy_url(url)?;
         }
         Ok(())
     }
@@ -135,9 +165,12 @@ pub struct QuotaWindow {
     pub remaining_percent: Option<i64>,
     /// 平台提供的绝对值；缺失时只展示比例，不推算数量。
     #[serde(default)]
-    pub used_amount: Option<i64>,
+    pub used_amount: Option<f64>,
     #[serde(default)]
-    pub total_amount: Option<i64>,
+    pub total_amount: Option<f64>,
+    /// 平台只给出剩余余额时使用（例如订阅赠额未返回上限）。
+    #[serde(default)]
+    pub remaining_amount: Option<f64>,
     pub window_duration_mins: Option<i64>,
     pub resets_at_epoch: Option<i64>,
 }
@@ -349,6 +382,7 @@ fn snapshot_from_usage(usage: &CodexUsage) -> QuotaSnapshot {
                         remaining_percent: Some(window.remaining_percent),
                         used_amount: None,
                         total_amount: None,
+                        remaining_amount: None,
                         window_duration_mins: window.window_duration_mins,
                         resets_at_epoch: window.resets_at_epoch,
                     }
@@ -392,13 +426,76 @@ fn is_bailian_product(product: &ProductState) -> bool {
     )
 }
 
+fn is_opencode_product(product: &ProductState) -> bool {
+    product.kind == OPENCODE_GO_PRODUCT_ID
+}
+
+fn is_commandcode_product(product: &ProductState) -> bool {
+    product.kind == COMMAND_CODE_PRODUCT_ID
+}
+
+fn is_antigravity_product(product: &ProductState) -> bool {
+    product.kind == ANTIGRAVITY_PRODUCT_ID
+}
+
 /// 调度与提醒需要覆盖所有已接入的产品；未识别平台不参与自动刷新。
 fn is_refreshable_product(product: &ProductState) -> bool {
-    is_codex_product(product) || is_bailian_product(product)
+    is_codex_product(product)
+        || is_bailian_product(product)
+        || is_opencode_product(product)
+        || is_commandcode_product(product)
+        || is_antigravity_product(product)
 }
 
 fn is_supported_platform(platform: &str) -> bool {
-    matches!(platform, "codex" | "bailian")
+    matches!(
+        platform,
+        "codex" | "bailian" | OPENCODE_GO_PLATFORM | COMMAND_CODE_PLATFORM | ANTIGRAVITY_PLATFORM
+    )
+}
+
+fn supports_api_key(platform: &str) -> bool {
+    matches!(platform, OPENCODE_GO_PLATFORM | COMMAND_CODE_PLATFORM)
+}
+
+/// API Key 平台的单一套餐定义。
+fn api_key_product(platform: &str) -> Option<ProductState> {
+    let (product_id, display_name) = match platform {
+        OPENCODE_GO_PLATFORM => (OPENCODE_GO_PRODUCT_ID, "Go 订阅"),
+        COMMAND_CODE_PLATFORM => (COMMAND_CODE_PRODUCT_ID, "订阅额度"),
+        _ => return None,
+    };
+    Some(ProductState {
+        product_id: product_id.to_string(),
+        kind: product_id.to_string(),
+        display_name: display_name.to_string(),
+        plan_tier: None,
+        active: None,
+        snapshot: None,
+        query: QueryState::default(),
+    })
+}
+
+fn antigravity_products() -> Vec<ProductState> {
+    vec![ProductState {
+        product_id: ANTIGRAVITY_PRODUCT_ID.to_string(),
+        kind: ANTIGRAVITY_PRODUCT_ID.to_string(),
+        display_name: "模型额度".to_string(),
+        plan_tier: None,
+        active: None,
+        snapshot: None,
+        query: QueryState::default(),
+    }]
+}
+
+fn platform_display_name(platform: &str) -> &'static str {
+    match platform {
+        OPENCODE_GO_PLATFORM => "OpenCode Go 账户",
+        COMMAND_CODE_PLATFORM => "Command Code 账户",
+        ANTIGRAVITY_PLATFORM => "本机 Antigravity",
+        "bailian" => "百炼账户",
+        _ => "Codex 账户",
+    }
 }
 
 fn bailian_products() -> Vec<ProductState> {
@@ -457,6 +554,7 @@ fn token_plan_snapshot(
         remaining_percent: usage.used_percent.map(|used| clamp_percent(100 - used)),
         used_amount: None,
         total_amount: None,
+        remaining_amount: None,
         // 订阅月按购买日滚动，不能固定成 30 天。
         window_duration_mins: None,
         resets_at_epoch: usage.resets_at_epoch,
@@ -499,8 +597,9 @@ fn coding_window_snapshot(
         unit: "calls".to_string(),
         used_percent,
         remaining_percent: used_percent.map(|used| clamp_percent(100 - used)),
-        used_amount: used,
-        total_amount: total,
+        used_amount: used.map(|value| value as f64),
+        total_amount: total.map(|value| value as f64),
+        remaining_amount: None,
         window_duration_mins,
         resets_at_epoch: window.resets_at_epoch,
     }
@@ -550,6 +649,220 @@ fn coding_plan_snapshot(usage: &CodingPlanUsage, checked_at: i64) -> QuotaSnapsh
             windows,
         }],
         capability_gaps,
+    }
+}
+
+fn is_product_for_platform(product: &ProductState, platform: &str) -> bool {
+    match platform {
+        OPENCODE_GO_PLATFORM => is_opencode_product(product),
+        COMMAND_CODE_PLATFORM => is_commandcode_product(product),
+        ANTIGRAVITY_PLATFORM => is_antigravity_product(product),
+        _ => false,
+    }
+}
+
+fn opencode_snapshot(usage: &OpencodeUsage) -> QuotaSnapshot {
+    let mut capability_gaps = Vec::new();
+    if usage
+        .windows
+        .iter()
+        .any(|window| window.resets_at_epoch.is_none())
+    {
+        capability_gaps.push("部分额度窗口未提供重置时间".to_string());
+    }
+
+    let windows = usage
+        .windows
+        .iter()
+        .map(|window| QuotaWindow {
+            window_id: window.source_id.to_string(),
+            source_window_id: window.source_id.to_string(),
+            window_name: Some(window.name.to_string()),
+            unit: "percent".to_string(),
+            used_percent: Some(window.used_percent),
+            remaining_percent: Some(clamp_percent(100 - window.used_percent)),
+            used_amount: None,
+            total_amount: None,
+            remaining_amount: None,
+            window_duration_mins: window.window_duration_mins,
+            resets_at_epoch: window.resets_at_epoch,
+        })
+        .collect();
+
+    QuotaSnapshot {
+        checked_at_epoch: usage.checked_at_epoch,
+        groups: vec![QuotaGroup {
+            limit_id: Some("opencode-go".to_string()),
+            limit_name: None,
+            plan_type: None,
+            windows,
+        }],
+        capability_gaps,
+    }
+}
+
+fn rolling_window(
+    window_id: &str,
+    name: &str,
+    duration_mins: i64,
+    window: &commandcode::RollingWindow,
+) -> QuotaWindow {
+    QuotaWindow {
+        window_id: window_id.to_string(),
+        source_window_id: window_id.to_string(),
+        window_name: Some(name.to_string()),
+        unit: "usd".to_string(),
+        used_percent: Some(window.used_percent),
+        remaining_percent: Some(clamp_percent(100 - window.used_percent)),
+        used_amount: Some(crate::quota::round_money(window.used)),
+        total_amount: Some(crate::quota::round_money(window.cap)),
+        remaining_amount: None,
+        window_duration_mins: Some(duration_mins),
+        resets_at_epoch: window.resets_at_epoch,
+    }
+}
+
+fn commandcode_snapshot(usage: &CommandCodeUsage) -> QuotaSnapshot {
+    let mut windows = Vec::new();
+    if let Some(five_hour) = &usage.five_hour {
+        windows.push(rolling_window("five-hour", "5 小时窗口", 300, five_hour));
+    }
+    if let Some(weekly) = &usage.weekly {
+        windows.push(rolling_window("weekly", "1 周窗口", 10_080, weekly));
+    }
+    windows.push(QuotaWindow {
+        window_id: "monthly".to_string(),
+        source_window_id: "monthly".to_string(),
+        window_name: Some("订阅月".to_string()),
+        unit: "usd".to_string(),
+        used_percent: usage.monthly.used_percent,
+        remaining_percent: usage
+            .monthly
+            .used_percent
+            .map(|used| clamp_percent(100 - used)),
+        used_amount: usage.monthly.used.map(crate::quota::round_money),
+        total_amount: usage.monthly.total.map(crate::quota::round_money),
+        remaining_amount: Some(crate::quota::round_money(usage.monthly.remaining)),
+        window_duration_mins: None,
+        resets_at_epoch: usage.monthly.resets_at_epoch,
+    });
+
+    QuotaSnapshot {
+        checked_at_epoch: usage.checked_at_epoch,
+        groups: vec![QuotaGroup {
+            limit_id: Some("commandcode".to_string()),
+            limit_name: None,
+            plan_type: usage.plan_tier.clone(),
+            windows,
+        }],
+        capability_gaps: usage.capability_gaps.clone(),
+    }
+}
+
+fn antigravity_snapshot(usage: &AntigravityUsage) -> QuotaSnapshot {
+    let mut capability_gaps = Vec::new();
+    let mut groups = Vec::new();
+    for group in &usage.groups {
+        let mut windows = Vec::new();
+        for window in &group.windows {
+            if window.remaining_percent.is_none() {
+                capability_gaps.push(format!("平台未返回{name}的剩余比例", name = window.name));
+            }
+            windows.push(QuotaWindow {
+                window_id: window.source_id.clone(),
+                source_window_id: window.source_id.clone(),
+                window_name: Some(window.name.clone()),
+                unit: "percent".to_string(),
+                used_percent: window
+                    .remaining_percent
+                    .map(|value| clamp_percent(100 - value)),
+                remaining_percent: window.remaining_percent,
+                used_amount: None,
+                total_amount: None,
+                remaining_amount: None,
+                window_duration_mins: window.window_duration_mins,
+                resets_at_epoch: window.resets_at_epoch,
+            });
+        }
+        groups.push(QuotaGroup {
+            limit_id: Some(group.name.clone()),
+            limit_name: Some(group.name.clone()),
+            plan_type: usage.plan_tier.clone(),
+            windows,
+        });
+    }
+
+    QuotaSnapshot {
+        checked_at_epoch: usage.checked_at_epoch,
+        groups,
+        capability_gaps,
+    }
+}
+
+/// 单套餐平台的成功写入：只更新该平台自己的产品。
+fn apply_platform_success(
+    state: &mut PersistedState,
+    account_id: &str,
+    platform: &str,
+    snapshot: QuotaSnapshot,
+    plan_tier: Option<String>,
+    identity_hint: Option<String>,
+    active: Option<bool>,
+) {
+    let Some(account) = account_mut(state, account_id) else {
+        return;
+    };
+    account.auth_state = AuthState::Ok;
+    if let Some(hint) = identity_hint {
+        account.identity_hint = Some(hint);
+    }
+    let checked_at = snapshot.checked_at_epoch;
+    for product in account
+        .products
+        .iter_mut()
+        .filter(|product| is_product_for_platform(product, platform))
+    {
+        if let Some(plan_tier) = plan_tier.clone() {
+            product.plan_tier = Some(plan_tier);
+        }
+        if let Some(active) = active {
+            product.active = Some(active);
+        }
+        product.snapshot = Some(snapshot.clone());
+        product.query.refreshing = false;
+        product.query.last_attempt_epoch = Some(checked_at);
+        product.query.last_error = None;
+    }
+}
+
+/// 单套餐平台的失败写入：保留上次成功快照，只更新查询状态。
+fn apply_platform_error(
+    state: &mut PersistedState,
+    account_id: &str,
+    platform: &str,
+    error: &ProviderError,
+    now: i64,
+) {
+    let Some(account) = account_mut(state, account_id) else {
+        return;
+    };
+    if error.is_auth_error() {
+        account.auth_state = AuthState::NeedsReauth;
+    }
+    for product in account
+        .products
+        .iter_mut()
+        .filter(|product| is_product_for_platform(product, platform))
+    {
+        if error.code == "not-subscribed" {
+            product.active = Some(false);
+        }
+        product.query.refreshing = false;
+        product.query.last_attempt_epoch = Some(now);
+        product.query.last_error = Some(QueryError {
+            code: error.code.clone(),
+            message: error.message.clone(),
+        });
     }
 }
 
@@ -1213,6 +1526,7 @@ pub struct StateStore {
     path: PathBuf,
     profiles_dir: PathBuf,
     bailian_dir: PathBuf,
+    api_dir: PathBuf,
     app: AppHandle,
     in_flight: Mutex<HashSet<String>>,
     logins: Mutex<HashMap<String, PendingLogin>>,
@@ -1222,6 +1536,10 @@ pub struct StateStore {
 impl StateStore {
     pub fn load(app: AppHandle, path: PathBuf) -> Self {
         let state = load_state(&path);
+        proxy::configure(
+            state.preferences.proxy_mode,
+            state.preferences.proxy_url.clone(),
+        );
         let parent = path.parent();
         let profiles_dir = parent
             .map(|parent| parent.join(PROFILES_DIR_NAME))
@@ -1229,11 +1547,15 @@ impl StateStore {
         let bailian_dir = parent
             .map(|parent| parent.join(BAILIAN_PROFILES_DIR_NAME))
             .unwrap_or_else(|| PathBuf::from(BAILIAN_PROFILES_DIR_NAME));
+        let api_dir = parent
+            .map(|parent| parent.join(API_PROFILES_DIR_NAME))
+            .unwrap_or_else(|| PathBuf::from(API_PROFILES_DIR_NAME));
         Self {
             inner: Mutex::new(state),
             path,
             profiles_dir,
             bailian_dir,
+            api_dir,
             app,
             in_flight: Mutex::new(HashSet::new()),
             logins: Mutex::new(HashMap::new()),
@@ -1288,6 +1610,13 @@ impl StateStore {
     fn notify_auth_expired(&self, notice: &AuthExpiredNotice) {
         let action = match (notice.platform.as_str(), notice.source) {
             ("codex", AccountSource::Local) => "请重新登录本机 Codex CLI 后再刷新。",
+            (ANTIGRAVITY_PLATFORM, _) => "请先在终端重新运行 agy 完成登录后再刷新。",
+            (OPENCODE_GO_PLATFORM, AccountSource::Local) => {
+                "请先在 opencode 中登录，或在账户页重新填写 API Key。"
+            }
+            (OPENCODE_GO_PLATFORM | COMMAND_CODE_PLATFORM, _) => {
+                "请在账户页重新填写 API Key 后再刷新。"
+            }
             _ => "请打开 Token Refill 重新授权。",
         };
         self.show_notification(
@@ -1339,6 +1668,30 @@ impl StateStore {
         }
     }
 
+    /// 单套餐平台失败：记录查询错误，授权失效时按状态跃迁提醒一次。
+    fn apply_platform_refresh_error(
+        &self,
+        account_id: &str,
+        platform: &str,
+        error: &ProviderError,
+    ) {
+        let now = epoch_now();
+        let mut notice = None;
+        self.update_soft(|state| {
+            let was_reauth = state
+                .accounts
+                .iter()
+                .find(|account| account.account_id == account_id)
+                .map(|account| account.auth_state == AuthState::NeedsReauth)
+                .unwrap_or(true);
+            apply_platform_error(state, account_id, platform, error, now);
+            notice = auth_expired_notice(state, account_id, was_reauth);
+        });
+        if let Some(notice) = notice {
+            self.notify_auth_expired(&notice);
+        }
+    }
+
     /// 严格更新：落盘失败时不提交内存，也不广播，调用方必须报告失败。
     fn update_strict<F>(&self, change: F) -> Result<PersistedState, String>
     where
@@ -1374,9 +1727,24 @@ impl StateStore {
     }
 
     pub fn update_preferences(&self, preferences: Preferences) -> Result<PersistedState, String> {
-        preferences.validate()?;
-        let next = preferences_for_update(&self.snapshot().preferences, preferences);
-        self.update_strict(|state| state.preferences = next)
+        let mut next = preferences_for_update(&self.snapshot().preferences, preferences);
+        next.validate()?;
+        if next.proxy_mode == ProxyMode::Manual {
+            next.proxy_url = Some(proxy::normalize_proxy_url(
+                next.proxy_url.as_deref().unwrap_or(""),
+            )?);
+        } else {
+            next.proxy_url = next
+                .proxy_url
+                .map(|url| url.trim().to_string())
+                .filter(|url| !url.is_empty());
+        }
+        let state = self.update_strict(|state| state.preferences = next)?;
+        proxy::configure(
+            state.preferences.proxy_mode,
+            state.preferences.proxy_url.clone(),
+        );
+        Ok(state)
     }
 
     /// 自启设置已由系统确认生效后，回写偏好并返回新状态。
@@ -1408,6 +1776,236 @@ impl StateStore {
             return None;
         }
         Some(self.bailian_dir.join(account_id))
+    }
+
+    fn private_api_dir(&self, account_id: &str) -> Option<PathBuf> {
+        if !is_valid_account_id(account_id) {
+            return None;
+        }
+        Some(self.api_dir.join(account_id))
+    }
+
+    /// 用 API Key 接入 OpenCode Go / Command Code。先完成一次真实查询再落库，
+    /// 避免把无效密钥保存下来；密钥只写入该账户的私有目录。
+    pub fn add_api_key_account(
+        &self,
+        platform: &str,
+        display_name: Option<&str>,
+        api_key: &str,
+    ) -> Result<PersistedState, String> {
+        if !supports_api_key(platform) {
+            return Err("该平台不支持使用 API Key 接入。".to_string());
+        }
+        let api_key = api_key::validate(api_key)?;
+        let (snapshot, plan_tier, active) =
+            probe_api_key(platform, &api_key).map_err(|error| error.message)?;
+
+        let product = api_key_product(platform).ok_or_else(|| "未知平台".to_string())?;
+        let account_id = new_account_id(platform);
+        let profile = self
+            .private_api_dir(&account_id)
+            .ok_or_else(|| "账户标识无效".to_string())?;
+        api_key::save(&profile, platform, &api_key)?;
+
+        let name = display_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| platform_display_name(platform).to_string());
+        let checked_at = snapshot.checked_at_epoch;
+        let result = self.update_strict(|state| {
+            state.accounts.push(AccountState {
+                account_id: account_id.clone(),
+                platform: platform.to_string(),
+                display_name: name,
+                auth_state: AuthState::Ok,
+                source: AccountSource::Managed,
+                identity_hint: None,
+                products: vec![ProductState {
+                    plan_tier,
+                    active,
+                    snapshot: Some(snapshot),
+                    query: QueryState {
+                        refreshing: false,
+                        last_attempt_epoch: Some(checked_at),
+                        last_error: None,
+                    },
+                    ..product
+                }],
+            });
+        });
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&profile);
+        }
+        result
+    }
+
+    /// 重新填写 API Key：验证通过后覆盖凭证并立即更新快照。
+    pub fn replace_api_key(
+        &self,
+        account_id: &str,
+        api_key: &str,
+    ) -> Result<PersistedState, String> {
+        let state = self.snapshot();
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)
+            .ok_or_else(|| format!("未知账户：{account_id}"))?;
+        let platform = account.platform.clone();
+        if !supports_api_key(&platform) || account.source != AccountSource::Managed {
+            return Err("该账户不使用 API Key 授权。".to_string());
+        }
+        let api_key = api_key::validate(api_key)?;
+        let (snapshot, plan_tier, active) =
+            probe_api_key(&platform, &api_key).map_err(|error| error.message)?;
+
+        let profile = self
+            .private_api_dir(account_id)
+            .ok_or_else(|| "账户标识无效".to_string())?;
+        api_key::save(&profile, &platform, &api_key)?;
+        self.update_strict(|state| {
+            apply_platform_success(
+                state, account_id, &platform, snapshot, plan_tier, None, active,
+            )
+        })
+    }
+
+    /// 接入本机 Antigravity CLI 登录态。额度查询走 `agy` 官方打印模式，
+    /// 应用不读取或复制 CLI 的令牌。查询在后台执行，命令立即返回。
+    pub fn add_antigravity_account(
+        self: &Arc<Self>,
+        display_name: Option<&str>,
+    ) -> Result<PersistedState, String> {
+        if self
+            .snapshot()
+            .accounts
+            .iter()
+            .any(|account| account.platform == ANTIGRAVITY_PLATFORM)
+        {
+            return Err("已存在本机 Antigravity 账户。".to_string());
+        }
+        let name = display_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| platform_display_name(ANTIGRAVITY_PLATFORM).to_string());
+        let state = self.update_strict(|state| {
+            state.accounts.push(AccountState {
+                account_id: ANTIGRAVITY_ACCOUNT_ID.to_string(),
+                platform: ANTIGRAVITY_PLATFORM.to_string(),
+                display_name: name,
+                auth_state: AuthState::Unknown,
+                source: AccountSource::Local,
+                identity_hint: None,
+                products: antigravity_products(),
+            });
+        })?;
+        let _ = self.request_refresh(Some(ANTIGRAVITY_ACCOUNT_ID));
+        Ok(state)
+    }
+
+    /// 启动时自动接入本机 OpenCode CLI 已保存的凭据。只读取官方
+    /// `opencode auth export` 的输出；找不到凭据时保持未接入，由用户手动添加。
+    fn detect_local_opencode(self: &Arc<Self>) {
+        if self
+            .snapshot()
+            .accounts
+            .iter()
+            .any(|account| account.platform == OPENCODE_GO_PLATFORM)
+        {
+            return;
+        }
+        if opencode::read_cli_api_key().is_err() {
+            return;
+        }
+        let Some(product) = api_key_product(OPENCODE_GO_PLATFORM) else {
+            return;
+        };
+        let mut added = false;
+        self.update_soft(|state| {
+            if state
+                .accounts
+                .iter()
+                .any(|account| account.platform == OPENCODE_GO_PLATFORM)
+            {
+                return;
+            }
+            state.accounts.push(AccountState {
+                account_id: OPENCODE_LOCAL_ACCOUNT_ID.to_string(),
+                platform: OPENCODE_GO_PLATFORM.to_string(),
+                display_name: "本机 OpenCode".to_string(),
+                auth_state: AuthState::Unknown,
+                source: AccountSource::Local,
+                identity_hint: None,
+                products: vec![product],
+            });
+            added = true;
+        });
+        if added {
+            let _ = self.request_refresh(Some(OPENCODE_LOCAL_ACCOUNT_ID));
+        }
+    }
+
+    /// 启动时检查本机 agy 登录态：能直接读到额度才自动接入；
+    /// 未安装或未登录时保持未接入，避免制造一个必然失败的账户。
+    fn detect_local_antigravity(self: &Arc<Self>) {
+        if self
+            .snapshot()
+            .accounts
+            .iter()
+            .any(|account| account.platform == ANTIGRAVITY_PLATFORM)
+        {
+            return;
+        }
+        if antigravity::find_agy_binary().is_err() {
+            return;
+        }
+        let Ok(usage) = antigravity::read_usage() else {
+            return;
+        };
+        let snapshot = antigravity_snapshot(&usage);
+        let checked_at = snapshot.checked_at_epoch;
+        let plan_tier = usage.plan_tier.clone();
+        let identity_hint = usage
+            .account
+            .as_deref()
+            .map(mask_email)
+            .filter(|hint| hint != "已授权账户");
+        let mut products = antigravity_products();
+        if let Some(product) = products.first_mut() {
+            product.plan_tier = plan_tier;
+            product.active = Some(true);
+            product.snapshot = Some(snapshot);
+            product.query.last_attempt_epoch = Some(checked_at);
+        }
+        let mut notices = Vec::new();
+        let mut added = false;
+        self.update_soft(|state| {
+            if state
+                .accounts
+                .iter()
+                .any(|account| account.platform == ANTIGRAVITY_PLATFORM)
+            {
+                return;
+            }
+            state.accounts.push(AccountState {
+                account_id: ANTIGRAVITY_ACCOUNT_ID.to_string(),
+                platform: ANTIGRAVITY_PLATFORM.to_string(),
+                display_name: platform_display_name(ANTIGRAVITY_PLATFORM).to_string(),
+                auth_state: AuthState::Ok,
+                source: AccountSource::Local,
+                identity_hint,
+                products,
+            });
+            notices = low_quota_notices(state, ANTIGRAVITY_ACCOUNT_ID);
+            added = true;
+        });
+        if added {
+            for notice in &notices {
+                self.notify_low_quota(notice);
+            }
+        }
     }
 
     /// 发起官方浏览器授权。新账户授权成功后加入列表；重新授权复用原账户记录。
@@ -1754,7 +2352,8 @@ impl StateStore {
         })
     }
 
-    /// 移除独立授权账户：只清理本应用目录，不触碰本机 Codex 登录态。
+    /// 移除账户：只清理本应用目录，不触碰外部工具的登录状态。
+    /// 本机 Codex 账户跟随 CLI 登录态，始终不可移除。
     pub fn remove_account(&self, account_id: &str) -> Result<PersistedState, String> {
         let state = self.snapshot();
         let account = state
@@ -1762,15 +2361,25 @@ impl StateStore {
             .iter()
             .find(|account| account.account_id == account_id)
             .ok_or_else(|| format!("未知账户：{account_id}"))?;
-        if account.source != AccountSource::Managed {
+        if account.platform == "codex" && account.source == AccountSource::Local {
             return Err("本机 Codex 账户不能移除；它跟随本机 CLI 登录态。".to_string());
         }
         let profile = match account.platform.as_str() {
-            "codex" => self.private_profile_dir(account_id),
-            "bailian" => self.private_bailian_dir(account_id),
-            _ => None,
-        }
-        .ok_or_else(|| "账户标识无效".to_string())?;
+            "codex" => Some(
+                self.private_profile_dir(account_id)
+                    .ok_or_else(|| "账户标识无效".to_string())?,
+            ),
+            "bailian" => Some(
+                self.private_bailian_dir(account_id)
+                    .ok_or_else(|| "账户标识无效".to_string())?,
+            ),
+            OPENCODE_GO_PLATFORM | COMMAND_CODE_PLATFORM => Some(
+                self.private_api_dir(account_id)
+                    .ok_or_else(|| "账户标识无效".to_string())?,
+            ),
+            ANTIGRAVITY_PLATFORM => None,
+            _ => return Err("未知账户平台".to_string()),
+        };
         {
             let logins = lock(&self.logins);
             if logins
@@ -1781,8 +2390,11 @@ impl StateStore {
             }
         }
 
-        if profile.exists() {
-            fs::remove_dir_all(&profile).map_err(|err| format!("删除账户授权目录失败：{err}"))?;
+        if let Some(profile) = profile {
+            if profile.exists() {
+                fs::remove_dir_all(&profile)
+                    .map_err(|err| format!("删除账户授权目录失败：{err}"))?;
+            }
         }
         self.update_strict(|state| {
             state
@@ -1886,6 +2498,13 @@ fn spawn_refresh(store: Arc<StateStore>, account_id: String) {
         match store.account_platform(&account_id).as_deref() {
             Some("codex") => refresh_codex(&store, &account_id),
             Some("bailian") => refresh_bailian(&store, &account_id),
+            Some(OPENCODE_GO_PLATFORM) => {
+                refresh_api_key(&store, &account_id, OPENCODE_GO_PLATFORM)
+            }
+            Some(COMMAND_CODE_PLATFORM) => {
+                refresh_api_key(&store, &account_id, COMMAND_CODE_PLATFORM)
+            }
+            Some(ANTIGRAVITY_PLATFORM) => refresh_antigravity(&store, &account_id),
             // 账户在排队期间被移除：不发起查询，也不回写旧任务。
             _ => {
                 store.update_soft(|state| clear_refreshing(state, &account_id));
@@ -1981,6 +2600,129 @@ fn refresh_bailian(store: &Arc<StateStore>, account_id: &str) {
     for notice in &reset_notices {
         store.notify_reset(notice);
     }
+}
+
+fn probe_api_key(
+    platform: &str,
+    api_key: &str,
+) -> Result<(QuotaSnapshot, Option<String>, Option<bool>), ProviderError> {
+    match platform {
+        OPENCODE_GO_PLATFORM => {
+            opencode::read_usage(api_key).map(|usage| (opencode_snapshot(&usage), None, Some(true)))
+        }
+        COMMAND_CODE_PLATFORM => commandcode::read_usage(api_key).map(|usage| {
+            let plan_tier = usage.plan_tier.clone();
+            (commandcode_snapshot(&usage), plan_tier, Some(true))
+        }),
+        _ => Err(ProviderError::new(
+            "unsupported",
+            "该平台不支持 API Key 查询。",
+        )),
+    }
+}
+
+fn refresh_api_key(store: &Arc<StateStore>, account_id: &str, platform: &str) {
+    let source = store
+        .snapshot()
+        .accounts
+        .iter()
+        .find(|account| account.account_id == account_id)
+        .map(|account| account.source);
+    let api_key = if source == Some(AccountSource::Local) && platform == OPENCODE_GO_PLATFORM {
+        match opencode::read_cli_api_key() {
+            Ok(api_key) => api_key,
+            Err(error) => {
+                store.apply_platform_refresh_error(account_id, platform, &error);
+                return;
+            }
+        }
+    } else {
+        let Some(profile) = store.private_api_dir(account_id) else {
+            store.update_soft(|state| clear_refreshing(state, account_id));
+            return;
+        };
+        match api_key::load(&profile) {
+            Ok(credential) if credential.platform == platform => credential.api_key,
+            _ => {
+                store.apply_platform_refresh_error(
+                    account_id,
+                    platform,
+                    &ProviderError::new(
+                        "credentials-missing",
+                        "该账户的 API Key 已丢失，请重新填写。",
+                    ),
+                );
+                return;
+            }
+        }
+    };
+
+    match probe_api_key(platform, &api_key) {
+        Ok((snapshot, plan_tier, active)) => {
+            let mut low_notices = Vec::new();
+            let mut reset_notices = Vec::new();
+            store.update_soft(|state| {
+                let previous_resets = window_resets(state, account_id);
+                apply_platform_success(
+                    state, account_id, platform, snapshot, plan_tier, None, active,
+                );
+                low_notices = low_quota_notices(state, account_id);
+                reset_notices = collect_reset_notices(state, account_id, &previous_resets);
+            });
+            for notice in &low_notices {
+                store.notify_low_quota(notice);
+            }
+            for notice in &reset_notices {
+                store.notify_reset(notice);
+            }
+        }
+        Err(error) => store.apply_platform_refresh_error(account_id, platform, &error),
+    }
+}
+
+fn refresh_antigravity(store: &Arc<StateStore>, account_id: &str) {
+    match antigravity::read_usage() {
+        Ok(usage) => {
+            let snapshot = antigravity_snapshot(&usage);
+            let plan_tier = usage.plan_tier.clone();
+            let identity_hint = usage
+                .account
+                .as_deref()
+                .map(mask_email)
+                .filter(|hint| hint != "已授权账户");
+            let mut low_notices = Vec::new();
+            let mut reset_notices = Vec::new();
+            store.update_soft(|state| {
+                let previous_resets = window_resets(state, account_id);
+                apply_platform_success(
+                    state,
+                    account_id,
+                    ANTIGRAVITY_PLATFORM,
+                    snapshot,
+                    plan_tier,
+                    identity_hint,
+                    Some(true),
+                );
+                low_notices = low_quota_notices(state, account_id);
+                reset_notices = collect_reset_notices(state, account_id, &previous_resets);
+            });
+            for notice in &low_notices {
+                store.notify_low_quota(notice);
+            }
+            for notice in &reset_notices {
+                store.notify_reset(notice);
+            }
+        }
+        Err(error) => store.apply_platform_refresh_error(account_id, ANTIGRAVITY_PLATFORM, &error),
+    }
+}
+
+pub fn auto_detect_local_accounts(store: Arc<StateStore>) {
+    // 启动后在后台探测，避免阻塞窗口；Antigravity 首次查询可能耗时十余秒。
+    thread::spawn(move || {
+        store.detect_local_opencode();
+        store.detect_local_antigravity();
+    });
 }
 
 pub fn start_scheduler(store: Arc<StateStore>) {
@@ -2700,6 +3442,14 @@ mod tests {
 
         prefs.low_quota_threshold = 100;
         assert!(prefs.validate().is_err());
+
+        prefs.low_quota_threshold = 20;
+        prefs.proxy_mode = ProxyMode::Manual;
+        assert!(prefs.validate().is_err());
+        prefs.proxy_url = Some("127.0.0.1:7890".to_string());
+        assert!(prefs.validate().is_err());
+        prefs.proxy_url = Some("http://127.0.0.1:7890".to_string());
+        assert!(prefs.validate().is_ok());
     }
 
     #[test]
@@ -2982,8 +3732,8 @@ mod tests {
         let coding_windows = &coding_plan.snapshot.as_ref().unwrap().groups[0].windows;
         assert_eq!(coding_windows.len(), 3);
         assert_eq!(coding_windows[1].unit, "calls");
-        assert_eq!(coding_windows[1].used_amount, Some(1));
-        assert_eq!(coding_windows[1].total_amount, Some(45_000));
+        assert_eq!(coding_windows[1].used_amount, Some(1.0));
+        assert_eq!(coding_windows[1].total_amount, Some(45_000.0));
         assert_eq!(coding_windows[1].window_duration_mins, Some(10_080));
         assert!(coding_windows[1].remaining_percent.is_some());
     }
@@ -3123,5 +3873,51 @@ mod tests {
             vec!["未找到有效的 Coding Plan 订阅"]
         );
         assert_eq!(state.accounts[1].auth_state, AuthState::Ok);
+    }
+
+    #[test]
+    fn antigravity_snapshot_keeps_model_groups_and_windows() {
+        // 结构与 `agy -p /usage --output-format json` 实际返回一致。
+        let usage = AntigravityUsage {
+            checked_at_epoch: 1_792_759_583,
+            account: None,
+            plan_tier: None,
+            groups: vec![
+                antigravity::AntigravityGroup {
+                    name: "Gemini Models".to_string(),
+                    windows: vec![antigravity::AntigravityWindow {
+                        source_id: "gemini-weekly".to_string(),
+                        name: "Weekly Limit Remaining".to_string(),
+                        window_duration_mins: Some(10_080),
+                        remaining_percent: Some(0),
+                        resets_at_epoch: Some(1_792_888_105),
+                    }],
+                },
+                antigravity::AntigravityGroup {
+                    name: "Claude and GPT models".to_string(),
+                    windows: vec![antigravity::AntigravityWindow {
+                        source_id: "3p-5h".to_string(),
+                        name: "Five Hour Limit Remaining".to_string(),
+                        window_duration_mins: Some(300),
+                        remaining_percent: Some(50),
+                        resets_at_epoch: Some(1_792_777_576),
+                    }],
+                },
+            ],
+        };
+
+        let snapshot = antigravity_snapshot(&usage);
+        assert_eq!(snapshot.groups.len(), 2);
+        assert_eq!(
+            snapshot.groups[0].limit_name.as_deref(),
+            Some("Gemini Models")
+        );
+        let window = &snapshot.groups[0].windows[0];
+        assert_eq!(window.remaining_percent, Some(0));
+        assert_eq!(window.used_percent, Some(100));
+        assert_eq!(window.window_duration_mins, Some(10_080));
+        assert_eq!(window.resets_at_epoch, Some(1_792_888_105));
+        assert_eq!(snapshot.groups[1].windows[0].remaining_percent, Some(50));
+        assert_eq!(snapshot.groups[1].windows[0].used_percent, Some(50));
     }
 }
