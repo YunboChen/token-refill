@@ -134,7 +134,7 @@
 ### 2.6 图标与品牌图形
 
 - 图标统一用 `@phosphor-icons/react`，尺寸通过 `size` 传入，装饰性图标加 `aria-hidden`。
-- 平台品牌图形在 `src/components/PlatformLogo.tsx`，路径取自 Simple Icons，用 `currentColor` 跟随主题。
+- 平台品牌图形在 `src/components/PlatformLogo.tsx`：Codex / OpenCode / Command Code 用单色路径跟随主题；百炼的立方体与 Antigravity 的 A 形本身是多色标识，保留品牌原色。
 - 没有品牌图形时回退到平台单字标记（`platformMeta().mark`）；账户徽标用账户名首字符（`accountMark()`）。
 - 字标 `src/assets/logo-text.png`，深色模式通过 `--wordmark-filter` 提亮。
 
@@ -204,7 +204,7 @@
 | `.panelTitle` / `.subtitle` | 壳层页头 | 由 `App.tsx` 统一渲染；副标题单行省略，保证页头高度稳定 |
 | `.groupTitle` | 设置页分组标题 | 直接作为 `h2`，与下方 `.card.listCard` 通过 `aria-labelledby` 关联 |
 | `<PlatformHeading>` | 平台分组标题 | Props：`platform`、`count`、`status`、`description`、`action`、`active`；总览与账户页共用 |
-| `<PlatformLogo>` | 平台品牌图形 | 无图形时回退单字；颜色继承父级 `currentColor` |
+| `<PlatformLogo>` | 平台品牌图形 | 无图形时回退单字；单色图形继承父级 `currentColor`，多色品牌保留原色 |
 | `.platformBadge` | 平台徽标底板 | 36px、10px 圆角；`data-active` 时用强调底色 |
 | `.platformName` / `.platformVendor` / `.platformDescription` | 平台文字块 | 名称与厂商同排，说明单行省略 |
 | `.platformAside` / `.platformCount` / `.platformStatus` | 标题右侧信息 | 账户数、待接入状态、操作按钮 |
