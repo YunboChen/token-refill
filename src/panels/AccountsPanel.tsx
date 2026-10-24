@@ -36,7 +36,17 @@ const AUTH_LABELS: Record<AuthState, string> = {
   'needs-reauth': '需要重新授权',
 };
 
-type DialogPlatform = 'codex' | 'bailian';
+type DialogPlatform =
+  | 'codex'
+  | 'bailian'
+  | 'opencode-go'
+  | 'commandcode'
+  | 'antigravity';
+
+/** 走浏览器授权流程的平台；其余平台在弹窗内直接提交凭据。 */
+type LoginPlatform = 'codex' | 'bailian';
+
+type DialogMode = 'add' | 'reauth';
 
 interface PlatformChoice {
   /** 添加位与弹窗标题共用，中英文混排的间距在这里一次写清 */
@@ -98,9 +108,75 @@ const PLATFORM_CHOICES: Record<DialogPlatform, PlatformChoice> = {
     waitingText:
       '请登录要接入的阿里云账号并确认授权，控制台会话令牌会通过本机回环地址直接交给应用。',
   },
+  'opencode-go': {
+    addLabel: '添加 OpenCode Go 账户',
+    subtitle: 'Go / Go Plus · API Key',
+    steps: [
+      {
+        title: '复制 API Key',
+        text: '在 OpenCode 控制台订阅 Go 或 Go Plus 后复制 API Key',
+      },
+      {
+        title: '保存到本机',
+        text: '应用用它在后台读取 5 小时、每周与订阅月额度',
+      },
+    ],
+    note: '密钥只保存在本机账户目录，不写入前端状态或日志。',
+    namePlaceholder: '留空则显示为“OpenCode Go”',
+    authorizeLabel: '验证并添加',
+    waitingTitle: '接入 OpenCode Go',
+    waitingText: '正在保存本机账户，无需在浏览器中操作。',
+  },
+  commandcode: {
+    addLabel: '添加 Command Code 账户',
+    subtitle: '订阅额度 · Provider API Key',
+    steps: [
+      {
+        title: '复制 Provider API Key',
+        text: '在 Command Code 控制台复制 Provider API Key（通常以 user_ 开头）',
+      },
+      {
+        title: '保存到本机',
+        text: '应用用它在后台读取滚动窗口与月度额度',
+      },
+    ],
+    note: '密钥只保存在本机账户目录，不写入前端状态或日志。',
+    namePlaceholder: '留空则显示为“Command Code”',
+    authorizeLabel: '验证并添加',
+    waitingTitle: '接入 Command Code',
+    waitingText: '正在保存本机账户，无需在浏览器中操作。',
+  },
+  antigravity: {
+    addLabel: '接入本机 Antigravity',
+    subtitle: 'Gemini / Claude · 本机 agy 登录',
+    steps: [
+      {
+        title: '确认已登录 agy',
+        text: '需要已安装并登录 Antigravity CLI（agy 1.1.11 或更高版本）',
+      },
+      {
+        title: '读取额度',
+        text: '应用只调用 agy 官方的打印模式查询额度，不读取其登录令牌',
+      },
+    ],
+    note: '接入后跟随本机 agy 登录态，不复制、不迁移其凭证。',
+    namePlaceholder: '留空则显示为“Antigravity”',
+    authorizeLabel: '接入本机 Antigravity',
+    waitingTitle: '接入 Antigravity',
+    waitingText: '正在读取本机 agy 登录态，无需在浏览器中操作。',
+  },
 };
 
 const DIALOG_PLATFORMS = Object.keys(PLATFORM_CHOICES) as DialogPlatform[];
+
+/** 需要用户填写 API Key 的平台；其余非登录平台直接复用本机登录态。 */
+const API_KEY_PLATFORMS: DialogPlatform[] = ['opencode-go', 'commandcode'];
+
+function isApiKeyPlatform(
+  platform: DialogPlatform,
+): platform is 'opencode-go' | 'commandcode' {
+  return API_KEY_PLATFORMS.includes(platform);
+}
 
 function isDialogPlatform(platform: string): platform is DialogPlatform {
   return (DIALOG_PLATFORMS as string[]).includes(platform);
@@ -114,11 +190,17 @@ function addAccountLabel(platform: string): string {
 }
 
 type DialogState =
-  | { kind: 'add-form'; platform: DialogPlatform }
+  | {
+      kind: 'add-form';
+      platform: DialogPlatform;
+      mode: DialogMode;
+      /** 重新授权时更新的是已有账户的凭据，而不是新建账户。 */
+      accountId?: string;
+    }
   | {
       kind: 'login';
-      platform: DialogPlatform;
-      mode: 'add' | 'reauth';
+      platform: LoginPlatform;
+      mode: DialogMode;
       start: LoginStart;
       phase: 'waiting' | 'succeeded' | 'failed' | 'canceled';
       message: string | null;
@@ -169,6 +251,9 @@ export default function AccountsPanel() {
     loginError,
     beginLogin,
     beginBailianLogin,
+    addApiKeyAccount,
+    replaceApiKey,
+    addAntigravityAccount,
     cancelLogin,
     clearLoginError,
     renameAccount,
@@ -177,14 +262,16 @@ export default function AccountsPanel() {
   } = useAppState();
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [draftName, setDraftName] = useState('');
+  const [draftKey, setDraftKey] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   // 改名与移除都在弹窗里确认，提交期间锁住按钮避免重复请求。
   const [acting, setActing] = useState(false);
 
-  // 平台与登录命令的映射集中一处：新增平台时 Record 会强制补齐，
+  // 平台与登录命令的映射集中一处：新增浏览器授权平台时 Record 会强制补齐，
   // 不再在 startAdd / startReauth 里写平台三元表达式。
   const loginCommands: Record<
-    DialogPlatform,
+    LoginPlatform,
     (accountId?: string, displayName?: string) => Promise<LoginStart | null>
   > = {
     codex: beginLogin,
@@ -269,7 +356,7 @@ export default function AccountsPanel() {
     closeDialog,
   );
 
-  const startAdd = async (platform: DialogPlatform) => {
+  const startAdd = async (platform: LoginPlatform) => {
     const attempt = startAttemptRef.current + 1;
     startAttemptRef.current = attempt;
     // 重试时先收起上一次的失败提示，结果出来后再按需展示。
@@ -298,22 +385,59 @@ export default function AccountsPanel() {
     void openExternal(start.authUrl);
   };
 
+  // 添加弹窗的主按钮：浏览器授权、API Key 与本机登录态三种提交方式不同，
+  // 平台入口已经决定走哪一条，这里只按平台分派。
+  const submitAddForm = async (
+    dialog: Extract<DialogState, { kind: 'add-form' }>,
+  ) => {
+    const platform = dialog.platform;
+    setFormError(null);
+
+    if (isApiKeyPlatform(platform)) {
+      const key = draftKey.trim();
+      if (!key) {
+        setFormError('请填写 API Key。');
+        return;
+      }
+      setStarting(true);
+      const error =
+        dialog.mode === 'reauth' && dialog.accountId
+          ? await replaceApiKey(dialog.accountId, key)
+          : await addApiKeyAccount(platform, draftName.trim() || undefined, key);
+      setStarting(false);
+      if (error) setFormError(error);
+      else setDialog(null);
+      return;
+    }
+
+    if (platform === 'antigravity') {
+      setStarting(true);
+      const error = await addAntigravityAccount(draftName.trim() || undefined);
+      setStarting(false);
+      if (error) setFormError(error);
+      else setDialog(null);
+      return;
+    }
+
+    // 到这里只剩浏览器授权平台；重新授权走 beginReauth，不会停在添加弹窗。
+    await startAdd(platform);
+  };
+
+  // 浏览器授权的重新授权；API Key 账户改走添加弹窗替换密钥。
   const startReauth = async (
-    account: AccountState,
-    trigger: HTMLElement | null,
+    accountId: string,
+    platform: LoginPlatform,
   ) => {
     const attempt = startAttemptRef.current + 1;
     startAttemptRef.current = attempt;
     clearLoginError();
-    if (!isDialogPlatform(account.platform)) return;
-    // 焦点还原记住入口按钮，而不是稍后可能被 autoFocus 抢走的输入框。
-    captureTrigger(trigger);
-    const platform = account.platform;
-    const start = await loginCommands[platform](account.accountId);
+    setStarting(true);
+    const start = await loginCommands[platform](accountId);
     if (attempt !== startAttemptRef.current) {
       if (start) void cancelLogin(start.loginId);
       return;
     }
+    setStarting(false);
     if (!start) return;
     setDialog({
       kind: 'login',
@@ -324,6 +448,28 @@ export default function AccountsPanel() {
       message: null,
     });
     void openExternal(start.authUrl);
+  };
+
+  const beginReauth = (account: AccountState, trigger: HTMLElement | null) => {
+    if (!isDialogPlatform(account.platform)) return;
+    // 焦点还原记住入口按钮，而不是稍后可能被 autoFocus 抢走的输入框。
+    captureTrigger(trigger);
+    if (isApiKeyPlatform(account.platform)) {
+      setDraftName('');
+      setDraftKey('');
+      setFormError(null);
+      setDialog({
+        kind: 'add-form',
+        platform: account.platform,
+        mode: 'reauth',
+        accountId: account.accountId,
+      });
+      return;
+    }
+    // Antigravity 跟随本机 agy 登录态，没有应用内重新授权入口。
+    if (account.platform !== 'antigravity') {
+      void startReauth(account.accountId, account.platform);
+    }
   };
 
   const saveRename = async () => {
@@ -379,7 +525,9 @@ export default function AccountsPanel() {
   ) => {
     captureTrigger(trigger);
     setDraftName('');
-    setDialog({ kind: 'add-form', platform });
+    setDraftKey('');
+    setFormError(null);
+    setDialog({ kind: 'add-form', platform, mode: 'add' });
   };
 
   // 分组平台是普通字符串，入口处收窄一次；未登记平台的添加位不会渲染。
@@ -420,6 +568,10 @@ export default function AccountsPanel() {
             <div className={styles.accountGrid}>
               {group.accounts.map((account) => {
                 const managed = account.source === 'managed';
+                // Antigravity 跟随本机 agy 登录态，没有应用内重新授权入口。
+                const canReauth = managed && account.platform !== 'antigravity';
+                // 本机 Codex 账户跟随 CLI 登录态，不能移除。
+                const canRemove = !(account.platform === 'codex' && !managed);
                 const busy = account.products.some(
                   (product) => product.query.refreshing,
                 );
@@ -509,18 +661,22 @@ export default function AccountsPanel() {
                         />
                         刷新
                       </button>
-                      {managed ? (
+                      {managed || canRemove ? (
                         <div className={styles.accountActions}>
-                          <button
-                            type="button"
-                            className={styles.miniButton}
-                            onClick={(event) => void startReauth(account, event.currentTarget)}
-                            disabled={!desktop}
-                            aria-label="重新授权"
-                            title="重新授权"
-                          >
-                            <LinkSimple size={14} />
-                          </button>
+                          {canReauth ? (
+                            <button
+                              type="button"
+                              className={styles.miniButton}
+                              onClick={(event) =>
+                                beginReauth(account, event.currentTarget)
+                              }
+                              disabled={!desktop}
+                              aria-label="重新授权"
+                              title="重新授权"
+                            >
+                              <LinkSimple size={14} />
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             className={styles.miniButton}
@@ -531,17 +687,19 @@ export default function AccountsPanel() {
                           >
                             <PencilSimple size={14} />
                           </button>
-                          <button
-                            type="button"
-                            className={styles.miniButton}
-                            onClick={(event) => openRemoveDialog(account, event.currentTarget)}
-                            disabled={!desktop}
-                            aria-label="移除账户"
-                            title="移除账户"
-                            data-danger
-                          >
-                            <Trash size={14} />
-                          </button>
+                          {canRemove ? (
+                            <button
+                              type="button"
+                              className={styles.miniButton}
+                              onClick={(event) => openRemoveDialog(account, event.currentTarget)}
+                              disabled={!desktop}
+                              aria-label="移除账户"
+                              title="移除账户"
+                              data-danger
+                            >
+                              <Trash size={14} />
+                            </button>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>
@@ -638,38 +796,71 @@ export default function AccountsPanel() {
                 {dialog.kind === 'add-form' ? (
                   <>
                     <header className={styles.dialogHeader}>
-                      <h2 id="account-dialog-title">{choice.addLabel}</h2>
+                      <h2 id="account-dialog-title">
+                        {dialog.mode === 'reauth' ? '更新账户凭据' : choice.addLabel}
+                      </h2>
                       <p className={styles.dialogSubtitle}>{choice.subtitle}</p>
                     </header>
-                    <ol className={styles.dialogSteps} role="list">
-                      {choice.steps.map((step, index) => (
-                        <li className={styles.dialogStep} key={step.title}>
-                          <span className={styles.stepMarker} aria-hidden="true">
-                            {index + 1}
-                          </span>
-                          <div className={styles.stepBody}>
-                            <h3 className={styles.stepTitle}>{step.title}</h3>
-                            <p className={styles.stepText}>{step.text}</p>
-                          </div>
-                        </li>
-                      ))}
-                    </ol>
+                    {/* 重新授权只替换凭据，不再重复说明接入流程。 */}
+                    {dialog.mode === 'add' ? (
+                      <ol className={styles.dialogSteps} role="list">
+                        {choice.steps.map((step, index) => (
+                          <li className={styles.dialogStep} key={step.title}>
+                            <span className={styles.stepMarker} aria-hidden="true">
+                              {index + 1}
+                            </span>
+                            <div className={styles.stepBody}>
+                              <h3 className={styles.stepTitle}>{step.title}</h3>
+                              <p className={styles.stepText}>{step.text}</p>
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : null}
                     <div className={styles.dialogFieldGroup}>
-                      <label className={styles.field}>
-                        <span className={styles.fieldLabel}>账户名称（可选）</span>
-                        <input
-                          className={styles.textInput}
-                          value={draftName}
-                          onChange={(event) => setDraftName(event.target.value)}
-                          placeholder={choice.namePlaceholder}
-                          maxLength={60}
-                        />
-                      </label>
+                      {dialog.mode === 'add' ? (
+                        <label className={styles.field}>
+                          <span className={styles.fieldLabel}>账户名称（可选）</span>
+                          <input
+                            className={styles.textInput}
+                            value={draftName}
+                            onChange={(event) => setDraftName(event.target.value)}
+                            placeholder={choice.namePlaceholder}
+                            maxLength={60}
+                          />
+                        </label>
+                      ) : null}
+                      {isApiKeyPlatform(dialog.platform) ? (
+                        <label className={styles.field}>
+                          <span className={styles.fieldLabel}>
+                            {dialog.platform === 'opencode-go'
+                              ? 'OpenCode Go API Key'
+                              : 'Command Code Provider API Key'}
+                          </span>
+                          <input
+                            className={styles.textInput}
+                            type="password"
+                            value={draftKey}
+                            onChange={(event) => setDraftKey(event.target.value)}
+                            placeholder={
+                              dialog.platform === 'opencode-go' ? 'sk-…' : 'user_…'
+                            }
+                            autoComplete="off"
+                            spellCheck={false}
+                            autoFocus={dialog.mode === 'reauth'}
+                          />
+                        </label>
+                      ) : null}
                       <p className={styles.dialogNote}>
                         <LockSimple size={13} aria-hidden />
                         {choice.note}
                       </p>
                     </div>
+                    {formError ? (
+                      <p className={styles.noticeDanger} role="alert">
+                        {formError}
+                      </p>
+                    ) : null}
                     <div className={styles.dialogActions}>
                       <button
                         type="button"
@@ -681,15 +872,24 @@ export default function AccountsPanel() {
                       <button
                         type="button"
                         className={styles.button}
-                        onClick={() => void startAdd(dialog.platform)}
+                        onClick={() => void submitAddForm(dialog)}
                         disabled={starting}
                       >
                         {starting ? (
-                          '正在启动…'
+                          isApiKeyPlatform(dialog.platform)
+                            ? '正在验证…'
+                            : dialog.platform === 'antigravity'
+                              ? '正在接入…'
+                              : '正在启动…'
                         ) : (
                           <>
-                            {choice.authorizeLabel}
-                            <ArrowSquareOut size={13} aria-hidden />
+                            {dialog.mode === 'reauth'
+                              ? '验证并更新'
+                              : choice.authorizeLabel}
+                            {!isApiKeyPlatform(dialog.platform)
+                            && dialog.platform !== 'antigravity' ? (
+                              <ArrowSquareOut size={13} aria-hidden />
+                            ) : null}
                           </>
                         )}
                       </button>

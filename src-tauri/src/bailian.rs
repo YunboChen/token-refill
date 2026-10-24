@@ -270,11 +270,13 @@ fn call_console_at(
         "{gateway}/cli/api.json?action={CONSOLE_ACTION}&product=sfm_bailian&api={}",
         encode_component(api)
     );
-    let config = ureq::Agent::config_builder()
+    let mut config = ureq::Agent::config_builder()
         .timeout_global(Some(REQUEST_TIMEOUT))
-        .user_agent(concat!("TokenRefill/", env!("CARGO_PKG_VERSION")))
-        .build();
-    let agent: ureq::Agent = config.into();
+        .user_agent(concat!("TokenRefill/", env!("CARGO_PKG_VERSION")));
+    if let Some(proxy) = crate::proxy::ureq_proxy_for(&url) {
+        config = config.proxy(Some(proxy));
+    }
+    let agent: ureq::Agent = config.build().into();
 
     let mut response = agent
         .post(&url)

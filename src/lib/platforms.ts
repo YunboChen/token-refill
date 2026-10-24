@@ -35,10 +35,40 @@ const PLATFORMS: Record<string, PlatformMeta> = {
     description: 'Token Plan 个人版 · Coding Plan 中国站',
     available: true,
   },
+  'opencode-go': {
+    key: 'opencode-go',
+    name: 'OpenCode Go',
+    vendor: 'OpenCode',
+    mark: 'O',
+    description: 'Go / Go Plus 订阅 · 5 小时 / 每周 / 订阅月',
+    available: true,
+  },
+  commandcode: {
+    key: 'commandcode',
+    name: 'Command Code',
+    vendor: 'Command Code',
+    mark: 'Cc',
+    description: '订阅额度 · 5 小时 / 每周 / 订阅月',
+    available: true,
+  },
+  antigravity: {
+    key: 'antigravity',
+    name: 'Antigravity',
+    vendor: 'Google',
+    mark: 'A',
+    description: 'Gemini / Claude 模型额度 · 本机 agy 登录',
+    available: true,
+  },
 };
 
 /** 已知平台的固定展示顺序；未知平台按名称排在最后。 */
-const PLATFORM_ORDER = ['codex', 'bailian'];
+const PLATFORM_ORDER = [
+  'codex',
+  'bailian',
+  'opencode-go',
+  'commandcode',
+  'antigravity',
+];
 
 export function platformMeta(platform: string): PlatformMeta {
   return (

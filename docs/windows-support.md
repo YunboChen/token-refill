@@ -56,7 +56,7 @@ Windows 目标目录：
 
 ## 5. 数据与权限
 
-- 状态文件与账户授权目录都位于 Tauri 的 `app_data_dir()`，Windows 下为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json`、`codex-profiles\<accountId>\` 与 macOS 结构完全相同。
+- 状态文件与账户授权目录都位于 Tauri 的 `app_data_dir()`，Windows 下为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json`、`codex-profiles\<accountId>\`、`bailian-profiles\<accountId>\` 与 `api-profiles\<accountId>\` 与 macOS 结构完全相同。Antigravity 的 `agy` 查找覆盖 `AGY_BIN`、`PATH` 与 `%LOCALAPPDATA%\agy\bin`，与其他 CLI 一样按 `.exe` / `.cmd` / `.bat` / `.com` 判定可执行文件。
 - 状态写入仍是「临时文件 → 原子替换」。Windows 上 `fs::rename` 使用 `MoveFileEx(REPLACE_EXISTING)`，可覆盖已存在的状态文件，无需额外分支。
 - Unix 继续对状态文件设 0600、对授权目录设 0700。Windows 没有对应权限位，目录继承 `%APPDATA%` 的默认 ACL（当前用户、SYSTEM、Administrators）。若用户把 `APPDATA` 重定向到权限更宽的目录，本应用不会额外收紧 ACL；这一点视为已知限制，而不是已实现的加固。
 - 应用不读取、不复制令牌：授权文件始终由 Codex CLI 在该目录内写入。

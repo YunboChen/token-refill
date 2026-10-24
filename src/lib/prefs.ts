@@ -19,6 +19,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   authExpiredEnabled: true,
   resetNoticeEnabled: false,
   autoLaunchEnabled: false,
+  proxyMode: 'system',
+  proxyUrl: null,
 };
 
 // 浏览器预览使用的占位状态；桌面端以 Rust 返回的完整状态为准。
@@ -131,6 +133,15 @@ export function readLegacyPreferences(): Preferences | null {
     autoLaunchEnabled: typeof legacy.autoLaunchEnabled === 'boolean'
       ? legacy.autoLaunchEnabled
       : DEFAULT_PREFERENCES.autoLaunchEnabled,
+    proxyMode:
+      legacy.proxyMode === 'system'
+      || legacy.proxyMode === 'none'
+      || legacy.proxyMode === 'manual'
+        ? legacy.proxyMode
+        : DEFAULT_PREFERENCES.proxyMode,
+    proxyUrl: typeof legacy.proxyUrl === 'string' && legacy.proxyUrl.trim()
+      ? legacy.proxyUrl.trim()
+      : null,
   };
 }
 

@@ -57,5 +57,10 @@ export function planTierLabel(tier: string): string {
 /** 账户接入方式；总览与账户页共用同一套说法。 */
 export function sourceLabel(account: AccountState): string {
   if (account.platform === 'bailian') return '百炼控制台授权';
+  if (account.platform === 'antigravity') return '本机 agy 登录';
+  if (account.platform === 'opencode-go') {
+    return account.source === 'managed' ? 'API Key 授权' : '本机 CLI 登录';
+  }
+  if (account.platform === 'commandcode') return 'API Key 授权';
   return account.source === 'managed' ? '独立授权' : '本机登录态';
 }

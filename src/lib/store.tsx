@@ -9,6 +9,8 @@ import {
 } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import {
+  addAntigravityAccount as addAntigravityAccountCommand,
+  addApiKeyAccount as addApiKeyAccountCommand,
   beginAccountLogin,
   beginBailianLogin as beginBailianLoginCommand,
   cancelAccountLogin,
@@ -19,6 +21,7 @@ import {
   refreshUsage,
   removeAccount as removeAccountCommand,
   renameAccount as renameAccountCommand,
+  replaceApiKey as replaceApiKeyCommand,
   setAutoLaunch as setAutoLaunchCommand,
   updatePreferences,
   type AppState,
@@ -40,6 +43,13 @@ interface AppStateContextValue {
   savePreferences: (preferences: Preferences) => Promise<boolean>;
   beginLogin: (accountId?: string, displayName?: string) => Promise<LoginStart | null>;
   beginBailianLogin: (accountId?: string, displayName?: string) => Promise<LoginStart | null>;
+  addApiKeyAccount: (
+    platform: string,
+    displayName: string | undefined,
+    apiKey: string,
+  ) => Promise<string | null>;
+  replaceApiKey: (accountId: string, apiKey: string) => Promise<string | null>;
+  addAntigravityAccount: (displayName?: string) => Promise<string | null>;
   cancelLogin: (loginId: string) => Promise<void>;
   clearLoginError: () => void;
   renameAccount: (accountId: string, displayName: string) => Promise<boolean>;
@@ -207,6 +217,57 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [desktop],
   );
 
+  const addApiKeyAccount = useCallback(
+    async (platform: string, displayName: string | undefined, apiKey: string) => {
+      if (!desktop) return '浏览器预览无法调用桌面接口。';
+      try {
+        const next = await addApiKeyAccountCommand(platform, displayName, apiKey);
+        applyState(next);
+        setError(null);
+        return null;
+      } catch (err) {
+        const message = errorMessage(err);
+        setError(message);
+        return message;
+      }
+    },
+    [desktop, applyState],
+  );
+
+  const replaceApiKey = useCallback(
+    async (accountId: string, apiKey: string) => {
+      if (!desktop) return '浏览器预览无法调用桌面接口。';
+      try {
+        const next = await replaceApiKeyCommand(accountId, apiKey);
+        applyState(next);
+        setError(null);
+        return null;
+      } catch (err) {
+        const message = errorMessage(err);
+        setError(message);
+        return message;
+      }
+    },
+    [desktop, applyState],
+  );
+
+  const addAntigravityAccount = useCallback(
+    async (displayName?: string) => {
+      if (!desktop) return '浏览器预览无法调用桌面接口。';
+      try {
+        const next = await addAntigravityAccountCommand(displayName);
+        applyState(next);
+        setError(null);
+        return null;
+      } catch (err) {
+        const message = errorMessage(err);
+        setError(message);
+        return message;
+      }
+    },
+    [desktop, applyState],
+  );
+
   const cancelLogin = useCallback(
     async (loginId: string) => {
       if (!desktop) return;
@@ -294,6 +355,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       savePreferences,
       beginLogin,
       beginBailianLogin,
+      addApiKeyAccount,
+      replaceApiKey,
+      addAntigravityAccount,
       cancelLogin,
       clearLoginError,
       renameAccount,
@@ -312,6 +376,9 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       savePreferences,
       beginLogin,
       beginBailianLogin,
+      addApiKeyAccount,
+      replaceApiKey,
+      addAntigravityAccount,
       cancelLogin,
       clearLoginError,
       renameAccount,

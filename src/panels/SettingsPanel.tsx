@@ -6,6 +6,7 @@ import {
   openExternalUrl,
   sendTestNotification,
   type Preferences,
+  type ProxyMode,
   type UpdateStatus,
 } from '../lib/desktop';
 import {
@@ -66,6 +67,12 @@ function Toggle({
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
+const PROXY_OPTIONS: { value: ProxyMode; label: string }[] = [
+  { value: 'system', label: '跟随系统' },
+  { value: 'none', label: '不走代理' },
+  { value: 'manual', label: '指定代理' },
+];
+
 type TestState = 'idle' | 'sending' | 'sent' | 'error';
 
 type UpdateState = 'idle' | 'checking' | 'done' | 'error';
@@ -88,8 +95,13 @@ export default function SettingsPanel() {
 
   const refreshLabelId = useId();
   const themeLabelId = useId();
+  const proxyLabelId = useId();
   const refreshIndex = Math.max(0, REFRESH_OPTIONS.indexOf(prefs.refreshMinutes));
   const themeIndex = Math.max(0, THEME_OPTIONS.indexOf(theme));
+  const proxyIndex = Math.max(
+    0,
+    PROXY_OPTIONS.findIndex((option) => option.value === prefs.proxyMode),
+  );
   const refreshFill = ((prefs.lowQuotaThreshold - 5) / 45) * 100;
 
   // 后端状态变化（如刷新事件）时同步；本地有未保存修改时不覆盖。
@@ -254,6 +266,60 @@ export default function SettingsPanel() {
             ))}
           </div>
         </div>
+      </section>
+
+      <h2 id="settings-proxy" className={styles.groupTitle}>网络代理</h2>
+      <section className={`${styles.card} ${styles.listCard}`} aria-labelledby="settings-proxy">
+        <div className={styles.settingRowStatic}>
+          <div className={styles.settingText}>
+            <span id={proxyLabelId} className={styles.settingLabel}>代理方式</span>
+            <span className={styles.settingHint}>
+              统一作用于额度查询、版本检查与外置 CLI。跟随系统会读取系统代理设置；
+              指定代理仅支持 HTTP/HTTPS，不支持 PAC。
+            </span>
+          </div>
+          <div
+            className={styles.pills}
+            role="radiogroup"
+            aria-labelledby={proxyLabelId}
+            style={{
+              '--pill-index': proxyIndex,
+              '--pill-count': PROXY_OPTIONS.length,
+            } as CSSProperties}
+          >
+            <span className={styles.pillThumb} aria-hidden="true" />
+            {PROXY_OPTIONS.map((option) => (
+              <label className={styles.pill} key={option.value}>
+                <input
+                  type="radio"
+                  name="proxyMode"
+                  value={option.value}
+                  checked={prefs.proxyMode === option.value}
+                  onChange={() => update({ proxyMode: option.value })}
+                  aria-label={option.label}
+                />
+                <span className={styles.pillText}>{option.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+        {prefs.proxyMode === 'manual' ? (
+          <div className={styles.stackRow}>
+            <span className={styles.settingLabel}>代理地址</span>
+            <input
+              className={styles.textInput}
+              value={prefs.proxyUrl ?? ''}
+              onChange={(event) => update({ proxyUrl: event.target.value })}
+              placeholder="http://127.0.0.1:7890"
+              spellCheck={false}
+              autoComplete="off"
+              aria-label="代理地址"
+            />
+            <span className={styles.settingHint}>
+              只支持 http:// 或 https://，不能包含用户名、密码或路径。
+            </span>
+          </div>
+        ) : null}
       </section>
 
       <h2 id="settings-reminders" className={styles.groupTitle}>提醒</h2>

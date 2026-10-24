@@ -25,7 +25,12 @@ export interface Preferences {
   authExpiredEnabled: boolean;
   resetNoticeEnabled: boolean;
   autoLaunchEnabled: boolean;
+  /** system：跟随系统；none：直连；manual：使用 proxyUrl。 */
+  proxyMode: ProxyMode;
+  proxyUrl: string | null;
 }
+
+export type ProxyMode = 'system' | 'none' | 'manual';
 
 export interface QueryError {
   code: string;
@@ -50,6 +55,8 @@ export interface QuotaWindow {
   /** 平台提供的绝对值；没有时只展示比例。 */
   usedAmount: number | null;
   totalAmount: number | null;
+  /** 只有剩余余额时使用。 */
+  remainingAmount: number | null;
   windowDurationMins: number | null;
   resetsAtEpoch: number | null;
 }
@@ -156,6 +163,31 @@ export function beginBailianLogin(
 
 export function cancelAccountLogin(loginId: string): Promise<void> {
   return invoke<void>('cancel_account_login', { loginId });
+}
+
+/** 用 API Key 接入订阅平台；密钥只传递给 Rust，不进入前端状态。 */
+export function addApiKeyAccount(
+  platform: string,
+  displayName: string | undefined,
+  apiKey: string,
+): Promise<AppState> {
+  return invoke<AppState>('add_api_key_account', {
+    platform,
+    displayName: displayName ?? null,
+    apiKey,
+  });
+}
+
+/** 验证通过后替换已有 API Key 账户的密钥。 */
+export function replaceApiKey(accountId: string, apiKey: string): Promise<AppState> {
+  return invoke<AppState>('replace_api_key', { accountId, apiKey });
+}
+
+/** 接入本机 Antigravity CLI 登录态。 */
+export function addAntigravityAccount(displayName?: string): Promise<AppState> {
+  return invoke<AppState>('add_antigravity_account', {
+    displayName: displayName ?? null,
+  });
 }
 
 export function renameAccount(accountId: string, displayName: string): Promise<AppState> {
