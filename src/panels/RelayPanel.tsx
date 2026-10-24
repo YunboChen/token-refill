@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
-import { ArrowClockwiseIcon, PlugsIcon, TrashIcon } from '@phosphor-icons/react';
+import { ArrowClockwiseIcon, KeyIcon, PlugsIcon, TrashIcon } from '@phosphor-icons/react';
 import {
   discoverRelayAccounts,
   queryRelayAccount,
   refreshRelayAccount,
   removeRelayAccount,
+  setRelayAccountToken,
+  type AccountQuota,
   type KeyQuota,
   type KeyQuotaWindow,
   type QuotaMode,
@@ -41,9 +43,17 @@ function errorText(error: unknown): string {
   return '查询失败，请检查服务地址与密钥。';
 }
 
-function formatUsd(value: number | null): string {
+function formatMoney(value: number | null, currency: string | null): string {
   if (value === null) return '—';
-  return `$${value.toFixed(2)}`;
+  switch ((currency ?? 'USD').toUpperCase()) {
+    case 'USD':
+      return `$${value.toFixed(2)}`;
+    case 'CNY':
+    case 'RMB':
+      return `¥${value.toFixed(2)}`;
+    default:
+      return `${value.toFixed(2)} ${currency ?? ''}`.trim();
+  }
 }
 
 function relayWindowLabel(window: KeyQuotaWindow): string {
@@ -69,31 +79,120 @@ function mainPercent(quota: KeyQuota): number | null {
   );
 }
 
+function WindowList({
+  windows,
+  threshold,
+  currency,
+  title,
+}: {
+  windows: KeyQuotaWindow[];
+  threshold: number;
+  currency: string | null;
+  title?: string;
+}) {
+  if (windows.length === 0) return null;
+  return (
+    <div className={styles.relayWindows}>
+      {title ? <p className={styles.relaySectionLabel}>{title}</p> : null}
+      {windows.map((item) => (
+        <div className={styles.relayWindow} key={item.windowId}>
+          <div className={styles.relayWindowHead}>
+            <span>{relayWindowLabel(item)}</span>
+            <span className={styles.quotaMeta}>
+              {item.limitUsd !== null
+                ? `${formatMoney(item.remainingUsd, currency)} / ${formatMoney(item.limitUsd, currency)}`
+                : formatMoney(item.usedUsd, currency)}
+              {item.remainingPercent !== null
+                ? ` · 剩余 ${item.remainingPercent}%`
+                : ''}
+            </span>
+          </div>
+          {item.remainingPercent !== null ? (
+            <div
+              className={styles.relayBar}
+              data-low={item.remainingPercent <= threshold || undefined}
+              role="progressbar"
+              aria-label={`${relayWindowLabel(item)}剩余额度比例`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={item.remainingPercent}
+            >
+              <span
+                className={styles.relayBarFill}
+                style={{ width: `${item.remainingPercent}%` }}
+              />
+            </div>
+          ) : null}
+          <span className={styles.quotaMeta}>
+            {resetLabel(item.resetsAtEpoch)}
+            {item.usedUsd !== null ? ` · 已用 ${formatMoney(item.usedUsd, currency)}` : ''}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AccountSummary({
+  account,
+  currency,
+}: {
+  account: AccountQuota;
+  currency: string | null;
+}) {
+  const source =
+    account.source === 'access-token' ? '账户余额（访问令牌）' : '账户余额';
+  return (
+    <span>
+      {' · '}
+      {source} {formatMoney(account.remainingUsd, currency)}
+      {account.usedUsd !== null
+        ? ` · 已用 ${formatMoney(account.usedUsd, currency)}`
+        : ''}
+      {account.totalUsd !== null
+        ? ` · 总额 ${formatMoney(account.totalUsd, currency)}`
+        : ''}
+    </span>
+  );
+}
+
 function RelayCard({
   account,
   desktop,
   refreshing,
   confirming,
+  tokenEditing,
+  savingToken,
   threshold,
   onRefresh,
   onAskRemove,
   onCancelRemove,
   onRemove,
+  onBeginTokenEdit,
+  onCancelTokenEdit,
+  onSubmitToken,
 }: {
   account: RelayAccount;
   desktop: boolean;
   refreshing: boolean;
   confirming: boolean;
+  tokenEditing: boolean;
+  savingToken: boolean;
   threshold: number;
   onRefresh: () => void;
   onAskRemove: () => void;
   onCancelRemove: () => void;
   onRemove: () => void;
+  onBeginTokenEdit: () => void;
+  onCancelTokenEdit: () => void;
+  onSubmitToken: (token: string, userId: string) => void;
 }) {
   const quota = account.quota;
   const percent = quota ? mainPercent(quota) : null;
   const low = percent !== null && percent <= threshold;
   const host = account.baseUrl.replace(/^https?:\/\//, '');
+  const tokenInput = useRef<HTMLInputElement>(null);
+  const userIdInput = useRef<HTMLInputElement>(null);
 
   return (
     <article className={styles.accountCard} aria-live="polite">
@@ -120,6 +219,12 @@ function RelayCard({
                 密钥不可用
               </span>
             ) : null}
+            <span className={styles.accountHint}>
+              {account.persisted ? '凭证已保存' : '凭证仅本次运行'}
+            </span>
+            {account.hasAccountToken ? (
+              <span className={styles.accountHint}>已配置访问令牌</span>
+            ) : null}
           </p>
         </div>
         <div className={styles.accountTools}>
@@ -128,6 +233,18 @@ function RelayCard({
               更新于 {clockLabel(account.checkedAtEpoch)}
               {refreshing ? ' · 刷新中' : ''}
             </span>
+          ) : null}
+          {account.provider === 'new-api' ? (
+            <button
+              type="button"
+              className={styles.miniButton}
+              onClick={onBeginTokenEdit}
+              disabled={!desktop || savingToken}
+              aria-label={`为 ${host} 设置访问令牌`}
+              title="补充 New API 访问令牌以读取完整账户额度"
+            >
+              <KeyIcon size={15} aria-hidden />
+            </button>
           ) : null}
           <button
             type="button"
@@ -157,7 +274,7 @@ function RelayCard({
 
       {confirming ? (
         <div className={styles.inlineConfirm}>
-          <span className={styles.usageNote}>移除后本次运行不再保存这个密钥。</span>
+          <span className={styles.usageNote}>移除后会删除本应用保存的密钥与访问令牌。</span>
           <div className={styles.inlineConfirmActions}>
             <button type="button" className={styles.dangerButton} onClick={onRemove}>
               移除
@@ -167,6 +284,56 @@ function RelayCard({
             </button>
           </div>
         </div>
+      ) : null}
+
+      {tokenEditing ? (
+        <form
+          className={styles.relayTokenForm}
+          onSubmit={(event) => {
+            event.preventDefault();
+            const token = tokenInput.current?.value.trim() ?? '';
+            const userId = userIdInput.current?.value.trim() ?? '';
+            if (token) onSubmitToken(token, userId);
+          }}
+        >
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>New API 访问令牌</span>
+            <input
+              ref={tokenInput}
+              className={styles.textInput}
+              type="password"
+              placeholder="旧版单令牌或个人访问令牌"
+              disabled={!desktop || savingToken}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>用户 ID（旧版令牌需要）</span>
+            <input
+              ref={userIdInput}
+              className={styles.textInput}
+              type="text"
+              inputMode="numeric"
+              placeholder="New-Api-User"
+              defaultValue={account.newApiUserId ?? ''}
+              disabled={!desktop || savingToken}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <button type="submit" className={styles.button} disabled={savingToken}>
+            {savingToken ? '保存中…' : '保存并刷新'}
+          </button>
+          <button
+            type="button"
+            className={styles.buttonGhost}
+            onClick={onCancelTokenEdit}
+            disabled={savingToken}
+          >
+            取消
+          </button>
+        </form>
       ) : null}
 
       {account.lastError ? (
@@ -186,7 +353,7 @@ function RelayCard({
             <div>
               <p className={styles.relayAmount}>
                 {quota.remainingUsd !== null
-                  ? formatUsd(quota.remainingUsd)
+                  ? formatMoney(quota.remainingUsd, quota.currency)
                   : quota.unlimited
                     ? '不限额'
                     : '—'}
@@ -195,11 +362,12 @@ function RelayCard({
                 <span>剩余额度</span>
                 {!quota.unlimited && quota.limitUsd !== null ? (
                   <span>
-                    {' · '}总额 {formatUsd(quota.limitUsd)} · 已用 {formatUsd(quota.usedUsd)}
+                    {' · '}总额 {formatMoney(quota.limitUsd, quota.currency)} · 已用{' '}
+                    {formatMoney(quota.usedUsd, quota.currency)}
                   </span>
                 ) : null}
-                {quota.account?.remainingUsd !== null && quota.account?.remainingUsd !== undefined ? (
-                  <span> · 账户余额 {formatUsd(quota.account.remainingUsd)}</span>
+                {quota.account ? (
+                  <AccountSummary account={quota.account} currency={quota.currency} />
                 ) : null}
               </p>
             </div>
@@ -230,44 +398,21 @@ function RelayCard({
             {quota.unlimited ? <span> · 平台未设置总额度上限</span> : null}
           </p>
 
-          {quota.windows.length > 0 ? (
-            <div className={styles.relayWindows}>
-              {quota.windows.map((item) => (
-                <div className={styles.relayWindow} key={item.windowId}>
-                  <div className={styles.relayWindowHead}>
-                    <span>{relayWindowLabel(item)}</span>
-                    <span className={styles.quotaMeta}>
-                      {item.limitUsd !== null
-                        ? `${formatUsd(item.remainingUsd)} / ${formatUsd(item.limitUsd)}`
-                        : formatUsd(item.usedUsd)}
-                      {item.remainingPercent !== null
-                        ? ` · 剩余 ${item.remainingPercent}%`
-                        : ''}
-                    </span>
-                  </div>
-                  {item.remainingPercent !== null ? (
-                    <div
-                      className={styles.relayBar}
-                      data-low={item.remainingPercent <= threshold || undefined}
-                      role="progressbar"
-                      aria-label={`${relayWindowLabel(item)}剩余额度比例`}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={item.remainingPercent}
-                    >
-                      <span
-                        className={styles.relayBarFill}
-                        style={{ width: `${item.remainingPercent}%` }}
-                      />
-                    </div>
-                  ) : null}
-                  <span className={styles.quotaMeta}>
-                    {resetLabel(item.resetsAtEpoch)}
-                    {item.usedUsd !== null ? ` · 已用 ${formatUsd(item.usedUsd)}` : ''}
-                  </span>
-                </div>
-              ))}
-            </div>
+          <WindowList
+            windows={quota.windows}
+            threshold={threshold}
+            currency={quota.currency}
+          />
+          {quota.account ? (
+            <WindowList
+              windows={quota.account.windows}
+              threshold={threshold}
+              currency={quota.currency}
+              title="账户订阅"
+            />
+          ) : null}
+          {quota.accountError ? (
+            <p className={styles.accountNote}>{quota.accountError}</p>
           ) : null}
         </>
       )}
@@ -280,12 +425,17 @@ export default function RelayPanel() {
   const [accounts, setAccounts] = useState<RelayAccount[]>([]);
   const [baseUrl, setBaseUrl] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
+  const [formNotice, setFormNotice] = useState<string | null>(null);
   const [skipped, setSkipped] = useState<SkippedConfig[]>([]);
   const [scanning, setScanning] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [tokenEditing, setTokenEditing] = useState<string | null>(null);
+  const [savingToken, setSavingToken] = useState<string | null>(null);
   const keyInput = useRef<HTMLInputElement>(null);
+  const accountTokenInput = useRef<HTMLInputElement>(null);
+  const userIdInput = useRef<HTMLInputElement>(null);
   const threshold = state.preferences.lowQuotaThreshold;
 
   useEffect(() => {
@@ -312,6 +462,7 @@ export default function RelayPanel() {
   const rescan = async () => {
     setScanning(true);
     setFormError(null);
+    setFormNotice(null);
     try {
       const report = await discoverRelayAccounts();
       setAccounts([...report.accounts].reverse());
@@ -337,14 +488,43 @@ export default function RelayPanel() {
 
     setLoading(true);
     setFormError(null);
+    setFormNotice(null);
     try {
-      const account = await queryRelayAccount(baseUrl.trim(), apiKey);
+      const accountToken = accountTokenInput.current?.value.trim() ?? '';
+      const userId = userIdInput.current?.value.trim() ?? '';
+      const account = await queryRelayAccount(
+        baseUrl.trim(),
+        apiKey,
+        accountToken || undefined,
+        userId || undefined,
+      );
       setAccounts((current) => [account, ...current.filter((item) => item.id !== account.id)]);
+      if (accountToken && account.provider !== 'new-api') {
+        setFormNotice('访问令牌只对 New API 生效；当前站点识别为 Sub2API，访问令牌未保存。');
+      }
       if (keyInput.current) keyInput.current.value = '';
+      if (accountTokenInput.current) accountTokenInput.current.value = '';
+      if (userIdInput.current) userIdInput.current.value = '';
     } catch (error) {
       setFormError(errorText(error));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const saveAccountToken = async (id: string, token: string, userId: string) => {
+    setSavingToken(id);
+    setFormError(null);
+    try {
+      const updated = await setRelayAccountToken(id, token, userId || undefined);
+      setAccounts((current) =>
+        current.map((account) => (account.id === id ? updated : account)),
+      );
+      setTokenEditing(null);
+    } catch (error) {
+      setFormError(errorText(error));
+    } finally {
+      setSavingToken(null);
     }
   };
 
@@ -369,6 +549,7 @@ export default function RelayPanel() {
       await removeRelayAccount(id);
       setAccounts((current) => current.filter((account) => account.id !== id));
       setConfirming(null);
+      setTokenEditing(null);
     } catch (error) {
       setFormError(errorText(error));
     }
@@ -406,6 +587,33 @@ export default function RelayPanel() {
                 aria-describedby="relay-key-note"
               />
             </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>访问令牌（可选，New API）</span>
+              <input
+                ref={accountTokenInput}
+                className={styles.textInput}
+                type="password"
+                placeholder="用于读取账户余额与订阅"
+                disabled={!desktop || loading}
+                autoComplete="off"
+                spellCheck={false}
+                aria-describedby="relay-key-note"
+              />
+            </label>
+            <label className={styles.field}>
+              <span className={styles.fieldLabel}>用户 ID（旧版令牌需要）</span>
+              <input
+                ref={userIdInput}
+                className={styles.textInput}
+                type="text"
+                inputMode="numeric"
+                placeholder="New-Api-User"
+                disabled={!desktop || loading}
+                autoComplete="off"
+                spellCheck={false}
+                aria-describedby="relay-key-note"
+              />
+            </label>
             <button
               type="submit"
               className={styles.button}
@@ -426,7 +634,15 @@ export default function RelayPanel() {
             打开本页时会读取 Claude Code 的 <code className={styles.codeChip}>settings.json</code>
             与 Codex 的 <code className={styles.codeChip}>config.toml</code>
             ，自动识别其中的中转站；识别不出来时也可以手动填写。自动尝试 New API 与 Sub2API
-            的额度接口，无需先选择平台。密钥只保存在本次运行的 Rust 内存中，不写入状态文件，也不会显示在界面上。
+            的额度接口，无需先选择平台。
+            <br />
+            手动填写的地址、密钥与访问令牌保存在本应用数据目录的{' '}
+            <code className={styles.codeChip}>relay-profiles/</code>
+            ，不会进入状态文件或界面；自动扫描到的配置只在本次运行使用。账户额度方面：New API
+            需要 v1.0.0-rc.45 及以上并在密钥上开启「允许查询用户额度」，或填写访问令牌（v1.0.0-rc.41
+            及以上，需 profile:read、订阅还需 wallet:read）；旧版单令牌还需要同时填写面板个人设置里的用户 ID（New-Api-User）。部分站点会直接在密钥响应中返回账户额度
+            （quota_scope=account），无需额外配置。Sub2API 在密钥无总额度、无限速且属于普通分组时
+            返回账户钱包余额，订阅分组返回账户订阅额度。
           </p>
           {skipped.length > 0 ? (
             <div className={styles.relaySkipped}>
@@ -454,6 +670,11 @@ export default function RelayPanel() {
               {formError}
             </p>
           ) : null}
+          {formNotice ? (
+            <p className={styles.accountNote} role="status">
+              {formNotice}
+            </p>
+          ) : null}
         </form>
 
         {accounts.length === 0 ? (
@@ -477,11 +698,18 @@ export default function RelayPanel() {
                 desktop={desktop}
                 refreshing={refreshing === account.id}
                 confirming={confirming === account.id}
+                tokenEditing={tokenEditing === account.id}
+                savingToken={savingToken === account.id}
                 threshold={threshold}
                 onRefresh={() => void refresh(account.id)}
                 onAskRemove={() => setConfirming(account.id)}
                 onCancelRemove={() => setConfirming(null)}
                 onRemove={() => void remove(account.id)}
+                onBeginTokenEdit={() => setTokenEditing(account.id)}
+                onCancelTokenEdit={() => setTokenEditing(null)}
+                onSubmitToken={(token, userId) =>
+                  void saveAccountToken(account.id, token, userId)
+                }
               />
             ))}
           </div>

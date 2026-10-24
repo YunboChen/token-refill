@@ -8,7 +8,9 @@ use std::thread;
 
 use token_refill_lib::quota::newapi::NewApiProvider;
 use token_refill_lib::quota::sub2api::Sub2ApiProvider;
-use token_refill_lib::quota::{detect_and_fetch, KeyQuotaProvider, QuotaMode, QuotaProvider};
+use token_refill_lib::quota::{
+    detect_and_fetch, AccountSource, KeyQuotaProvider, QuotaMode, QuotaProvider,
+};
 
 const KEY: &str = "sk-test-key";
 
@@ -164,7 +166,7 @@ fn detection_falls_back_to_sub2api_when_newapi_is_absent() {
         "quota":{"limit":5,"used":1,"remaining":4}}"#;
     let (base, requests) = serve(vec![(404, "{}"), (200, body)]);
 
-    let detected = detect_and_fetch(&base, KEY).expect("识别 Sub2API");
+    let detected = detect_and_fetch(&base, KEY, None, None).expect("识别 Sub2API");
 
     assert_eq!(detected.provider, QuotaProvider::Sub2Api);
     assert_eq!(detected.quota.mode, QuotaMode::Key);
@@ -183,7 +185,7 @@ fn detection_recognizes_newapi_first() {
     let status = r#"{"success":true,"data":{"quota_per_unit":500000}}"#;
     let (base, requests) = serve(vec![(200, usage), (200, status)]);
 
-    let detected = detect_and_fetch(&base, KEY).expect("识别 New API");
+    let detected = detect_and_fetch(&base, KEY, None, None).expect("识别 New API");
 
     assert_eq!(detected.provider, QuotaProvider::NewApi);
     assert_eq!(detected.quota.limit_usd, Some(2.0));
@@ -198,9 +200,131 @@ fn detection_recognizes_newapi_first() {
 fn detection_error_lists_both_attempts_without_the_key() {
     let (base, _requests) = serve(vec![(401, "{}"), (404, "{}")]);
 
-    let error = detect_and_fetch(&base, KEY).expect_err("两种接口都失败");
+    let error = detect_and_fetch(&base, KEY, None, None).expect_err("两种接口都失败");
 
     assert!(error.contains("New API"));
     assert!(error.contains("Sub2API"));
     assert!(!error.contains(KEY));
+}
+
+#[test]
+fn newapi_access_token_reads_account_balance_and_subscriptions() {
+    const TOKEN: &str = "pat-test-token";
+    const USER_ID: &str = "20001";
+    let usage = r#"{"code":true,"data":{"name":"中转","total_granted":1000000,
+        "total_used":0,"total_available":1000000,"unlimited_quota":false}}"#;
+    let status = r#"{"success":true,"data":{"quota_per_unit":500000}}"#;
+    let self_payload = r#"{"success":true,"data":{"quota":600000,"used_quota":400000}}"#;
+    let subscriptions = r#"{"success":true,"data":{"subscriptions":[
+        {"subscription":{"id":3,"amount_total":1000000,"amount_used":250000,
+         "next_reset_time":1793000000,"status":"active"}}
+    ]}}"#;
+    let (base, requests) = serve(vec![
+        (200, usage),
+        (200, status),
+        (200, self_payload),
+        (200, subscriptions),
+    ]);
+
+    let quota = NewApiProvider::new_with_account_token(&base, KEY, Some(TOKEN), Some(USER_ID))
+        .expect("构造带访问令牌的客户端")
+        .fetch_quota()
+        .expect("查询完整额度");
+
+    let usage_request = requests.recv().expect("额度请求");
+    assert!(usage_request
+        .to_lowercase()
+        .contains(&format!("authorization: bearer {KEY}")));
+    assert!(!usage_request.to_lowercase().contains("new-api-user"));
+    assert!(requests
+        .recv()
+        .expect("状态请求")
+        .starts_with("GET /api/status "));
+    let self_request = requests.recv().expect("账户请求");
+    assert!(self_request.starts_with("GET /api/user/self "));
+    assert!(self_request
+        .to_lowercase()
+        .contains(&format!("authorization: bearer {}", TOKEN.to_lowercase())));
+    assert!(self_request
+        .to_lowercase()
+        .contains(&format!("new-api-user: {USER_ID}")));
+    let subscription_request = requests.recv().expect("订阅请求");
+    assert!(subscription_request.starts_with("GET /api/subscription/self "));
+    assert!(subscription_request
+        .to_lowercase()
+        .contains(&format!("authorization: bearer {}", TOKEN.to_lowercase())));
+    assert!(subscription_request
+        .to_lowercase()
+        .contains(&format!("new-api-user: {USER_ID}")));
+
+    assert_eq!(quota.limit_usd, Some(2.0));
+    assert_eq!(quota.account_error, None);
+    let account = quota.account.expect("账户额度");
+    assert_eq!(account.source, AccountSource::AccessToken);
+    assert_eq!(account.remaining_usd, Some(1.2));
+    assert_eq!(account.used_usd, Some(0.8));
+    assert_eq!(account.total_usd, Some(2.0));
+    assert_eq!(account.windows.len(), 1);
+    assert_eq!(account.windows[0].window_id, "订阅 3");
+    assert_eq!(account.windows[0].remaining_percent, Some(75));
+}
+
+#[test]
+fn access_token_failure_keeps_the_key_quota_and_reports_the_reason() {
+    const TOKEN: &str = "pat-test-token";
+    let usage = r#"{"code":true,"data":{"name":"中转","total_granted":1000000,
+        "total_used":0,"total_available":1000000,"unlimited_quota":false}}"#;
+    let status = r#"{"success":true,"data":{"quota_per_unit":500000}}"#;
+    let (base, _requests) = serve(vec![(200, usage), (200, status), (401, "{}")]);
+
+    let quota = NewApiProvider::new_with_account_token(&base, KEY, Some(TOKEN), None)
+        .expect("构造带访问令牌的客户端")
+        .fetch_quota()
+        .expect("密钥额度仍然成功");
+
+    assert_eq!(quota.remaining_usd, Some(2.0));
+    assert!(quota.account.is_none());
+    let error = quota.account_error.expect("记录访问令牌失败原因");
+    assert!(error.contains("访问令牌"));
+    assert!(!error.contains(TOKEN));
+}
+
+#[test]
+fn key_account_data_survives_an_access_token_failure() {
+    const TOKEN: &str = "pat-test-token";
+    let usage = r#"{"code":true,"data":{"name":"中转","total_granted":1000000,
+        "total_used":0,"total_available":1000000,"unlimited_quota":false,
+        "user_quota":{"total_available":500000,"total_used":100000}}}"#;
+    let status = r#"{"success":true,"data":{"quota_per_unit":500000}}"#;
+    let (base, _requests) = serve(vec![(200, usage), (200, status), (401, "{}")]);
+
+    let quota = NewApiProvider::new_with_account_token(&base, KEY, Some(TOKEN), None)
+        .expect("构造带访问令牌的客户端")
+        .fetch_quota()
+        .expect("密钥额度成功");
+
+    assert_eq!(quota.remaining_usd, Some(2.0));
+    // 令牌失败但密钥已有账户额度时，不使用错误覆盖可用数据。
+    assert_eq!(quota.account_error, None);
+    let account = quota.account.expect("密钥返回的账户额度");
+    assert_eq!(account.source, AccountSource::Key);
+    assert_eq!(account.remaining_usd, Some(1.0));
+}
+
+#[test]
+fn missing_user_quota_hints_at_the_required_version_or_token() {
+    let usage = r#"{"code":true,"data":{"name":"中转","total_granted":1000000,
+        "total_used":0,"total_available":1000000,"unlimited_quota":false}}"#;
+    let status = r#"{"success":true,"data":{"quota_per_unit":500000}}"#;
+    let (base, _requests) = serve(vec![(200, usage), (200, status)]);
+
+    let quota = NewApiProvider::new(&base, KEY)
+        .expect("构造客户端")
+        .fetch_quota()
+        .expect("密钥额度成功");
+
+    assert!(quota.account.is_none());
+    let hint = quota.account_error.expect("版本提示");
+    assert!(hint.contains("rc.45"));
+    assert!(hint.contains("访问令牌"));
 }

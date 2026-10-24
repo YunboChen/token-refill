@@ -47,6 +47,7 @@ pnpm tauri dev
 - **OpenCode Go**：启动时先调用本机 `opencode auth export`，若存在活动的 `opencode-go`（或 `opencode`）API Key，会自动接入“本机 OpenCode”账户并在每次刷新时重新读取 CLI 凭据；未检测到时，可在添加账户弹窗粘贴 Go API Key。手动添加的密钥写入 `api-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600）。展示 5 小时、每周与订阅月三个窗口；订阅月按购买日滚动，不推算天数。403 表示该 Key 未开通 Go 订阅。
 - **Command Code**：使用 Provider API Key（通常以 `user_` 开头），访问 CLI 同款 `/alpha/billing/*` 与 `/alpha/usage/summary` 接口。展示 5 小时、每周滚动窗口与订阅月额度；月度窗口以“已用 + 剩余”推导上限，订阅接口不可用时仍保留滚动窗口并标注能力缺口。
 - **Antigravity**：启动时若本机 `agy`（≥ 1.1.11）已登录并能直接读到额度，会自动接入“本机 Antigravity”账户；未检测到时不创建账户。也可在“添加账户”中手动接入。应用调用官方打印模式 `agy -p /usage --output-format json`，按模型分组展示每周 / 5 小时剩余比例；不读取 agy 的钥匙串、令牌文件或浏览器会话，也不修改其登录状态。找不到 CLI 时可用 `AGY_BIN` 指定路径；低于 1.1.11 时应用会拒绝查询，避免旧版把 `/usage` 当作提示词消耗额度。
+- **中转站（New API / Sub2API）**：在“中转站”页填写服务地址与 API Key，应用会依次尝试两种额度接口自动识别平台。New API 优先读取密钥的 `user_quota`（需要 v1.0.0-rc.45 及以上，并在密钥上开启「允许查询用户额度」）；部分站点会直接返回 `quota_scope: "account"` 与已换算的 `display` 块（含 CNY 等币种），应用会直接展示账户余额，不需要额外令牌；也可以填写个人访问令牌（v1.0.0-rc.41 及以上，`profile:read`，读取订阅另需 `wallet:read`），在密钥口径之外读取账户钱包余额与订阅窗口；旧版单令牌站点（例如部分二开站点）还需要同时填写面板个人设置里的用户 ID，作为 `New-Api-User` 请求头发送。对二开站点的响应做了容错：账户口径可来自 `user_quota`、`quota_scope=account` 或 `display`，数字/字符串均可解析，未知字段忽略。Sub2API 使用密钥自身额度；当密钥没有总额度、没有 5h/1d/7d 限速且属于普通分组时，`/v1/usage` 返回账户钱包余额，订阅分组返回账户订阅额度。手动填写的地址、密钥与访问令牌保存在 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600）；从 Claude Code / Codex 配置扫描到的密钥只在本次运行使用，不复制到应用目录。
 
 网络代理在“设置 → 网络代理”统一配置，三种模式：**跟随系统**（Windows 读取 Internet Settings，macOS 读取 `scutil --proxy`；进程环境变量优先，`ALL_PROXY` 为 `socks5://` 时也可用）、**不走代理**（直连）、**指定代理**（手动填写 `http://host:port`）。该设置作用于应用的全部 HTTPS 额度查询、版本检查，以及 `agy`、Codex app-server 等外置 CLI；指定代理不支持 PAC，且不能包含用户名或密码。
 
@@ -63,7 +64,7 @@ pnpm dev
 ### Windows 说明
 
 - Codex CLI 查找顺序：`CODEX_BIN` → `PATH` → nvm-windows / fnm 的版本目录 → npm、pnpm、Volta、Bun、Scoop、`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` 等默认安装位置。候选文件为 `codex.exe`、`codex.cmd`、`codex.bat`、`codex.com`，优先原生可执行文件；找不到时设置 `CODEX_BIN` 指向完整路径。
-- 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立 Codex 账户的 `CODEX_HOME`，`bailian-profiles\<accountId>\` 与 `api-profiles\<accountId>\` 分别保存百炼控制台令牌和 OpenCode / Command Code 的 API Key。
+- 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立 Codex 账户的 `CODEX_HOME`，`bailian-profiles\<accountId>\` 与 `api-profiles\<accountId>\` 分别保存百炼控制台令牌和 OpenCode / Command Code 的 API Key，`relay-profiles\<relayId>\` 保存手动填写的中转站凭证。
 - Antigravity 需要本机可运行的 `agy`，查找顺序为 `AGY_BIN` → `PATH` → `%LOCALAPPDATA%\agy\bin` 等常见目录；额度通过 `agy -p /usage --output-format json` 读取。
 - 窗口使用系统标题栏，前端按 `get_app_info().platform` 收窄侧栏顶部留白。
 - 授权链接通过 `ShellExecuteW` 交给系统浏览器，不经过 `cmd.exe`，URL 中的 `&` 不会被当作命令分隔符。

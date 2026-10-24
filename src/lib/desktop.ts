@@ -248,10 +248,11 @@ export function onAccountLoginChanged(
   return listen<AccountLoginEvent>(ACCOUNT_LOGIN_EVENT, (event) => handler(event.payload));
 }
 
-// ---------- 中转站密钥额度（密钥只在 Rust 会话内存中）----------
+// ---------- 中转站密钥额度（手动凭证由 Rust 保存在应用数据目录）----------
 
 export type QuotaProvider = 'new-api' | 'sub2-api';
 export type QuotaMode = 'key' | 'subscription' | 'wallet' | 'unrestricted';
+export type AccountQuotaSource = 'key' | 'access-token';
 
 export interface KeyQuotaWindow {
   windowId: string;
@@ -264,8 +265,11 @@ export interface KeyQuotaWindow {
 }
 
 export interface AccountQuota {
+  totalUsd: number | null;
   usedUsd: number | null;
   remainingUsd: number | null;
+  source: AccountQuotaSource;
+  windows: KeyQuotaWindow[];
 }
 
 export interface KeyQuota {
@@ -273,12 +277,15 @@ export interface KeyQuota {
   mode: QuotaMode;
   keyName: string | null;
   planName: string | null;
+  /** 金额单位，例如 USD / CNY；缺省按 USD 展示。 */
+  currency: string | null;
   valid: boolean;
   unlimited: boolean;
   limitUsd: number | null;
   usedUsd: number | null;
   remainingUsd: number | null;
   account: AccountQuota | null;
+  accountError: string | null;
   expiresAtEpoch: number | null;
   windows: KeyQuotaWindow[];
   checkedAtEpoch: number;
@@ -294,6 +301,12 @@ export interface RelayAccount {
   quota: KeyQuota | null;
   checkedAtEpoch: number | null;
   lastError: string | null;
+  /** 凭证是否已保存到应用目录；自动扫描到的配置只在本次运行有效。 */
+  persisted: boolean;
+  /** 是否已配置 New API 访问令牌（不返回令牌本身）。 */
+  hasAccountToken: boolean;
+  /** 旧版 New API 单令牌鉴权使用的用户 ID（不是密钥）。 */
+  newApiUserId: string | null;
 }
 
 export interface SkippedConfig {
@@ -307,14 +320,37 @@ export interface DiscoveryReport {
   skipped: SkippedConfig[];
 }
 
-/** 扫描 Claude Code / Codex 的本地配置并自动识别；密钥只留在 Rust 内存。 */
+/** 扫描 Claude Code / Codex 的本地配置，并刷新已保存的手动条目。 */
 export function discoverRelayAccounts(): Promise<DiscoveryReport> {
   return invoke<DiscoveryReport>('relay_discover');
 }
 
-/** 自动识别 New API / Sub2API 并查询；密钥不写入前端状态或本地状态文件。 */
-export function queryRelayAccount(baseUrl: string, apiKey: string): Promise<RelayAccount> {
-  return invoke<RelayAccount>('relay_query', { baseUrl, apiKey });
+/** 自动识别 New API / Sub2API 并查询；手动凭证由 Rust 保存，不进入前端状态。 */
+export function queryRelayAccount(
+  baseUrl: string,
+  apiKey: string,
+  accountToken?: string,
+  newApiUserId?: string,
+): Promise<RelayAccount> {
+  return invoke<RelayAccount>('relay_query', {
+    baseUrl,
+    apiKey,
+    accountToken: accountToken?.trim() || null,
+    newApiUserId: newApiUserId?.trim() || null,
+  });
+}
+
+/** 为已有的 New API 账户补充访问令牌并刷新。 */
+export function setRelayAccountToken(
+  id: string,
+  accountToken: string,
+  newApiUserId?: string,
+): Promise<RelayAccount> {
+  return invoke<RelayAccount>('relay_set_account_token', {
+    id,
+    accountToken,
+    newApiUserId: newApiUserId?.trim() || null,
+  });
 }
 
 export function refreshRelayAccount(id: string): Promise<RelayAccount> {

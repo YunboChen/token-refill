@@ -264,10 +264,11 @@
 | `.accountCard` / `.accountHead` / `.accountTitleBlock` | 卡片与标题区 |
 | `.accountMetaLine` / `.accountHint` | 来源、平台、额度模式、密钥名等标签行 |
 | `.accountTools` / `.refreshButton` / `.updatedAt` | 右侧刷新与更新时间 |
-| `.relayForm` | 地址 + 密钥 + 按钮的横向表单 |
+| `.relayForm` | 地址 + 密钥 + 访问令牌 + 按钮的横向表单 |
+| `.relayTokenForm` | 卡片内补充 New API 访问令牌的行内表单 |
 | `.relaySummary` / `.relayAmount` | 金额摘要区 |
 | `.relayBarWrap` / `.relayBar` / `.relayBarFill` / `.relayScale` | 剩余比例条；`data-low` 转危险色 |
-| `.relayMetaLine` / `.relayWindows` / `.relayWindow` / `.relayWindowHead` | 到期时间与分窗口额度 |
+| `.relayMetaLine` / `.relayWindows` / `.relayWindow` / `.relayWindowHead` / `.relaySectionLabel` | 到期时间、密钥窗口与账户订阅窗口 |
 | `.relaySkipped` | 未识别的本地配置列表 |
 
 ### 4.4 状态与提示
@@ -305,7 +306,7 @@
 | `.range` / `.rangeHead` / `.rangeValue` / `.rangeScale` | 滑块 | 通过 `--range-fill` 画已填充轨道；同时写 WebKit 与 Firefox 伪元素 |
 | `.settingText` / `.settingLabel` / `.settingHint` | 设置文字层级 | 标题 13px/600，说明 12px 次要色；危险说明加 `data-danger` |
 
-敏感输入（如中转站 API Key）应使用**非受控 ref**读取，不进入 React 状态、不写入日志或状态文件。现有 `RelayPanel` 是范例。
+敏感输入（如中转站 API Key、New API 访问令牌）应使用**非受控 ref**读取，不进入 React 状态、日志或 `state.json`；手动凭证由 Rust 写入 `relay-profiles` 私有目录。现有 `RelayPanel` 是范例。
 
 ### 4.6 按钮
 
@@ -421,23 +422,26 @@ section
 ```
 section → overviewStack
 ├─ card（识别表单）
-│  ├─ relayForm（地址 / API Key / 识别并查询 / 重新扫描）
-│  ├─ usageNote（读取哪些本地配置、密钥只留在内存）
+│  ├─ relayForm（地址 / API Key / 访问令牌（可选）/ 用户 ID（旧版令牌）/ 识别并查询 / 重新扫描）
+│  ├─ usageNote（读取哪些本地配置、凭证保存位置与版本要求）
 │  ├─ relaySkipped（未识别的配置）
 │  ├─ 浏览器预览说明
 │  └─ formError
 ├─ 空态 overviewEmpty
 └─ accountStack → accountCard × N
-   ├─ accountHead（host + 标签 + 工具）
+   ├─ accountHead（host + 标签 + 保存状态 + 工具）
    ├─ inlineConfirm（移除确认）
+   ├─ relayTokenForm（补充 New API 访问令牌 + 旧版用户 ID）
    ├─ 上次刷新失败提示
    └─ relaySummary / relayMetaLine / relayWindows
+      └─ 账户余额、账户订阅窗口与 accountError 提示
 ```
 
 关键行为：
 
-- 进入页面自动扫描一次本地配置；「重新扫描」手动重试。
-- API Key 用 ref 读取，不进入组件状态。
+- 进入页面先刷新已保存的手动条目，再扫描一次本地配置；「重新扫描」手动重试。
+- API Key 与访问令牌都用 ref 读取，不进入组件状态；保存动作由 Rust 完成。
+- New API 卡片提供访问令牌入口；Sub2API 不显示该入口。
 - 移除使用行内确认而不是弹窗，减少打断。
 - 金额、比例、到期时间、窗口额度都做了「未知/不限额」的分支，不把未知显示成 0。
 
@@ -633,7 +637,7 @@ export default function FooPanel() {
 | 平台分组 | `platformStack` `platformGroup` `platformSectionHead` `platformHeading` `platformBadge` `platformLogo` `platformLogoFallback` `platformIdentity` `platformNameRow` `platformName` `platformVendor` `platformDescription` `platformAside` `platformCount` `platformStatus` `plannedNote` |
 | 总览额度板 | `overviewStack` `overviewEmpty` `emptyGlyph` `emptyTitle` `quotaBoard` `quotaAccount` `quotaAccountHead` `quotaAccountToggle` `quotaAccountIdentity` `quotaAccountName` `quotaSummary` `quotaAccountTools` `chevronButton` `chevronIcon` `quotaAccountMeta` `metaDot` `quotaBody` `quotaBodyInner` `quotaNotices` `metricGrid` `metric` `metricDivider` `metricEyebrow` `metricProduct` `metricLabel` `quotaBarRow` `quotaPercent` `quotaBarTrack` `quotaBarFill` `metricMeta` `metricMetaPart` `metricDot` `quotaMeta` `quotaLowNote` `dataGaps` `skel` `skelLabel` `skelValue` `skelBar` `skelMeta` |
 | 账户管理 | `accountGrid` `accountTile` `accountIdentityCell` `accountMark` `accountIdentity` `accountNameRow` `accountName` `accountMeta` `planPanel` `planRow` `planRowMain` `planRowName` `planTier` `planRowState` `accountFoot` `accountRefresh` `accountActions` `miniButton` `accountAddTile` `accountAddIcon` `accountAddLabel` `accountEmptyNote` `accountNotice` |
-| 中转站 | `relayForm` `relaySummary` `relayAmount` `relayBarWrap` `relayBar` `relayBarFill` `relayScale` `relayMetaLine` `relayWindows` `relayWindow` `relayWindowHead` `relaySkipped` `accountStack` `accountCard` `accountHead` `accountTitleBlock` `accountMetaLine` `accountHint` `accountTools` `updatedAt` `refreshButton` `inlineConfirm` `inlineConfirmActions` |
+| 中转站 | `relayForm` `relayTokenForm` `relaySectionLabel` `relaySummary` `relayAmount` `relayBarWrap` `relayBar` `relayBarFill` `relayScale` `relayMetaLine` `relayWindows` `relayWindow` `relayWindowHead` `relaySkipped` `accountStack` `accountCard` `accountHead` `accountTitleBlock` `accountMetaLine` `accountHint` `accountTools` `updatedAt` `refreshButton` `inlineConfirm` `inlineConfirmActions` |
 | 状态/提示 | `noticeDanger` `noticeStale` `noticeAside` `globalNotice` `authStatus` `authDot` `draftBanner` `draftIcon` `draftTag` `draftText` `saveState` `planTag` `providerTag` |
 | 设置 | `settingRow` `settingRowStatic` `settingText` `settingLabel` `stackRow` `pills` `pill` `pillThumb` `pillText` `switchWrap` `switchInput` `switchTrack` `switchKnob` `range` `rangeHead` `rangeValue` `rangeScale` `testButton` `buttonRow` |
 | 表单/按钮 | `field` `fieldLabel` `textInput` `button` `buttonGhost` `dangerButton` |

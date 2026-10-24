@@ -2,7 +2,9 @@
 //!
 //! 两类平台都只凭 API Key 查询当前密钥的实时额度：
 //! - New API：`GET /api/usage/token/`，并用 `/api/status` 的 `quota_per_unit`
-//!   把平台内部的 quota 单位换算成美元；
+//!   把平台内部的 quota 单位换算成美元；密钥开启「允许查询用户额度」时
+//!   `user_quota` 会带上账户口径。另可提供个人访问令牌，
+//!   通过 `/api/user/self` 与 `/api/subscription/self` 读取完整账户额度；
 //! - Sub2API：`GET /v1/usage`，按 `mode` 区分密钥额度、订阅窗口与钱包余额。
 //!
 //! 密钥只保存在 Rust 侧，不进入前端状态、日志或错误消息。请求一律使用
@@ -13,7 +15,7 @@ pub mod sub2api;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -30,7 +32,7 @@ const MAX_RESPONSE_BYTES: u64 = 256 * 1024;
 const DEFAULT_QUOTA_PER_UNIT: f64 = 500_000.0;
 
 /// 额度来源平台。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum QuotaProvider {
     NewApi,
@@ -39,7 +41,7 @@ pub enum QuotaProvider {
 
 /// 额度口径。平台没有提供额度数据时不要用 0 顶替，用 `Unrestricted` 或
 /// `Option` 字段表达缺失。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum QuotaMode {
     /// 密钥自身的总额度。
@@ -52,14 +54,18 @@ pub enum QuotaMode {
     Unrestricted,
 }
 
-/// 密钥的实时额度快照。金额统一为美元。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// 密钥的实时额度快照。金额字段沿用 `*_usd` 命名，实际单位由 `currency`
+/// 表示（默认 USD）；New API 站点可返回 CNY 等展示币种。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyQuota {
     pub provider: QuotaProvider,
     pub mode: QuotaMode,
     pub key_name: Option<String>,
     pub plan_name: Option<String>,
+    /// 金额单位；平台未提供时按 USD 展示。
+    #[serde(default)]
+    pub currency: Option<String>,
     /// 密钥状态是否可用；平台未返回时为 true。
     pub valid: bool,
     /// 总额度不受限制（仍可能受窗口限速或订阅周期限制）。
@@ -67,22 +73,40 @@ pub struct KeyQuota {
     pub limit_usd: Option<f64>,
     pub used_usd: Option<f64>,
     pub remaining_usd: Option<f64>,
-    /// New API 在密钥允许时额外返回的账户额度。
+    /// 账户级额度。New API 可从密钥的 `user_quota` 或访问令牌获取；
+    /// Sub2API 在无限制密钥时由钱包余额/订阅口径直接给出，不单独填充此字段。
     pub account: Option<AccountQuota>,
+    /// 账户级数据获取失败或平台未提供时的说明；不影响密钥额度本身。
+    #[serde(default)]
+    pub account_error: Option<String>,
     pub expires_at_epoch: Option<i64>,
     pub windows: Vec<KeyQuotaWindow>,
     pub checked_at_epoch: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// 账户额度的来源，用于界面区分「密钥顺带返回」与「访问令牌查询」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AccountSource {
+    /// New API 密钥开启「允许查询用户额度」后返回的 `user_quota`。
+    Key,
+    /// New API 个人访问令牌查询的账户数据。
+    AccessToken,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountQuota {
+    pub total_usd: Option<f64>,
     pub used_usd: Option<f64>,
     pub remaining_usd: Option<f64>,
+    pub source: AccountSource,
+    /// 访问令牌返回的订阅窗口；密钥口径下为空。
+    pub windows: Vec<KeyQuotaWindow>,
 }
 
 /// 限速窗口或订阅周期。`limit_usd` 缺失表示平台没有配置该周期上限。
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyQuotaWindow {
     /// 平台给出的窗口标识：5h / 1d / 7d / daily / weekly / monthly。
@@ -119,16 +143,30 @@ pub struct DetectedQuota {
 
 /// 同一个 Base URL 下依次尝试两种额度接口，以实际响应判断上游类型，
 /// 不要求用户先选择平台。两种都失败时把各自的错误一并返回。
-pub fn detect_and_fetch(base_url: &str, api_key: &str) -> Result<DetectedQuota, String> {
+///
+/// `account_token` 是 New API 的个人访问令牌，可选；`new_api_user_id` 是
+/// 旧版单令牌鉴权需要的 `New-Api-User` 头，可选。Sub2API 不使用两者。
+pub fn detect_and_fetch(
+    base_url: &str,
+    api_key: &str,
+    account_token: Option<&str>,
+    new_api_user_id: Option<&str>,
+) -> Result<DetectedQuota, String> {
     let base_url = normalize_base_url(base_url)?;
     let api_key = validate_api_key(api_key)?;
+    let account_token = account_token.map(validate_account_token).transpose()?;
+    let new_api_user_id = validate_new_api_user_id(new_api_user_id)?;
 
     let mut failures = Vec::new();
     for provider in [QuotaProvider::NewApi, QuotaProvider::Sub2Api] {
         let result = match provider {
-            QuotaProvider::NewApi => {
-                NewApiProvider::new(&base_url, &api_key).and_then(|client| client.fetch_quota())
-            }
+            QuotaProvider::NewApi => NewApiProvider::new_with_account_token(
+                &base_url,
+                &api_key,
+                account_token.as_deref(),
+                new_api_user_id.as_deref(),
+            )
+            .and_then(|client| client.fetch_quota()),
             QuotaProvider::Sub2Api => {
                 Sub2ApiProvider::new(&base_url, &api_key).and_then(|client| client.fetch_quota())
             }
@@ -162,15 +200,33 @@ impl Endpoint {
 
     /// 不带密钥的公开接口，例如 New API 的 `/api/status`。
     pub(crate) fn get_json(&self, path: &str) -> Result<Value, String> {
-        self.request(path, false)
+        self.request(path, false, CredentialKind::ApiKey, None)
     }
 
     /// 带 `Authorization: Bearer` 的接口。
     pub(crate) fn get_json_authenticated(&self, path: &str) -> Result<Value, String> {
-        self.request(path, true)
+        self.request(path, true, CredentialKind::ApiKey, None)
     }
 
-    fn request(&self, path: &str, authenticated: bool) -> Result<Value, String> {
+    /// 带 `Authorization: Bearer` 的账户接口。错误文案要区分访问令牌，
+    /// 否则用户会把「令牌无效」误认为 API Key 有问题。旧版 New API 还要求
+    /// 同时带 `New-Api-User: <用户 ID>`。
+    pub(crate) fn get_json_authenticated_with(
+        &self,
+        path: &str,
+        credential: CredentialKind,
+        user_id: Option<&str>,
+    ) -> Result<Value, String> {
+        self.request(path, true, credential, user_id)
+    }
+
+    fn request(
+        &self,
+        path: &str,
+        authenticated: bool,
+        credential: CredentialKind,
+        user_id: Option<&str>,
+    ) -> Result<Value, String> {
         let url = format!("{}{path}", self.base_url);
         let mut config = ureq::Agent::config_builder()
             .timeout_global(Some(REQUEST_TIMEOUT))
@@ -184,8 +240,13 @@ impl Endpoint {
         if authenticated {
             request = request.header("Authorization", format!("Bearer {}", self.api_key));
         }
+        if let Some(user_id) = user_id {
+            request = request.header("New-Api-User", user_id);
+        }
 
-        let mut response = request.call().map_err(map_request_error)?;
+        let mut response = request
+            .call()
+            .map_err(|error| map_request_error(error, credential))?;
         let body = response
             .body_mut()
             .with_config()
@@ -250,9 +311,54 @@ pub(crate) fn validate_api_key(raw: &str) -> Result<String, String> {
     Ok(key.to_string())
 }
 
+/// 旧版 New API 的 `New-Api-User` 头取用户 ID；只接受数字，空值视为未填写。
+pub(crate) fn validate_new_api_user_id(raw: Option<&str>) -> Result<Option<String>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let id = raw.trim();
+    if id.is_empty() {
+        return Ok(None);
+    }
+    if id.len() > 20 || !id.chars().all(|c| c.is_ascii_digit()) {
+        return Err("用户 ID 应为数字。".to_string());
+    }
+    Ok(Some(id.to_string()))
+}
+
+/// New API 个人访问令牌与 API Key 使用同一套字符约束，但错误文案要区分，
+/// 避免用户把两者填错位置时得到误导性的提示。
+pub(crate) fn validate_account_token(raw: &str) -> Result<String, String> {
+    let token = raw.trim();
+    if token.is_empty() {
+        return Err("访问令牌不能为空。".to_string());
+    }
+    if token.len() > 512 || token.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("访问令牌格式不正确。".to_string());
+    }
+    Ok(token.to_string())
+}
+
+/// 请求使用的凭证类型，只影响错误文案。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CredentialKind {
+    ApiKey,
+    AccessToken,
+}
+
 /// 错误信息只描述状态，不回显响应正文，避免把密钥或账户数据带出去。
-fn map_request_error(error: ureq::Error) -> String {
+fn map_request_error(error: ureq::Error, credential: CredentialKind) -> String {
+    let token = credential == CredentialKind::AccessToken;
     match error {
+        ureq::Error::StatusCode(401) if token => {
+            "访问令牌无效或已过期；旧版 New API 还需要同时填写用户 ID（New-Api-User）。".to_string()
+        }
+        ureq::Error::StatusCode(403) if token => {
+            "访问令牌权限不足，需要 profile:read（订阅还需要 wallet:read）。".to_string()
+        }
+        ureq::Error::StatusCode(404) if token => {
+            "站点未提供账户额度接口（需要 New API v1.0.0-rc.41 及以上）。".to_string()
+        }
         ureq::Error::StatusCode(401 | 403) => "密钥无效、已禁用或无权查询额度。".to_string(),
         ureq::Error::StatusCode(404) => "未找到额度接口，请确认服务地址与平台类型。".to_string(),
         ureq::Error::StatusCode(429) => "查询过于频繁，请稍后重试。".to_string(),
@@ -320,8 +426,74 @@ pub(crate) fn quota_per_unit_from_status(status: &Value) -> Option<f64> {
         .filter(|value| *value > 0.0)
 }
 
+/// New API 的展示币种（`data.quota_display_type`，例如 USD / CNY）。
+pub(crate) fn quota_display_unit_from_status(status: &Value) -> Option<String> {
+    status
+        .pointer("/data/quota_display_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_uppercase())
+}
+
 pub(crate) fn default_quota_per_unit() -> f64 {
     DEFAULT_QUOTA_PER_UNIT
+}
+
+/// 二开站点常见的宽松序列化：数字可能是字符串，布尔可能是 0/1 或
+/// "true"/"false"。这些辅助函数只用于 New API 适配器，不改变上游字段语义。
+pub(crate) mod flexible {
+    use serde::{Deserialize, Deserializer};
+    use serde_json::Value;
+
+    pub(crate) fn value_as_f64(value: &Value) -> Option<f64> {
+        match value {
+            Value::Number(number) => number.as_f64(),
+            Value::String(text) => text.trim().parse::<f64>().ok(),
+            _ => None,
+        }
+        .filter(|value| value.is_finite())
+    }
+
+    pub(crate) fn opt_f64<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Option::<Value>::deserialize(deserializer)?;
+        Ok(value.as_ref().and_then(value_as_f64))
+    }
+
+    pub(crate) fn opt_i64<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Option::<Value>::deserialize(deserializer)?;
+        Ok(value.as_ref().and_then(|value| match value {
+            Value::Number(number) => number
+                .as_i64()
+                .or_else(|| number.as_f64().map(|value| value as i64)),
+            Value::String(text) => text.trim().parse::<i64>().ok(),
+            _ => None,
+        }))
+    }
+
+    pub(crate) fn bool_default<'de, D>(deserializer: D) -> Result<bool, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Option::<Value>::deserialize(deserializer)?;
+        Ok(match value {
+            Some(Value::Bool(value)) => value,
+            Some(Value::Number(number)) => number.as_f64().map(|v| v != 0.0).unwrap_or(false),
+            Some(Value::String(text)) => {
+                matches!(
+                    text.trim().to_ascii_lowercase().as_str(),
+                    "true" | "1" | "yes"
+                )
+            }
+            _ => false,
+        })
+    }
 }
 
 #[cfg(test)]
