@@ -236,8 +236,11 @@ fn open_in_browser(url: &str) -> Result<(), String> {
 
 #[cfg(not(target_os = "windows"))]
 fn open_in_browser(url: &str) -> Result<(), String> {
+    // macOS 固定使用系统自带的 `open`，不走 PATH 查找：某些终端（例如 cmux）会把
+    // 自带的 `open` 垫片排在 PATH 前面，把 https 链接转进终端内置的网页标签。
+    // 授权页必须交给系统默认浏览器，同时避免被同名可执行文件劫持。
     #[cfg(target_os = "macos")]
-    let mut command = Command::new("open");
+    let mut command = Command::new("/usr/bin/open");
     #[cfg(all(unix, not(target_os = "macos")))]
     let mut command = Command::new("xdg-open");
 
