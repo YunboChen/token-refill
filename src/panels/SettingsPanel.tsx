@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
-import { Info } from '@phosphor-icons/react';
+import { createPortal } from 'react-dom';
 import { version as appVersion } from '../../package.json';
 import {
   checkForUpdate,
@@ -65,7 +65,8 @@ function Toggle({
   );
 }
 
-type SaveState = 'idle' | 'saving' | 'saved' | 'error';
+const SAVE_ERROR_MESSAGE = '设置保存失败，请重试。';
+const SAVE_ERROR_DURATION = 4000;
 
 const PROXY_OPTIONS: { value: ProxyMode; label: string }[] = [
   { value: 'system', label: '跟随系统' },
@@ -81,7 +82,7 @@ export default function SettingsPanel() {
   const { state, savePreferences, setAutoLaunch, desktop } = useAppState();
   const [prefs, setPrefs] = useState<Preferences>(state.preferences);
   const [theme, setTheme] = useState<ThemePref>(loadTheme);
-  const [saveState, setSaveState] = useState<SaveState>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [testState, setTestState] = useState<TestState>('idle');
   const [updateInfo, setUpdateInfo] = useState<UpdateStatus | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState>('idle');
@@ -91,6 +92,7 @@ export default function SettingsPanel() {
   const [autoLaunchError, setAutoLaunchError] = useState<string | null>(null);
   const dirty = useRef(false);
   const latestPrefs = useRef(prefs);
+  const saveErrorTimer = useRef<number | null>(null);
   latestPrefs.current = prefs;
 
   const refreshLabelId = useId();
@@ -110,23 +112,34 @@ export default function SettingsPanel() {
   }, [state.preferences]);
 
   // 合并连续改动后写入后端，避免拖动阈值时产生大量并发请求。
+  // 保存成功不打扰用户；失败时才弹一次 toast。
   useEffect(() => {
     if (!dirty.current) return;
-    setSaveState('saving');
     const timer = window.setTimeout(() => {
       dirty.current = false;
       void savePreferences(latestPrefs.current).then((ok) => {
-        setSaveState(ok ? 'saved' : 'error');
-        if (!ok) dirty.current = true;
+        if (ok) return;
+        dirty.current = true;
+        setSaveError(SAVE_ERROR_MESSAGE);
+        if (saveErrorTimer.current !== null) {
+          window.clearTimeout(saveErrorTimer.current);
+        }
+        saveErrorTimer.current = window.setTimeout(() => {
+          saveErrorTimer.current = null;
+          setSaveError(null);
+        }, SAVE_ERROR_DURATION);
       });
     }, 250);
     return () => window.clearTimeout(timer);
   }, [prefs, savePreferences]);
 
-  // 切换页面前把尚未写入的改动补发一次。
+  // 切换页面前把尚未写入的改动补发一次，并清掉待触发的 toast 计时。
   useEffect(
     () => () => {
       if (dirty.current) void savePreferences(latestPrefs.current);
+      if (saveErrorTimer.current !== null) {
+        window.clearTimeout(saveErrorTimer.current);
+      }
     },
     [savePreferences],
   );
@@ -215,198 +228,11 @@ export default function SettingsPanel() {
 
   return (
     <section>
-      <div className={styles.draftBanner}>
-        <Info size={15} className={styles.draftIcon} aria-hidden />
-        <span className={styles.draftTag}>本机</span>
-        <p className={styles.draftText}>
-          设置保存到本机 Rust 状态；三类提醒走系统通知，开机自启写入系统登录项。
-        </p>
-        {saveState === 'saving' ? (
-          <span className={styles.saveState}>保存中…</span>
-        ) : saveState === 'saved' ? (
-          <span className={styles.saveState}>已保存</span>
-        ) : saveState === 'error' ? (
-          <span className={styles.saveState} data-state="error">保存失败</span>
-        ) : null}
-      </div>
-
-      <h2 id="settings-refresh" className={styles.groupTitle}>刷新</h2>
-      <section className={`${styles.card} ${styles.listCard}`} aria-labelledby="settings-refresh">
-        <div className={styles.settingRowStatic}>
-          <div className={styles.settingText}>
-            <span id={refreshLabelId} className={styles.settingLabel}>
-              自动刷新间隔（分钟）
-            </span>
-            <span className={styles.settingHint}>
-              后台按所选间隔查询全部账户，并服从平台限流。
-            </span>
-          </div>
-          <div
-            className={styles.pills}
-            role="radiogroup"
-            aria-labelledby={refreshLabelId}
-            style={{
-              '--pill-index': refreshIndex,
-              '--pill-count': REFRESH_OPTIONS.length,
-            } as CSSProperties}
-          >
-            <span className={styles.pillThumb} aria-hidden="true" />
-            {REFRESH_OPTIONS.map((mins) => (
-              <label className={styles.pill} key={mins}>
-                <input
-                  type="radio"
-                  name="refreshMinutes"
-                  value={mins}
-                  checked={prefs.refreshMinutes === mins}
-                  onChange={() => update({ refreshMinutes: mins })}
-                  aria-label={`${mins} 分钟`}
-                />
-                <span className={styles.pillText}>{mins}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <h2 id="settings-proxy" className={styles.groupTitle}>网络代理</h2>
-      <section className={`${styles.card} ${styles.listCard}`} aria-labelledby="settings-proxy">
-        <div className={styles.settingRowStatic}>
-          <div className={styles.settingText}>
-            <span id={proxyLabelId} className={styles.settingLabel}>代理方式</span>
-            <span className={styles.settingHint}>
-              统一作用于额度查询、版本检查与外置 CLI。跟随系统会读取系统代理设置；
-              指定代理仅支持 HTTP/HTTPS，不支持 PAC。
-            </span>
-          </div>
-          <div
-            className={styles.pills}
-            role="radiogroup"
-            aria-labelledby={proxyLabelId}
-            style={{
-              '--pill-index': proxyIndex,
-              '--pill-count': PROXY_OPTIONS.length,
-            } as CSSProperties}
-          >
-            <span className={styles.pillThumb} aria-hidden="true" />
-            {PROXY_OPTIONS.map((option) => (
-              <label className={styles.pill} key={option.value}>
-                <input
-                  type="radio"
-                  name="proxyMode"
-                  value={option.value}
-                  checked={prefs.proxyMode === option.value}
-                  onChange={() => update({ proxyMode: option.value })}
-                  aria-label={option.label}
-                />
-                <span className={styles.pillText}>{option.label}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-        {prefs.proxyMode === 'manual' ? (
-          <div className={styles.stackRow}>
-            <span className={styles.settingLabel}>代理地址</span>
-            <input
-              className={styles.textInput}
-              value={prefs.proxyUrl ?? ''}
-              onChange={(event) => update({ proxyUrl: event.target.value })}
-              placeholder="http://127.0.0.1:7890"
-              spellCheck={false}
-              autoComplete="off"
-              aria-label="代理地址"
-            />
-            <span className={styles.settingHint}>
-              只支持 http:// 或 https://，不能包含用户名、密码或路径。
-            </span>
-          </div>
-        ) : null}
-      </section>
-
-      <h2 id="settings-reminders" className={styles.groupTitle}>提醒</h2>
+      <h2 id="settings-general" className={styles.groupTitle}>通用</h2>
       <section
         className={`${styles.card} ${styles.listCard}`}
-        aria-labelledby="settings-reminders"
+        aria-labelledby="settings-general"
       >
-        <Toggle
-          checked={prefs.lowQuotaEnabled}
-          onChange={(next) => update({ lowQuotaEnabled: next })}
-          label="低额度提醒"
-          hint="剩余比例低于阈值时通过系统通知提醒，同一额度周期只提醒一次；总览中的剩余额度环会同步标记。"
-        />
-        <div
-          className={styles.stackRow}
-          data-disabled={prefs.lowQuotaEnabled ? undefined : true}
-        >
-          <div className={styles.rangeHead}>
-            <span className={styles.settingLabel}>提醒阈值</span>
-            <span className={styles.rangeValue}>
-              低于 {prefs.lowQuotaThreshold}% 时提醒
-            </span>
-          </div>
-          <input
-            type="range"
-            className={styles.range}
-            style={{ '--range-fill': `${refreshFill}%` } as CSSProperties}
-            min={5}
-            max={50}
-            step={5}
-            value={prefs.lowQuotaThreshold}
-            disabled={!prefs.lowQuotaEnabled}
-            aria-label="低额度提醒阈值（剩余百分比）"
-            onChange={(event) => update({ lowQuotaThreshold: Number(event.target.value) })}
-          />
-          <div className={styles.rangeScale} aria-hidden="true">
-            <span>5%</span>
-            <span>50%</span>
-          </div>
-        </div>
-        <Toggle
-          checked={prefs.authExpiredEnabled}
-          onChange={(next) => update({ authExpiredEnabled: next })}
-          label="授权失效提醒"
-          hint="真实授权失效时提示重新授权；普通网络故障不会按失效处理。"
-        />
-        <Toggle
-          checked={prefs.resetNoticeEnabled}
-          onChange={(next) => update({ resetNoticeEnabled: next })}
-          label="重置或恢复提醒"
-          hint="默认关闭；仅在查询确认新周期后提示，不根据本地倒计时宣称恢复。"
-        />
-        <div className={styles.settingRowStatic}>
-          <div className={styles.settingText}>
-            <span className={styles.settingLabel}>系统通知</span>
-            <span className={styles.settingHint}>
-              提醒通过 macOS 系统通知发送，桌面端没有应用内授权弹窗。若未显示，请在“系统设置 →
-              通知”中允许 Token Refill（开发模式下来源可能显示为 Terminal）。
-            </span>
-            {testState === 'sent' ? (
-              <span className={styles.settingHint} role="status">
-                已请求发送；未出现请检查系统通知设置。
-              </span>
-            ) : null}
-            {testState === 'error' ? (
-              <span className={styles.settingHint} role="status" data-danger="true">
-                发送失败，请稍后重试。
-              </span>
-            ) : null}
-          </div>
-          <button
-            type="button"
-            className={styles.testButton}
-            onClick={testNotification}
-            disabled={!desktop || testState === 'sending'}
-            title={desktop ? '发送一条测试通知' : '浏览器预览无法调用 Rust'}
-          >
-            {testState === 'sending' ? '发送中…' : '发送测试通知'}
-          </button>
-        </div>
-      </section>
-      <p className={`${styles.settingHint} ${styles.groupNote}`}>
-        三类提醒均已接入系统通知。
-      </p>
-
-      <h2 id="settings-system" className={styles.groupTitle}>系统</h2>
-      <section className={`${styles.card} ${styles.listCard}`} aria-labelledby="settings-system">
         <div className={styles.settingRowStatic}>
           <div className={styles.settingText}>
             <span id={themeLabelId} className={styles.settingLabel}>外观</span>
@@ -463,6 +289,181 @@ export default function SettingsPanel() {
         ) : null}
       </section>
 
+      <h2 id="settings-refresh" className={styles.groupTitle}>刷新</h2>
+      <section className={`${styles.card} ${styles.listCard}`} aria-labelledby="settings-refresh">
+        <div className={styles.settingRowStatic}>
+          <div className={styles.settingText}>
+            <span id={refreshLabelId} className={styles.settingLabel}>
+              自动刷新间隔（分钟）
+            </span>
+            <span className={styles.settingHint}>
+              后台按所选间隔查询全部账户，并服从平台限流。
+            </span>
+          </div>
+          <div
+            className={styles.pills}
+            role="radiogroup"
+            aria-labelledby={refreshLabelId}
+            style={{
+              '--pill-index': refreshIndex,
+              '--pill-count': REFRESH_OPTIONS.length,
+            } as CSSProperties}
+          >
+            <span className={styles.pillThumb} aria-hidden="true" />
+            {REFRESH_OPTIONS.map((mins) => (
+              <label className={styles.pill} key={mins}>
+                <input
+                  type="radio"
+                  name="refreshMinutes"
+                  value={mins}
+                  checked={prefs.refreshMinutes === mins}
+                  onChange={() => update({ refreshMinutes: mins })}
+                  aria-label={`${mins} 分钟`}
+                />
+                <span className={styles.pillText}>{mins}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <h2 id="settings-reminders" className={styles.groupTitle}>提醒</h2>
+      <section
+        className={`${styles.card} ${styles.listCard}`}
+        aria-labelledby="settings-reminders"
+      >
+        <Toggle
+          checked={prefs.lowQuotaEnabled}
+          onChange={(next) => update({ lowQuotaEnabled: next })}
+          label="低额度提醒"
+          hint="剩余比例低于阈值时通过系统通知提醒，同一额度周期只提醒一次；总览中的剩余额度环会同步标记。"
+        />
+        <div
+          className={styles.stackRow}
+          data-disabled={prefs.lowQuotaEnabled ? undefined : true}
+        >
+          <div className={styles.rangeHead}>
+            <span className={styles.settingLabel}>提醒阈值</span>
+            <span className={styles.rangeValue}>
+              低于 {prefs.lowQuotaThreshold}% 时提醒
+            </span>
+          </div>
+          <input
+            type="range"
+            className={styles.range}
+            style={{ '--range-fill': `${refreshFill}%` } as CSSProperties}
+            min={5}
+            max={50}
+            step={5}
+            value={prefs.lowQuotaThreshold}
+            disabled={!prefs.lowQuotaEnabled}
+            aria-label="低额度提醒阈值（剩余百分比）"
+            onChange={(event) => update({ lowQuotaThreshold: Number(event.target.value) })}
+          />
+          <div className={styles.rangeScale} aria-hidden="true">
+            <span>5%</span>
+            <span>50%</span>
+          </div>
+        </div>
+        <Toggle
+          checked={prefs.authExpiredEnabled}
+          onChange={(next) => update({ authExpiredEnabled: next })}
+          label="授权失效提醒"
+          hint="真实授权失效时提示重新授权；普通网络故障不会按失效处理。"
+        />
+        <Toggle
+          checked={prefs.resetNoticeEnabled}
+          onChange={(next) => update({ resetNoticeEnabled: next })}
+          label="重置或恢复提醒"
+          hint="默认关闭；仅在查询确认新周期后提示，不根据本地倒计时宣称恢复。"
+        />
+        <div className={styles.settingRowStatic}>
+          <div className={styles.settingText}>
+            <span className={styles.settingLabel}>系统通知</span>
+            <span className={styles.settingHint}>
+              提醒通过系统通知发送，桌面端没有应用内授权弹窗。若未显示，请在“系统设置 →
+              通知”中允许 Token Refill（开发模式下来源可能显示为 Terminal）。
+            </span>
+            {testState === 'sent' ? (
+              <span className={styles.settingHint} role="status">
+                已请求发送；未出现请检查系统通知设置。
+              </span>
+            ) : null}
+            {testState === 'error' ? (
+              <span className={styles.settingHint} role="status" data-danger="true">
+                发送失败，请稍后重试。
+              </span>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className={styles.testButton}
+            onClick={testNotification}
+            disabled={!desktop || testState === 'sending'}
+            title={desktop ? '发送一条测试通知' : '浏览器预览无法调用 Rust'}
+          >
+            {testState === 'sending' ? '发送中…' : '发送测试通知'}
+          </button>
+        </div>
+      </section>
+      <p className={`${styles.settingHint} ${styles.groupNote}`}>
+        三类提醒均已接入系统通知。
+      </p>
+
+      <h2 id="settings-proxy" className={styles.groupTitle}>网络代理</h2>
+      <section className={`${styles.card} ${styles.listCard}`} aria-labelledby="settings-proxy">
+        <div className={styles.settingRowStatic}>
+          <div className={styles.settingText}>
+            <span id={proxyLabelId} className={styles.settingLabel}>代理方式</span>
+            <span className={styles.settingHint}>
+              统一作用于额度查询、版本检查与外置 CLI。跟随系统会读取系统代理设置；
+              指定代理仅支持 HTTP/HTTPS，不支持 PAC。
+            </span>
+          </div>
+          <div
+            className={styles.pills}
+            role="radiogroup"
+            aria-labelledby={proxyLabelId}
+            style={{
+              '--pill-index': proxyIndex,
+              '--pill-count': PROXY_OPTIONS.length,
+            } as CSSProperties}
+          >
+            <span className={styles.pillThumb} aria-hidden="true" />
+            {PROXY_OPTIONS.map((option) => (
+              <label className={styles.pill} key={option.value}>
+                <input
+                  type="radio"
+                  name="proxyMode"
+                  value={option.value}
+                  checked={prefs.proxyMode === option.value}
+                  onChange={() => update({ proxyMode: option.value })}
+                  aria-label={option.label}
+                />
+                <span className={styles.pillText}>{option.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+        {prefs.proxyMode === 'manual' ? (
+          <div className={styles.stackRow}>
+            <span className={styles.settingLabel}>代理地址</span>
+            <input
+              className={styles.textInput}
+              value={prefs.proxyUrl ?? ''}
+              onChange={(event) => update({ proxyUrl: event.target.value })}
+              placeholder="http://127.0.0.1:7890"
+              spellCheck={false}
+              autoComplete="off"
+              aria-label="代理地址"
+            />
+            <span className={styles.settingHint}>
+              只支持 http:// 或 https://，不能包含用户名、密码或路径。
+            </span>
+          </div>
+        ) : null}
+      </section>
+
       <h2 id="settings-version" className={styles.groupTitle}>版本</h2>
       <section className={`${styles.card} ${styles.listCard}`} aria-labelledby="settings-version">
         <div className={styles.settingRowStatic}>
@@ -503,6 +504,15 @@ export default function SettingsPanel() {
       <p className={`${styles.settingHint} ${styles.groupNote}`}>
         检查只读取版本号与发布页地址，不下载文件、不修改本地数据。
       </p>
+
+      {saveError
+        ? createPortal(
+            <p className={styles.toast} role="alert">
+              {saveError}
+            </p>,
+            document.body,
+          )
+        : null}
     </section>
   );
 }

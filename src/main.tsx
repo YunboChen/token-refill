@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react';
 import App from './App';
 import { AppStateProvider } from './lib/store';
+import { RelayProvider } from './lib/relay';
 import { loadTheme, saveTheme } from './lib/prefs';
 import { applyTheme } from './lib/theme';
 import './styles.css';
@@ -21,7 +22,9 @@ createRoot(document.getElementById('root')!).render(
         transition={{ type: 'spring', stiffness: 380, damping: 30 }}
       >
         <AppStateProvider>
-          <App />
+          <RelayProvider>
+            <App />
+          </RelayProvider>
         </AppStateProvider>
       </MotionConfig>
     </LazyMotion>

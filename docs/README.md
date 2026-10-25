@@ -8,6 +8,7 @@
 | --- | --- |
 | [需求文档](./requirements.md) | 明确用户、场景、范围、业务规则及验收标准 |
 | [软件设计文档](./software-design.md) | 描述系统分层、模块职责、数据与交互设计 |
+| [界面设计规范](./design.md) | 视觉 token、应用骨架、组件目录、页面模板与快速改造配方 |
 | [开发计划文档](./development-plan.md) | 跟踪阶段、任务、依赖、验证方式与交付条件 |
 | [macOS 发布参考](./macos-release-reference.md) | devup 双架构打包、ad-hoc 签名及公证预留的核实结果 |
 | [Windows 兼容设计](./windows-support.md) | CLI 查找、子进程、数据目录、权限、标题栏与打包的 Windows 适配及验证记录 |

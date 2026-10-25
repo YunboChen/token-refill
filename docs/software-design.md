@@ -15,9 +15,9 @@
 
 | 层次 | 现状 | 位置 |
 | --- | --- | --- |
-| 前端界面 | 总览、账户、设置三页；读取统一状态并订阅变更事件 | `src/panels/` |
-| 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences`、账户授权/改名/移除命令与 `app-state-changed`、`account-login-changed` 事件 | `src/lib/desktop.ts`、`src/lib/store.tsx` |
-| 本地后端 | Rust 状态存储、后台刷新调度、Codex/百炼/OpenCode Go/Command Code/Antigravity 适配器、中转网关密钥额度适配器与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/bailian.rs`、`src-tauri/src/opencode.rs`、`src-tauri/src/commandcode.rs`、`src-tauri/src/antigravity.rs`、`src-tauri/src/quota/`、`src-tauri/src/discovery.rs` |
+| 前端界面 | 总览（订阅账户额度 / 中转站账户额度）、账户、中转站账户管理、设置四页；读取统一状态并订阅变更事件 | `src/panels/` |
+| 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences`、账户授权/改名/移除命令、中转站查询/刷新/移除/访问令牌命令与 `app-state-changed`、`account-login-changed` 事件；中转站账户由 `RelayProvider` 在总览与管理页之间共享 | `src/lib/desktop.ts`、`src/lib/store.tsx`、`src/lib/relay.tsx` |
+| 本地后端 | Rust 状态存储、后台刷新调度、Codex/百炼/OpenCode Go/Command Code/Antigravity 适配器、中转网关密钥额度适配器、中转站凭证存储与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/bailian.rs`、`src-tauri/src/opencode.rs`、`src-tauri/src/commandcode.rs`、`src-tauri/src/antigravity.rs`、`src-tauri/src/quota/`、`src-tauri/src/relay.rs`、`src-tauri/src/discovery.rs` |
 | 桌面配置 | 窗口、构建、安全策略及打包配置 | `src-tauri/tauri.conf.json` |
 | 权限声明 | 窗口权限与事件监听权限 | `src-tauri/capabilities/` |
 
@@ -33,7 +33,7 @@ OpenCode Go 与 Command Code 属于 API Key 账户：添加时先用一次真实
 
 Antigravity 是本机账户：应用只调用 `agy -p /usage --output-format json` 读取官方打印结果，不读取 CLI 的钥匙串、令牌文件或浏览器会话。查询前校验 `agy --version` ≥ 1.1.11，并设置 `AGY_CLI_DISABLE_AUTO_UPDATE=true`；查询带超时并能主动结束未登录时等待交互的进程。返回按模型分组展示每周 / 5 小时剩余比例与重置时间。
 
-网络代理由设置页统一配置（跟随系统 / 不走代理 / 指定代理），状态层在启动与偏好变更后写入全局代理配置。ureq 请求按目标 URL 选择代理并跳过回环地址与 `NO_PROXY`；子进程（`agy`、Codex app-server）在构造 `Command` 时写入或移除代理环境变量。跟随系统时优先使用进程已有的 `HTTP(S)_PROXY` / `ALL_PROXY`，其次读取 Windows Internet Settings 或 macOS `scutil --proxy`；PAC/自动配置脚本不解析。指定代理只接受不含凭据的 HTTP/HTTPS URL。
+网络代理由设置页统一配置（跟随系统 / 不走代理 / 指定代理），状态层在启动与偏好变更后写入全局代理配置。ureq 请求按目标 URL 选择代理并跳过回环地址与 `NO_PROXY`；跟随系统时 `ALL_PROXY` 可能是 `socks5://`，ureq 已开启 `socks-proxy` 特性以支持该形式（未开启时对手动配置的 SOCKS 代理会直接 panic）。子进程（`agy`、Codex app-server）在构造 `Command` 时写入或移除代理环境变量，并把 CLI 自身目录与 nvm / fnm / Volta / Bun / pnpm、Homebrew 等常见安装目录补到 `PATH` 前面：从 Finder 启动的 GUI 进程只有系统目录，npm 安装的 CLI 是 `#!/usr/bin/env node` 脚本，解释器找不到时会以退出码 127 结束。补齐只作用于子进程，不改动应用进程的环境。跟随系统时优先使用进程已有的 `HTTP(S)_PROXY` / `ALL_PROXY`，其次读取 Windows Internet Settings 或 macOS `scutil --proxy`；PAC/自动配置脚本不解析。指定代理只接受不含凭据的 HTTP/HTTPS URL。
 
 ## 3. 候选职责划分
 
@@ -112,10 +112,27 @@ Codex 与百炼两类套餐均已完成真实读取验证，百炼的协议与�
 
 ### 4.4 中转网关密钥额度适配器
 
-除首批平台外，Rust 侧已按同一原则实现两类只需 API Key 即可查询密钥实时额度的适配器，代码在 `src-tauri/src/quota/`（`newapi.rs`、`sub2api.rs`），并在“中转站”页提供自动识别与手动输入两种入口。密钥只在本次运行期间保存在 Rust 内存，识别失败时只返回来源与原因，不显示密钥：
+Rust 侧实现两类中转平台适配器，代码在 `src-tauri/src/quota/`（`newapi.rs`、`sub2api.rs`），并在“中转站账户管理”页提供自动识别与手动输入两种入口，额度在总览的「中转站账户额度」标签页展示。识别时依次请求 New API 与 Sub2API 的额度接口，成功即确定平台类型；都失败时只返回来源与原因，不回显密钥或响应正文。
 
-- **New API**：`GET /api/usage/token/`（Bearer）返回 `total_granted` / `total_used` / `total_available` / `unlimited_quota` / `expires_at`；额度单位为平台内部 quota，用公开接口 `GET /api/status` 的 `data.quota_per_unit` 换算美元，取不到时按上游默认 `500000` 兜底。密钥允许时额外返回 `user_quota`，作为账户额度展示。
-- **Sub2API**：`GET /v1/usage`（Bearer）按 `mode` 返回三种口径：`quota_limited` 为密钥总额度与 5h/1d/7d 限速窗口；`unrestricted` + `subscription` 为日/周/月用量与上限（`remaining = -1` 表示无限额度，日/月重置边界平台不提供，不推算）；`unrestricted` + `balance` 为钱包余额。
+- **New API（密钥口径）**：`GET /api/usage/token/`（Bearer）返回 `total_granted` / `total_used` / `total_available` / `unlimited_quota` / `expires_at`；额度单位为平台内部 quota，用公开接口 `GET /api/status` 的 `data.quota_per_unit` 换算，取不到时按上游默认 `500000` 兜底。密钥开启 `allow_user_quota_query`（面板文案「允许查询用户额度」，New API ≥ v1.0.0-rc.45）时，响应还会带上 `user_quota.total_available` / `total_used`。部分站点（例如部分二开站点）会直接返回 `quota_scope: "account"`，此时 `total_*` 是账户口径；若同时带 `display`（已按币种换算的 `remaining` / `used` / `total` / `unit`），优先使用 `display`。这种响应即使 `unlimited_quota=true` 也视为拿到了账户余额，不再按“无限额密钥”丢弃。币种从 `display.unit` 或 `/api/status.quota_display_type` 读取，界面按 USD / CNY 显示对应符号。两者都没有时只显示密钥额度，并给出对应的版本提示。
+- **New API（访问令牌口径）**：用户可选填访问令牌。新版为 scoped PAT（New API ≥ v1.0.0-rc.41，令牌以 `nap_` 开头）；旧版/部分站点仍使用个人设置里的单个系统访问令牌。旧版单令牌必须同时填写用户 ID，应用按 `New-Api-User: <用户 ID>` 发送；新版会忽略该头。`GET /api/user/self` 读取 `quota`（钱包剩余）与 `used_quota`（累计已用），需要 `profile:read`；`GET /api/subscription/self` 读取生效中的订阅，需要 `wallet:read`，接口不存在或失败时只返回空订阅窗口，不影响账户余额。密钥已经返回账户额度时不再请求访问令牌；否则优先使用令牌，失败时把原因记录在 `accountError`。
+- **Sub2API（仅密钥）**：`GET /v1/usage`（Bearer）按 `mode` 返回三种口径。`quota_limited`（密钥设了总额度或任一 5h/1d/7d 限速）只返回密钥总额度与限速窗口；`unrestricted` + 订阅分组返回账户订阅的日/周/月用量与上限（`remaining = -1` 表示无周期上限，日/月重置边界平台不提供，不推算）；`unrestricted` + 普通分组返回账户钱包余额（`balance`）。因此 Sub2API 只有在密钥无总额度、无限速且属于普通分组时才通过密钥拿到账户余额，其余情况展示对应额度，不引入账号密码登录。
+
+凭证与存储：
+
+- 手动填写的服务地址、API Key、New API 访问令牌与用户 ID 保存在 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 的按用户 ACL），先写临时文件再原子替换。凭证只在 Rust 侧读取，不进入前端状态、事件、日志或错误消息。
+- 从 Claude Code / Codex 配置扫描到的密钥只在本次运行的内存中使用，不复制到应用目录；这些条目每次启动重新扫描。界面用「凭证已保存 / 凭证仅本次运行」区分两类条目。
+- 打开“中转站账户管理”页，或切到总览的「中转站账户额度」标签页时，会先加载已保存条目及上次成功快照，再扫描本地配置；应用启动但未进入这两个入口时不会额外扫描或查询中转站。随后把距上次成功查询已超过刷新间隔（沿用设置中的分钟数）的账户批量刷新一次；自动刷新失败按同一间隔退避，切换页面不会重复请求。两处共用同一份前端状态，添加、手动刷新、补充令牌或移除后立即同步。手动刷新失败保留旧快照并记录脱敏错误。移除条目会删除对应的 `relay-profiles/<relayId>/` 目录。
+- 访问令牌只对 New API 生效；Sub2API 账户不接受或保存访问令牌。
+
+New API 二开兼容策略（响应字段不是上游协议的一部分，按“可缺省、可别名、未知即忽略”解析）：
+
+- 账户口径按优先级判断：`user_quota` → `quota_scope` 为 `account` / `user` / `shared` → 无限额密钥且存在 `display` 金额时推断为账户口径。`quota_scope` 为 `token` / `key` 时明确按密钥口径处理。
+- `display` 兼容 `remaining` / `remain` / `available`、`total` / `granted` / `quota`、`used` / `used_quota` / `consumed`、`unit` / `currency` / `symbol`；数值可以是 JSON 数字或数字字符串。
+- `/api/user/self` 的余额读取 `quota` 或 `balance`，拆分余额时用 `paid_balance + bonus_balance`；已用读取 `used_quota` 或 `used`。
+- `unlimited_quota` 接受布尔、0/1 和 `"true"` / `"false"`；时间字段接受数字或字符串。
+- 币种优先取 `display.unit`，其次 `/api/status.quota_display_type`；`¥` / `￥` / `RMB` 归一为 `CNY`，`US$` 归一为 `USD`，未知币种按原样显示。
+- 未知字段一律忽略，不会导致整次查询失败；只有无法识别信封（缺少 `data`）或密钥请求本身失败时才返回错误。若二开站点改用完全不同的字段名或接口，需要提供真实响应样例后再适配，不做猜测。
 
 本地配置读取范围（`src-tauri/src/discovery.rs`）：
 
@@ -123,7 +140,7 @@ Codex 与百炼两类套餐均已完成真实读取验证，百炼的协议与�
 - Codex：`$CODEX_HOME/config.toml` 或 `~/.codex/config.toml` 的 `[model_providers.<id>]`，只取 `base_url` 与 `env_key`/`experimental_bearer_token`；激活的 `model_provider` 排在最前。不读取 `auth.json` 等登录态凭证，也不执行配置中的命令。
 - 客户端 Base URL 末尾的 `/v1` 会被去掉后再拼接额度接口，避免 `/v1/v1/usage`。
 
-识别时依次请求 New API 与 Sub2API 的额度接口，成功即确定平台类型；都失败时在页面列出未识别的配置及原因，用户仍可手动填写地址与密钥。两类适配器都只把规范化后的金额、窗口与到期时间交给调用方，密钥仅存在于 Rust 内存，不进入前端状态、日志或错误消息；错误信息不回显响应正文。服务地址仅允许 HTTPS，本机回环地址例外。真实服务端验证仍待用户提供自部署地址后进行。
+识别失败时在页面列出未识别的配置及原因，用户仍可手动填写地址与密钥。两类适配器都只把规范化后的金额、窗口与到期时间交给调用方；手动凭证持久化在应用数据目录，自动扫描到的密钥仅存在于 Rust 内存，均不进入前端状态、日志或错误消息；错误信息不回显响应正文。服务地址仅允许 HTTPS，本机回环地址例外。
 
 ## 5. 数据设计待定项
 
@@ -234,8 +251,9 @@ Codex 与百炼两类套餐均已完成真实读取验证，百炼的协议与�
 | 页面或区域 | 已确认内容方向 | 主要操作 |
 | --- | --- | --- |
 | 菜单栏弹窗 | 可区分账户的紧凑套餐列表、关键周期额度、重置信息、更新时间及异常提示 | 单账户刷新、全部刷新、打开管理窗口、退出 |
-| 管理窗口：总览 | 按账户与套餐展示完整额度周期，不合并不同计量口径的数据 | 刷新、进入对应账户 |
+| 管理窗口：总览 | 顶部在「订阅账户额度」与「中转站账户额度」间切换；分别按账户与套餐展示完整额度周期，不合并不同计量口径的数据 | 刷新；中转站额度只读展示，管理入口在中转站页 |
 | 管理窗口：账户 | 已接入账户、授权状态、关联套餐 | 添加、改显示名称、重新授权、移除 |
+| 管理窗口：中转站账户管理 | 中转站服务地址、来源、平台、凭证保存状态与访问令牌配置；额度详情移至总览；账户以网格卡并排展示，添加与凭证操作在弹窗内完成 | 添加、扫描本地配置、刷新、补充访问令牌、移除 |
 | 管理窗口：设置 | 刷新间隔、提醒及阈值、自启开关 | 保存设置、解释权限与不可用状态 |
 
 建议账户移除仅影响本应用账户记录及其自有凭证、缓存和提醒状态，不删除源工具配置或默认执行平台全局注销。实际移除范围须在详细设计中列清并获确认。
@@ -319,7 +337,7 @@ Codex 与百炼两类套餐均已完成真实读取验证，百炼的协议与�
 
 ## 10. IPC 与平台适配契约草案
 
-下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`open_external_url`、`check_for_update`。其余仍为计划名称。
+下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_discover`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`。其余仍为计划名称。
 
 ### 10.1 前端命令边界
 

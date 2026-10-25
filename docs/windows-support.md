@@ -51,6 +51,7 @@ Windows 目标目录：
 
 - `AppServer` 与 `LoginSession` 都以 `Command::new(<发现的路径>)` 启动 `app-server --stdio`，只通过 stdio 交换行分隔 JSON-RPC。
 - `.cmd` / `.bat` 由 Rust 标准库（≥ 1.77.2）自动经 `cmd.exe` 启动，并对参数做批处理转义，因此不需要在业务代码里手写 `cmd /C`。
+- 启动时把 CLI 自身目录与 npm / pnpm / Volta / Bun 等常见全局目录补到子进程 `PATH` 前面：包装脚本要能在同一环境里找到 node，否则会以退出码 127 结束。只改子进程环境，不改应用进程。
 - 传参固定为 `app-server --stdio`，不接受任何用户输入拼进命令行；托管账户目录通过 `CODEX_HOME` 环境变量传递。
 - 进程读取在后台线程进行，30 秒读超时、10 秒初始化超时与取消标志在两端一致。
 

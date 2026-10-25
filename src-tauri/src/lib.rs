@@ -1,6 +1,7 @@
 mod antigravity;
 mod api_key;
 mod bailian;
+mod cli;
 mod codex;
 mod commandcode;
 mod discovery;
@@ -260,17 +261,43 @@ async fn check_for_update() -> Result<update::UpdateStatus, String> {
         .map_err(|err| format!("检查更新失败：{err}"))?
 }
 
-/// 自动识别上游（New API / Sub2API）并查询密钥额度。密钥只留在 Rust 内存。
+/// 自动识别上游（New API / Sub2API）并查询密钥额度。
+/// 手动输入的凭证由 Rust 保存到 `relay-profiles/`，不经过前端。
 #[tauri::command]
 async fn relay_query(
     store: tauri::State<'_, Arc<relay::RelayStore>>,
     base_url: String,
     api_key: String,
+    account_token: Option<String>,
+    new_api_user_id: Option<String>,
 ) -> Result<relay::RelayAccount, String> {
     let store = Arc::clone(&store);
-    tauri::async_runtime::spawn_blocking(move || store.query(&base_url, &api_key))
-        .await
-        .map_err(|err| format!("查询中转站额度失败：{err}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        store.query(
+            &base_url,
+            &api_key,
+            account_token.as_deref(),
+            new_api_user_id.as_deref(),
+        )
+    })
+    .await
+    .map_err(|err| format!("查询中转站额度失败：{err}"))?
+}
+
+/// 为已有的 New API 账户补充个人访问令牌，并立即刷新账户额度。
+#[tauri::command]
+async fn relay_set_account_token(
+    store: tauri::State<'_, Arc<relay::RelayStore>>,
+    id: String,
+    account_token: String,
+    new_api_user_id: Option<String>,
+) -> Result<relay::RelayAccount, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || {
+        store.set_account_token(&id, &account_token, new_api_user_id.as_deref())
+    })
+    .await
+    .map_err(|err| format!("保存访问令牌失败：{err}"))?
 }
 
 /// 扫描 Claude Code / Codex 的本地配置，自动识别并登记可查询的密钥。
@@ -327,7 +354,9 @@ pub fn run() {
                 data_dir.join("state.json"),
             ));
             app.manage(Arc::clone(&store));
-            app.manage(Arc::new(relay::RelayStore::default()));
+            app.manage(Arc::new(relay::RelayStore::load(
+                data_dir.join("relay-profiles"),
+            )));
 
             // 自启以系统登录项为准：启动时回写实际状态，避免本地开关与系统不一致。
             match app.autolaunch().is_enabled() {
@@ -357,6 +386,7 @@ pub fn run() {
             set_auto_launch,
             check_for_update,
             relay_query,
+            relay_set_account_token,
             relay_discover,
             relay_refresh,
             relay_list,

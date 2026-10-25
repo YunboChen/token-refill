@@ -17,6 +17,7 @@
 - [文档索引](./docs/README.md)
 - [需求文档](./docs/requirements.md)
 - [软件设计文档](./docs/software-design.md)
+- [界面设计规范](./docs/design.md)
 - [开发计划文档](./docs/development-plan.md)
 - [Windows 兼容设计](./docs/windows-support.md)
 
@@ -37,7 +38,7 @@ pnpm install --frozen-lockfile
 pnpm tauri dev
 ```
 
-桌面应用启动后进入总览页：先展示 Rust 侧缓存（首次为空时显示查询中），随后按设置自动刷新。Codex 需要本机已安装官方 CLI；本机账户沿用 CLI 已有登录态，未安装或未登录时界面会显示对应错误，其他界面仍可用。
+桌面应用启动后进入总览页：先展示 Rust 侧缓存（首次为空时显示查询中），随后按设置自动刷新。总览顶部可在「订阅账户额度」与「中转站账户额度」之间切换；后者在切换时先展示上次成功快照，再扫描本地配置，并把超过刷新间隔的账户自动刷新一次；两处与「中转站账户管理」页共享同一份结果。Codex 需要本机已安装官方 CLI；本机账户沿用 CLI 已有登录态，未安装或未登录时界面会显示对应错误，其他界面仍可用。
 
 在“账户”页可以添加独立账户：
 
@@ -46,8 +47,11 @@ pnpm tauri dev
 - **OpenCode Go**：启动时先调用本机 `opencode auth export`，若存在活动的 `opencode-go`（或 `opencode`）API Key，会自动接入“本机 OpenCode”账户并在每次刷新时重新读取 CLI 凭据；未检测到时，可在添加账户弹窗粘贴 Go API Key。手动添加的密钥写入 `api-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600）。展示 5 小时、每周与订阅月三个窗口；订阅月按购买日滚动，不推算天数。403 表示该 Key 未开通 Go 订阅。
 - **Command Code**：使用 Provider API Key（通常以 `user_` 开头），访问 CLI 同款 `/alpha/billing/*` 与 `/alpha/usage/summary` 接口。展示 5 小时、每周滚动窗口与订阅月额度；月度窗口以“已用 + 剩余”推导上限，订阅接口不可用时仍保留滚动窗口并标注能力缺口。
 - **Antigravity**：启动时若本机 `agy`（≥ 1.1.11）已登录并能直接读到额度，会自动接入“本机 Antigravity”账户；未检测到时不创建账户。也可在“添加账户”中手动接入。应用调用官方打印模式 `agy -p /usage --output-format json`，按模型分组展示每周 / 5 小时剩余比例；不读取 agy 的钥匙串、令牌文件或浏览器会话，也不修改其登录状态。找不到 CLI 时可用 `AGY_BIN` 指定路径；低于 1.1.11 时应用会拒绝查询，避免旧版把 `/usage` 当作提示词消耗额度。
+- **中转站（New API / Sub2API）**：在“中转站”页点击「添加中转站账户」，填写服务地址与 API Key，应用会依次尝试两种额度接口自动识别平台；添加后的额度显示在总览的「中转站账户额度」标签页，管理页只负责添加、扫描、补充访问令牌与移除。New API 优先读取密钥的 `user_quota`（需要 v1.0.0-rc.45 及以上，并在密钥上开启「允许查询用户额度」）；部分站点会直接返回 `quota_scope: "account"` 与已换算的 `display` 块（含 CNY 等币种），应用会直接展示账户余额，不需要额外令牌；也可以填写个人访问令牌（v1.0.0-rc.41 及以上，`profile:read`，读取订阅另需 `wallet:read`），在密钥口径之外读取账户钱包余额与订阅窗口；旧版单令牌站点（例如部分二开站点）还需要同时填写面板个人设置里的用户 ID，作为 `New-Api-User` 请求头发送。对二开站点的响应做了容错：账户口径可来自 `user_quota`、`quota_scope=account` 或 `display`，数字/字符串均可解析，未知字段忽略。Sub2API 使用密钥自身额度；当密钥没有总额度、没有 5h/1d/7d 限速且属于普通分组时，`/v1/usage` 返回账户钱包余额，订阅分组返回账户订阅额度。手动填写的地址、密钥与访问令牌保存在 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600）；从 Claude Code / Codex 配置扫描到的密钥只在本次运行使用，不复制到应用目录。
 
-网络代理在“设置 → 网络代理”统一配置，三种模式：**跟随系统**（Windows 读取 Internet Settings，macOS 读取 `scutil --proxy`；进程环境变量优先）、**不走代理**（直连）、**指定代理**（手动填写 `http://host:port`）。该设置作用于应用的全部 HTTPS 额度查询、版本检查，以及 `agy`、Codex app-server 等外置 CLI；指定代理不支持 PAC，且不能包含用户名或密码。
+网络代理在“设置 → 网络代理”统一配置，三种模式：**跟随系统**（Windows 读取 Internet Settings，macOS 读取 `scutil --proxy`；进程环境变量优先，`ALL_PROXY` 为 `socks5://` 时也可用）、**不走代理**（直连）、**指定代理**（手动填写 `http://host:port`）。该设置作用于应用的全部 HTTPS 额度查询、版本检查，以及 `agy`、Codex app-server 等外置 CLI；指定代理不支持 PAC，且不能包含用户名或密码。
+
+外置 CLI 启动时会拿到补齐的 `PATH`：CLI 自身所在目录优先，其次是 nvm / fnm / Volta / Bun / pnpm 与 Homebrew 等常见目录，最后才是进程原有的 `PATH`。从 Finder 或资源管理器启动的 GUI 进程只有系统目录，npm 安装的 `codex`、`opencode` 是 `#!/usr/bin/env node` 脚本，缺了这一层补充会以退出码 127 结束。
 
 百炼额度通过百炼控制台网关读取，依赖控制台会话，不能使用推理 API Key 替代。会话过期后账户页会提示重新授权。
 
@@ -62,7 +66,7 @@ pnpm dev
 ### Windows 说明
 
 - Codex CLI 查找顺序：`CODEX_BIN` → `PATH` → nvm-windows / fnm 的版本目录 → npm、pnpm、Volta、Bun、Scoop、`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` 等默认安装位置。候选文件为 `codex.exe`、`codex.cmd`、`codex.bat`、`codex.com`，优先原生可执行文件；找不到时设置 `CODEX_BIN` 指向完整路径。
-- 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立 Codex 账户的 `CODEX_HOME`，`bailian-profiles\<accountId>\` 与 `api-profiles\<accountId>\` 分别保存百炼控制台令牌和 OpenCode / Command Code 的 API Key。
+- 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立 Codex 账户的 `CODEX_HOME`，`bailian-profiles\<accountId>\` 与 `api-profiles\<accountId>\` 分别保存百炼控制台令牌和 OpenCode / Command Code 的 API Key，`relay-profiles\<relayId>\` 保存手动填写的中转站凭证。
 - Antigravity 需要本机可运行的 `agy`，查找顺序为 `AGY_BIN` → `PATH` → `%LOCALAPPDATA%\agy\bin` 等常见目录；额度通过 `agy -p /usage --output-format json` 读取。
 - 窗口使用系统标题栏，前端按 `get_app_info().platform` 收窄侧栏顶部留白。
 - 授权链接通过 `ShellExecuteW` 交给系统浏览器，不经过 `cmd.exe`，URL 中的 `&` 不会被当作命令分隔符。
@@ -122,8 +126,10 @@ src/
   styles.css          系统字体、主题 token、全局样式
   lib/desktop.ts      带类型的 Rust 状态与命令入口
   lib/store.tsx       统一状态订阅、刷新与偏好保存
+  lib/relay.tsx       中转站账户的共享状态与操作
+  lib/relayFormat.ts  中转站文案、金额与窗口格式化
   lib/prefs.ts        主题与默认偏好
-  panels/             总览、账户、设置
+  panels/             总览、账户、中转站账户管理、设置
   assets/logo.png     页头品牌标志
   main.tsx            React 与 Motion 入口
 src-tauri/

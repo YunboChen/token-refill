@@ -10,9 +10,9 @@
 - 应用标识 `dev.tokenrefill.desktop`；数据目录由 Tauri `app_data_dir()` 决定：
   - macOS `~/Library/Application Support/dev.tokenrefill.desktop/`
   - Windows `%APPDATA%\dev.tokenrefill.desktop\`
-  - 目录内：`state.json`（设置、账户、额度快照、提醒去重）与 `codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）。
-- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、系统提醒、开机自启、版本检查。
-- 尚未实现：百炼 Token Plan / Coding Plan、菜单栏常驻、系统级凭证存储、应用内自动下载安装更新。
+  - 目录内：`state.json`（设置、账户、额度快照、提醒去重）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）与 `relay-profiles/<relayId>/`（手动填写的中转站凭证）。
+- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 / OpenCode Go / Command Code / Antigravity 额度查询、中转站（New API / Sub2API）密钥与账户额度查询、系统提醒、开机自启、版本检查。
+- 尚未实现：菜单栏常驻、系统级凭证存储、应用内自动下载安装更新。
 
 ## 2. 数据与凭证边界
 
@@ -20,6 +20,7 @@
 - Codex 只通过官方 CLI 的 `app-server --stdio` JSON-RPC 交互；不解析、不复制、不迁移授权文件，令牌由 Codex CLI 维护在隔离目录。
 - 独立账户必须使用自己的 `CODEX_HOME`；本机账户只沿用本机登录态，不得修改或覆盖它。
 - 移除账户只清理本应用目录，不触发源工具注销，不影响其他账户。
+- 中转站手动填写的 API Key 与 New API 访问令牌写入 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 按用户 ACL），先写临时文件再原子替换；只保存用户主动填写的凭证。从 Claude Code / Codex 配置扫描到的密钥只在本次运行的内存中使用，不得复制到应用目录。New API 访问令牌只用于 `/api/user/self` 与 `/api/subscription/self`，不进入前端状态、日志或错误消息；旧版单令牌需要的 `New-Api-User` 用户 ID 与令牌一并保存，只作为请求头发送，不写入日志。
 - 状态文件是脱敏数据，不是凭证；不要把它改成日志、调试导出或可分享格式。
 
 ## 3. 架构与安全约束

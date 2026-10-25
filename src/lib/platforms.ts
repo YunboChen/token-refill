@@ -96,8 +96,10 @@ export interface AccountGroup {
   accounts: AccountState[];
 }
 
-/** 按平台归组，保持已知平台的固定顺序，避免账户增删导致分组跳动。 */
-export function groupAccountsByPlatform(accounts: AccountState[]): AccountGroup[] {
+function buildGroups(
+  accounts: AccountState[],
+  includeEmptyAvailable: boolean,
+): AccountGroup[] {
   const grouped = new Map<string, AccountState[]>();
   for (const account of accounts) {
     const list = grouped.get(account.platform);
@@ -105,7 +107,11 @@ export function groupAccountsByPlatform(accounts: AccountState[]): AccountGroup[
     else grouped.set(account.platform, [account]);
   }
 
-  const known = PLATFORM_ORDER.filter((platform) => grouped.has(platform));
+  const known = PLATFORM_ORDER.filter(
+    (platform) =>
+      grouped.has(platform)
+      || (includeEmptyAvailable && PLATFORMS[platform]?.available === true),
+  );
   const unknown = [...grouped.keys()]
     .filter((platform) => !PLATFORM_ORDER.includes(platform))
     .sort();
@@ -115,4 +121,17 @@ export function groupAccountsByPlatform(accounts: AccountState[]): AccountGroup[
     meta: platformMeta(platform),
     accounts: grouped.get(platform) ?? [],
   }));
+}
+
+/** 按平台归组，保持已知平台的固定顺序，避免账户增删导致分组跳动。 */
+export function groupAccountsByPlatform(accounts: AccountState[]): AccountGroup[] {
+  return buildGroups(accounts, false);
+}
+
+/**
+ * 账户页的分组：已开放接入的平台即使还没有账户也保留空分组，
+ * 这样每个平台都有自己的添加入口，不必借已接入的平台进入再切换类型。
+ */
+export function accountPlatformGroups(accounts: AccountState[]): AccountGroup[] {
+  return buildGroups(accounts, true);
 }

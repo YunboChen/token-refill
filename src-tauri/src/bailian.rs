@@ -667,6 +667,10 @@ struct HttpRequest {
 }
 
 fn handle_callback(stream: &mut TcpStream, expected_state: &str) -> Callback {
+    // 监听端是非阻塞的，而 accept() 出来的连接在 Windows 上会沿用同一个标志；
+    // 不显式切回阻塞模式时，请求还没到齐的 read 会立刻返回 WouldBlock，
+    // 被当成坏请求关掉，浏览器授权回调就永远等不到令牌。
+    stream.set_nonblocking(false).ok();
     stream.set_read_timeout(Some(CALLBACK_TIMEOUT_READ)).ok();
     let Some(request) = read_request(stream) else {
         respond(stream, 400, "bad request");

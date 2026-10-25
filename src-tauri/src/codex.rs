@@ -418,6 +418,16 @@ struct AppServer {
     incoming: mpsc::Receiver<serde_json::Value>,
 }
 
+/// 退出码 127 说明启动脚本找不到解释器：npm 安装的 `codex` 是
+/// `#!/usr/bin/env node`，node 不在 PATH 里时 `env` 直接以 127 结束。
+fn exit_hint(code: i32) -> &'static str {
+    if code == 127 {
+        "通常是找不到 node，请确认 Node.js 已安装并与 Codex CLI 在同一环境。"
+    } else {
+        "请确认 CLI 可用。"
+    }
+}
+
 impl AppServer {
     /// `codex_home` 为 Some 时使用独立的 CODEX_HOME；None 时沿用进程环境，
     /// 即本机已登录的 Codex 账户。
@@ -431,6 +441,7 @@ impl AppServer {
         if let Some(codex_home) = codex_home {
             command.env("CODEX_HOME", codex_home);
         }
+        crate::cli::apply_child_path(&mut command, binary);
         crate::proxy::apply_to_command(&mut command);
         let mut child = command.spawn().map_err(io_error)?;
 
@@ -533,7 +544,10 @@ impl AppServer {
                     let code = status.and_then(|s| s.code()).unwrap_or(-1);
                     return Err(UsageError::new(
                         "server-exit",
-                        format!("Codex app-server 意外退出（退出码 {code}），请确认 CLI 可用。"),
+                        format!(
+                            "Codex app-server 意外退出（退出码 {code}），{}",
+                            exit_hint(code)
+                        ),
                     ));
                 }
             };
@@ -742,7 +756,10 @@ impl LoginSession {
                     let code = status.and_then(|s| s.code()).unwrap_or(-1);
                     return Err(UsageError::new(
                         "server-exit",
-                        format!("Codex app-server 在授权期间退出（退出码 {code}）。"),
+                        format!(
+                            "Codex app-server 在授权期间退出（退出码 {code}），{}",
+                            exit_hint(code)
+                        ),
                     ));
                 }
             }

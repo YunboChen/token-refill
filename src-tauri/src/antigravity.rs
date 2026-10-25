@@ -209,6 +209,7 @@ fn run(binary: &Path, args: &[&str], timeout: Duration) -> Result<ProcessOutput,
         .stderr(Stdio::piped())
         // 查询额度不应触发 CLI 自更新。
         .env("AGY_CLI_DISABLE_AUTO_UPDATE", "true");
+    crate::cli::apply_child_path(&mut command, binary);
     crate::proxy::apply_to_command(&mut command);
 
     let mut child = command.spawn().map_err(|_| {

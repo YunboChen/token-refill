@@ -276,6 +276,8 @@ fn detect_os() -> Option<ResolvedProxy> {
 
 /// Windows 的 `ProxyServer` 有两种写法：`host:port` 或
 /// `http=host:port;https=host:port`。统一补成带 scheme 的地址。
+/// 只在 Windows 与测试里使用，其他平台的构建不应因此报警告。
+#[cfg(any(windows, test))]
 fn parse_proxy_server(raw: &str) -> (Option<String>, Option<String>) {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -305,6 +307,7 @@ fn parse_proxy_server(raw: &str) -> (Option<String>, Option<String>) {
     }
 }
 
+#[cfg(any(windows, test))]
 fn normalize_proxy_value(raw: &str) -> Option<String> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -319,6 +322,7 @@ fn normalize_proxy_value(raw: &str) -> Option<String> {
 
 /// 把 Windows 的 `ProxyOverride` 转成 `NO_PROXY`。
 /// `<local>` 展开为回环地址；`*.example.com` 转成 `.example.com`。
+#[cfg(any(windows, test))]
 fn parse_no_proxy(raw: &str) -> Option<String> {
     let mut entries: Vec<String> = Vec::new();
     let mut bypass_local = false;
