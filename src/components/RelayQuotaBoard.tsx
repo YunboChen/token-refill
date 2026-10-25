@@ -533,13 +533,15 @@ export default function RelayQuotaBoard({ desktop }: { desktop: boolean }) {
     scanning,
     loaded,
     error,
-    refreshingId,
+    refreshingIds,
     refresh,
+    refreshDue,
     ensureLoaded,
   } = useRelay();
   const { state } = useAppState();
   const threshold = state.preferences.lowQuotaThreshold;
   const lowQuotaEnabled = state.preferences.lowQuotaEnabled;
+  const refreshMinutes = state.preferences.refreshMinutes;
   // 默认全部展开；只记录被收起的账户，刷新列表时保留用户的折叠选择。
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
 
@@ -547,6 +549,12 @@ export default function RelayQuotaBoard({ desktop }: { desktop: boolean }) {
   useEffect(() => {
     if (desktop) ensureLoaded();
   }, [desktop, ensureLoaded]);
+
+  // 进入页面后把超过刷新间隔的账户自动刷新一次；不打开页面就不发请求。
+  useEffect(() => {
+    if (!desktop || !loaded) return;
+    void refreshDue(refreshMinutes);
+  }, [desktop, loaded, refreshMinutes, refreshDue]);
 
   const toggle = (id: string) => {
     setCollapsed((current) => {
@@ -628,7 +636,7 @@ export default function RelayQuotaBoard({ desktop }: { desktop: boolean }) {
                 key={account.id}
                 account={account}
                 desktop={desktop}
-                refreshing={refreshingId === account.id}
+                refreshing={refreshingIds.has(account.id)}
                 open={!collapsed.has(account.id)}
                 threshold={threshold}
                 lowQuotaEnabled={lowQuotaEnabled}

@@ -157,16 +157,18 @@ function RelayAccountTile({
 }
 
 export default function RelayPanel() {
-  const { desktop } = useAppState();
+  const { desktop, state } = useAppState();
+  const refreshMinutes = state.preferences.refreshMinutes;
   const {
     accounts,
     skipped,
     scanning,
     loaded,
     error,
-    refreshingId,
+    refreshingIds,
     ensureLoaded,
     rescan,
+    refreshDue,
     addAccount,
     refresh,
     remove,
@@ -193,6 +195,12 @@ export default function RelayPanel() {
   useEffect(() => {
     if (desktop) ensureLoaded();
   }, [desktop, ensureLoaded]);
+
+  // 进入页面后把超过刷新间隔的账户自动刷新一次；不打开页面就不发请求。
+  useEffect(() => {
+    if (!desktop || !loaded) return;
+    void refreshDue(refreshMinutes);
+  }, [desktop, loaded, refreshMinutes, refreshDue]);
 
   const closeDialog = () => {
     setDialog(null);
@@ -382,7 +390,7 @@ export default function RelayPanel() {
               key={account.id}
               account={account}
               desktop={desktop}
-              refreshing={refreshingId === account.id}
+              refreshing={refreshingIds.has(account.id)}
               onRefresh={() => void refresh(account.id)}
               onBeginTokenEdit={(trigger) => openTokenDialog(account, trigger)}
               onAskRemove={(trigger) => openRemoveDialog(account, trigger)}
