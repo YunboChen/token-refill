@@ -210,7 +210,6 @@
 | `.platformAside` / `.platformCount` / `.platformStatus` | 标题右侧信息 | 账户数、待接入状态、操作按钮 |
 | `.planTier` | 套餐档位小标签 | 中性胶囊，10.5px；总览眉线、账户卡、折叠摘要共用 |
 | `.planTag` | 中性标签 | 10.5px 胶囊，中转站来源/平台名/额度模式共用；平台名不再使用强调色 |
-| `.draftTag` | 描边标签 | 设置页「本机」标签 |
 
 ### 4.3 账户与额度展示
 
@@ -292,8 +291,7 @@
 | `.authStatus` + `.authDot` | 授权状态 | `data-state="ok"` 绿色，`"needs-reauth"` 红色，未知态中性 |
 | `.planRowState` | 套餐查询状态 | 状态键由 `planStateKey()` 提供（`inactive / busy / error / ok / idle`）；CSS 只为 `busy` 和 `error` 上色 |
 | `.updatedAt` | 最近刷新时间 | 卡片标题右侧，等宽数字 |
-| `.saveState` | 设置保存状态 | `data-state="error"` 转红；跟随 `.draftBanner` |
-| `.draftBanner` / `.draftIcon` / `.draftText` | 中性信息条 | 设置页顶部 |
+| `.toast` | 保存失败 toast | 固定窗口底部居中，`--danger-soft` 底色；成功时不出现 |
 | `.overviewEmpty` / `.emptyGlyph` / `.emptyTitle` | 整页空态 | 没有数据时替代列表 |
 | `.noticeStale` 与 `.accountNote` | 行内补充说明 | 放在数据区下方，字号 12px |
 
@@ -471,16 +469,17 @@ section
 
 ```
 section
-├─ draftBanner（本机保存说明 + 保存状态）
+├─ groupTitle「通用」+ card.listCard
+│  ├─ settingRowStatic（外观 + 分段单选）
+│  └─ Toggle（开机自启）
 ├─ groupTitle「刷新」+ card.listCard
 │  └─ settingRowStatic（自动刷新间隔 + 分段单选）
 ├─ groupTitle「提醒」+ card.listCard
 │  ├─ Toggle × 3
 │  ├─ stackRow（阈值滑块，低额度关闭时 data-disabled）
 │  └─ settingRowStatic（发送测试通知）
-├─ groupTitle「系统」+ card.listCard
-│  ├─ settingRowStatic（外观 + 分段单选）
-│  └─ Toggle（开机自启）
+├─ groupTitle「网络代理」+ card.listCard
+│  └─ settingRowStatic（代理方式 + 分段单选；指定代理时追加地址输入）
 ├─ groupTitle「版本」+ card.listCard
 │  └─ settingRowStatic（当前版本 + 更新状态 + 按钮）
 └─ 若干 groupNote（分组脚注）
@@ -490,7 +489,7 @@ section
 
 - 设置页持有本地草稿 `prefs`，用 `dirty` ref 标记未保存改动；连续改动 250ms 防抖后写入 Rust，离开页面前补发一次。
 - 后端状态变化时，只有在没有本地未保存改动时才覆盖草稿。
-- 保存状态显示在 `.draftBanner` 右侧（保存中 / 已保存 / 保存失败）。
+- 保存成功不打扰用户；只有保存失败时在窗口底部弹一次 `.toast`（4 秒后自动消失，重复失败会重新计时）。
 - 主题切换立即应用并单独持久化，不等待防抖保存。
 - 开机自启不是普通偏好：先调用系统，成功后再更新界面状态，失败给出明确说明。
 
@@ -660,7 +659,7 @@ export default function FooPanel() {
 | 总览额度板 | `overviewTabs` `overviewTab` `overviewStack` `overviewEmpty` `emptyGlyph` `emptyTitle` `quotaBoard` `quotaAccount` `quotaAccountHead` `quotaAccountToggle` `quotaAccountInfo` `quotaAccountIdentity` `quotaAccountName` `quotaSummary` `quotaAccountTools` `chevronButton` `chevronIcon` `quotaAccountMeta` `metaDot` `quotaBody` `quotaBodyInner` `quotaNotices` `metricGrid` `metric` `metricDivider` `metricEyebrow` `metricProduct` `metricLabel` `quotaBarRow` `quotaPercent` `quotaBarTrack` `quotaBarFill` `metricMeta` `metricMetaPart` `metricDot` `quotaMeta` `quotaLowNote` `dataGaps` `skel` `skelLabel` `skelValue` `skelBar` `skelMeta` |
 | 账户管理 | `accountGrid` `accountTile` `accountIdentityCell` `accountMark` `accountIdentity` `accountNameRow` `accountName` `accountMeta` `planPanel` `planRow` `planRowMain` `planRowName` `planTier` `planRowState` `accountFoot` `accountRefresh` `accountActions` `miniButton` `accountAddTile` `accountAddIcon` `accountAddLabel` `accountEmptyNote` `accountNotice` |
 | 中转站 | `relayQuotaView` `relayScanButton` `relayTileStatus` `relayTileMeta` `relayTileNotice` `relaySectionLabel` `relayAmount` `relayQuotaGrid` `relayQuotaCell` `relayQuotaLabel` `relayQuotaCaption` `relayMeterRow` `relayMeterValue` `relayBar` `relayBarFill` `relayWindows` `relayWindow` `relayWindowHead` `relaySkipped` `relaySkippedToggle` `accountStack` `accountCard` `accountHead` `accountTitleBlock` `accountMetaLine` `accountHint` `accountTools` `updatedAt` `refreshButton` `chevronButton` `chevronIcon` |
-| 状态/提示 | `noticeDanger` `noticeStale` `noticeAside` `globalNotice` `authStatus` `authDot` `draftBanner` `draftIcon` `draftTag` `draftText` `saveState` `planTag` |
+| 状态/提示 | `noticeDanger` `noticeStale` `noticeAside` `globalNotice` `authStatus` `authDot` `toast` `planTag` |
 | 设置 | `settingRow` `settingRowStatic` `settingText` `settingLabel` `stackRow` `pills` `pill` `pillThumb` `pillText` `switchWrap` `switchInput` `switchTrack` `switchKnob` `range` `rangeHead` `rangeValue` `rangeScale` `testButton` `buttonRow` |
 | 表单/按钮 | `field` `fieldLabel` `textInput` `button` `buttonGhost` `dangerButton` |
 | 弹窗 | `dialogBackdrop` `dialog` `dialogClose` `dialogHeader` `dialogSubtitle` `dialogSteps` `dialogStep` `stepMarker` `stepBody` `stepTitle` `stepText` `dialogFieldGroup` `dialogNote` `authBlock` `authUrl` `loginStatus` `dialogSuccess` `dialogSuccessIcon` `dialogSuccessBody` `dialogSuccessTitle` `dialogSuccessText` `dialogActions` `dialogForm` |
