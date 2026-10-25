@@ -259,17 +259,6 @@
 
 /* ---------- 中转站：识别表单、金额与额度条 ---------- */
 
-.providerTag {
-  padding: 1px 8px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-pill);
-  color: var(--accent);
-  background: var(--accent-soft);
-  font-size: 10.5px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
 .relayForm {
   display: flex;
   flex-wrap: wrap;
@@ -473,11 +462,6 @@
   margin-left: 0;
 }
 
-/* 与订阅额度一致：头部与内容之间只留间距，不再画一条通栏分隔线 */
-.quotaBodyInner.relayQuotaBody {
-  padding-top: 14px;
-}
-
 /* 两列各自独立排版，中间一条通高竖线；金额缺失时不折算成 0 */
 .relayQuotaGrid {
   display: grid;
@@ -610,9 +594,10 @@
   background: var(--surface);
 }
 
+/* 右侧工具与两行标题垂直居中，和订阅额度的折叠行一致 */
 .accountHead {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
 }
@@ -709,13 +694,9 @@
   background: var(--surface);
 }
 
+/* 收起与展开态同一套内边距，数值与中转站卡一致：18/20/20 */
 .quotaAccount {
-  padding: 13px 18px 16px;
-}
-
-/* 折叠行只承担摘要，收窄上下留白，让同一张卡里能放下更多账户 */
-.quotaAccount:not([data-open]) {
-  padding-block: 7px;
+  padding: 18px 20px 20px;
 }
 
 .quotaAccount + .quotaAccount {
@@ -747,11 +728,12 @@
   cursor: pointer;
 }
 
-/* 收起时左侧信息占两行：名称/档位 + 身份/来源；摘要与整块垂直居中同排 */
+/* 收起时左侧信息占两行：名称/档位 + 身份/来源；摘要与整块垂直居中同排。
+   两行间距取 4px，与中转站卡的 .accountMetaLine 上间距一致。 */
 .quotaAccountInfo {
   display: grid;
   flex: 0 1 auto;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -855,14 +837,11 @@
   overflow: hidden;
 }
 
+/* 展开体：头部与内容之间只留间距，不画通栏分隔线；订阅与中转站共用 */
 .quotaBodyInner {
   display: grid;
   gap: 14px;
-  padding-top: 4px;
-}
-
-.quotaBodyInner > .quotaAccountMeta {
-  margin: 0;
+  padding-top: 14px;
 }
 
 .quotaNotices {

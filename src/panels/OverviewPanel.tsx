@@ -69,14 +69,17 @@ function updatedAt(account: AccountState): number | null {
   }, null);
 }
 
-/** 折叠行摘要：单套餐列窗口余量；多套餐按「套餐 · 各窗口」逐段列出。 */
+/** 折叠行摘要：单套餐列出各窗口余量；多套餐每个套餐只留剩余最低的窗口。 */
 function accountSummary(account: AccountState): string {
   const products = account.products
     .map((product) => ({
       product,
       windows: (product.snapshot?.groups ?? [])
         .flatMap((group) => group.windows)
-        .filter((window) => window.remainingPercent !== null),
+        .filter(
+          (window): window is QuotaWindow & { remainingPercent: number } =>
+            window.remainingPercent !== null,
+        ),
     }))
     .filter(({ windows }) => windows.length > 0);
 
@@ -93,11 +96,13 @@ function accountSummary(account: AccountState): string {
     return '尚未获取额度';
   }
 
-  const windowSummary = (windows: QuotaWindow[]) =>
+  const windowSummary = (
+    windows: (QuotaWindow & { remainingPercent: number })[],
+  ) =>
     windows
       .map(
         (window) =>
-          `${compactQuotaWindowLabel(window)} ${Math.round(window.remainingPercent ?? 0)}%`,
+          `${compactQuotaWindowLabel(window)} ${Math.round(window.remainingPercent)}%`,
       )
       .join(' · ');
 
@@ -106,11 +111,15 @@ function accountSummary(account: AccountState): string {
     return windowSummary(products[0].windows);
   }
 
+  // 多套餐账户（如百炼的 Token Plan + Coding Plan）逐段铺开会挤满整行，
+  // 每个套餐只取剩余最低的窗口，摘要保持一眼可读。
   return products
-    .map(
-      ({ product, windows }) =>
-        `${product.displayName} · ${windowSummary(windows)}`,
-    )
+    .map(({ product, windows }) => {
+      const tightest = windows.reduce((lowest, window) =>
+        window.remainingPercent < lowest.remainingPercent ? window : lowest,
+      );
+      return `${product.displayName} ${windowSummary([tightest])}`;
+    })
     .join(' | ');
 }
 
@@ -412,7 +421,7 @@ function AccountBody({
   );
 }
 
-/** 账户身份与来源：收起时与名称组成两行，展开时仍在额度区顶部。 */
+/** 账户身份与来源：常驻标题区第二行，展开与收起都不改变头部高度。 */
 function AccountIdentity({ account }: { account: AccountState }) {
   return (
     <>
@@ -469,11 +478,7 @@ function AccountPanel({
   const summary = accountSummary(account);
 
   return (
-    <article
-      className={styles.quotaAccount}
-      data-open={open || undefined}
-      aria-live="polite"
-    >
+    <article className={styles.quotaAccount} aria-live="polite">
       <header className={styles.quotaAccountHead}>
         <button
           type="button"
@@ -491,11 +496,11 @@ function AccountPanel({
                 <span className={styles.planTier}>{planTierLabel(tier)}</span>
               ) : null}
             </span>
-            {!open ? (
-              <span className={styles.quotaAccountMeta}>
-                <AccountIdentity account={account} />
-              </span>
-            ) : null}
+            {/* 身份/来源常驻第二行：头部高度在展开与收起时不变，
+                和「中转站账户额度」一样只动画额度区，避免整行跳动。 */}
+            <span className={styles.quotaAccountMeta}>
+              <AccountIdentity account={account} />
+            </span>
           </span>
           {!open ? <span className={styles.quotaSummary}>{summary}</span> : null}
         </button>
@@ -553,9 +558,6 @@ function AccountPanel({
             }
           >
             <div className={styles.quotaBodyInner}>
-              <p className={styles.quotaAccountMeta}>
-                <AccountIdentity account={account} />
-              </p>
               <AccountBody
                 account={account}
                 desktop={desktop}

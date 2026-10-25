@@ -399,8 +399,8 @@ function RelayQuotaCard({
             <h3 className={styles.accountName} title={account.baseUrl}>
               {host}
             </h3>
-            {/* 平台类型沿用全局强调色徽标，和账户名同排；来源与额度口径留在下一行。 */}
-            <span className={styles.providerTag}>
+            {/* 平台类型用全局中性标签，和账户名同排；来源与额度口径留在下一行。 */}
+            <span className={styles.planTag}>
               {RELAY_PROVIDER_LABELS[account.provider]}
             </span>
           </div>
@@ -431,7 +431,8 @@ function RelayQuotaCard({
           </span>
         ) : null}
         <div className={styles.accountTools}>
-          {account.checkedAtEpoch !== null ? (
+          {/* 与订阅额度一致：更新时间只在展开时出现，收起后右侧只剩刷新和箭头 */}
+          {open && account.checkedAtEpoch !== null ? (
             <span className={styles.updatedAt}>
               更新于 {clockLabel(account.checkedAtEpoch)}
               {refreshing ? ' · 刷新中' : ''}
@@ -498,9 +499,7 @@ function RelayQuotaCard({
                   : { duration: 0.26, ease: [0.16, 1, 0.3, 1] }
               }
             >
-              <div
-                className={`${styles.quotaBodyInner} ${styles.relayQuotaBody}`}
-              >
+              <div className={styles.quotaBodyInner}>
                 <div className={styles.relayQuotaGrid}>
                   <QuotaCellView
                     cell={keyCell(quota)}

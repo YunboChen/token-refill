@@ -209,8 +209,7 @@
 | `.platformName` / `.platformVendor` / `.platformDescription` | 平台文字块 | 名称与厂商同排，说明单行省略 |
 | `.platformAside` / `.platformCount` / `.platformStatus` | 标题右侧信息 | 账户数、待接入状态、操作按钮 |
 | `.planTier` | 套餐档位小标签 | 中性胶囊，10.5px；总览眉线、账户卡、折叠摘要共用 |
-| `.planTag` | 中性标签 | 10.5px 胶囊，中转站来源/额度模式使用 |
-| `.providerTag` | 强调标签 | 主色胶囊，中转站平台名使用 |
+| `.planTag` | 中性标签 | 10.5px 胶囊，中转站来源/平台名/额度模式共用；平台名不再使用强调色 |
 | `.draftTag` | 描边标签 | 设置页「本机」标签 |
 
 ### 4.3 账户与额度展示
@@ -227,12 +226,12 @@
 
 | 类名 | 作用 |
 | --- | --- |
-| `.quotaAccount` | 单个账户；`data-open` 控制展开态的内边距 |
+| `.quotaAccount` | 单个账户；收起与展开同一套 18/20/20 内边距，与中转站卡一致 |
 | `.quotaAccountHead` / `.quotaAccountToggle` | 整行可点的展开按钮，含名称、档位、折叠摘要 |
-| `.quotaAccountInfo` / `.quotaAccountIdentity` / `.quotaAccountName` / `.quotaAccountMeta` / `.quotaSummary` | 折叠时左侧两行：名称（含档位）+ 身份/来源；摘要与整块垂直居中、位于右侧并留出间距，单行省略 |
+| `.quotaAccountInfo` / `.quotaAccountIdentity` / `.quotaAccountName` / `.quotaAccountMeta` / `.quotaSummary` | 左侧常驻两行：名称（含档位）+ 身份/来源；摘要仅收起时出现，与整块垂直居中、位于右侧并留出间距，单行省略 |
 | `.quotaAccountTools` / `.chevronButton` / `.chevronIcon` | 更新时间、刷新按钮、箭头；箭头只是视觉补充，键盘操作由左侧按钮承担 |
 | `.quotaBody` / `.quotaBodyInner` | 折叠动画的裁剪层与内层留白 |
-| `.quotaAccountMeta` / `.metaDot` | 展开后的身份说明与分隔点 |
+| `.quotaAccountMeta` / `.metaDot` | 标题区第二行的身份说明与分隔点（展开/收起都在） |
 | `.metricGrid` / `.metric` | 横向排布的额度窗口；条目少时平分宽度 |
 | `.metricDivider` | 窗口间竖线；`data-strong` 表示套餐分界，竖线占满整行高度 |
 | `.metricEyebrow` / `.metricProduct` | 多套餐时的眉线，固定高度保证下方标签对齐 |
@@ -262,7 +261,7 @@
 | 类名 | 作用 |
 | --- | --- |
 | `.accountCard` / `.accountHead` / `.accountTitleBlock` | 卡片与标题区 |
-| `.accountMetaLine` / `.accountHint` / `.providerTag` | 来源、平台、额度模式、密钥名等标签行；平台类型沿用全局强调色徽标 |
+| `.accountMetaLine` / `.accountHint` / `.planTag` | 来源、平台、额度模式、密钥名等标签行；平台类型与来源、额度模式同用中性标签 |
 | `.accountTools` / `.refreshButton` / `.updatedAt` / `.chevronButton` | 右侧刷新、更新时间与展开箭头 |
 | `.relayForm` | 地址 + 密钥 + 访问令牌 + 按钮的横向表单 |
 | `.relayTokenForm` | 管理页卡片内补充 New API 访问令牌的行内表单 |
@@ -380,20 +379,19 @@ section
 │        ├─ platformSectionHead → PlatformHeading
 │        └─ quotaBoard
 │           ├─ quotaAccount（展开：第一个账户）
-│           │  ├─ quotaAccountHead（名称/档位/摘要 + 刷新 + 箭头）
+│           │  ├─ quotaAccountHead（名称/档位 + 身份/来源 + 刷新 + 箭头）
 │           │  └─ quotaBody > quotaBodyInner
-│           │     ├─ quotaAccountMeta（身份 · 来源 · 授权状态）
 │           │     ├─ 提示（stale / danger）
 │           │     ├─ metricGrid（窗口 / 分隔线）
 │           │     └─ dataGaps
-│           └─ quotaAccount（折叠：其余账户，一行摘要）
+│           └─ quotaAccount（折叠：其余账户，同一头部 + 一行摘要）
 └─ [中转站账户额度] tabpanel
    └─ RelayQuotaBoard
       ├─ platformSectionHead（中转站账户 · 账户余额与密钥额度 · N 个账户）
       └─ accountStack
          └─ accountCard × N（默认展开，可收起）
-            ├─ accountHead（host + 类型/来源/额度口径 + 更新于/刷新/箭头）
-            │  └─ 收起时左侧保持两行身份信息，右侧显示简易额度摘要
+            ├─ accountHead（host + 类型/来源/额度口径 + 刷新/箭头；工具与两行标题垂直居中）
+            │  └─ 收起时左侧保持两行身份信息，中间显示简易额度摘要，右侧只剩刷新和箭头
             └─ quotaBody → relayQuotaGrid
                ├─ relayQuotaCell（密钥额度：金额、到期时间、限速窗口）
                └─ relayQuotaCell（账户额度：钱包/订阅/账户余额、比例条、订阅窗口）
@@ -405,8 +403,9 @@ section
 - 中转站账户与「中转站账户管理」页共用 `RelayProvider` 状态：首次切到该标签页时才扫描本地配置并查询，之后在任一页面刷新都会同步。
 - 平台顺序由 `groupAccountsByPlatform()` 固定，账户增删不会让分组跳动。
 - 同一平台的账户共用一张卡；默认展开第一个，`undefined` 表示沿用默认，`null` 表示全部收起。
-- 折叠摘要由 `accountSummary()` 生成：单套餐列各窗口余量，多套餐按「套餐 · 窗口」逐段列出。
-- 折叠行固定为两行：第一行名称与档位，第二行身份/来源；额度摘要与整块垂直居中、位于右侧并留出间距，单行省略。左侧身份列沿用 132px 起步宽度。
+- 折叠摘要由 `accountSummary()` 生成：单套餐列各窗口余量；多套餐（如百炼的 Token Plan + Coding Plan）每个套餐只列剩余最低的窗口，避免摘要铺满整行。
+- 标题区固定为两行：第一行名称与档位，第二行身份/来源；收起时右侧再出现额度摘要（与整块垂直居中、单行省略），左侧身份列沿用 132px 起步宽度。
+- 展开与收起共用同一个头部，第二行身份/来源常驻（与中转站卡一致），只对额度区做高度动画，避免整行跳动。
 - `buildMetrics()` 把「套餐 → 额度组 → 窗口」拍平成格子；多套餐时显示眉线，单类套餐内有多个额度组时显示组名。
 - 展开体只渲染在 `open` 时，折叠时 DOM 不保留内容。
 - 中转站额度页对金额、比例、到期时间与窗口额度都做了「未知/不限额」分支，不把未知显示成 0；管理页的刷新与总览共用 `refreshingId`。
@@ -654,8 +653,8 @@ export default function FooPanel() {
 | 平台分组 | `platformStack` `platformGroup` `platformSectionHead` `platformHeading` `platformBadge` `platformLogo` `platformLogoFallback` `platformIdentity` `platformNameRow` `platformName` `platformVendor` `platformDescription` `platformAside` `platformCount` `platformStatus` `plannedNote` |
 | 总览额度板 | `overviewTabs` `overviewTab` `overviewStack` `overviewEmpty` `emptyGlyph` `emptyTitle` `quotaBoard` `quotaAccount` `quotaAccountHead` `quotaAccountToggle` `quotaAccountInfo` `quotaAccountIdentity` `quotaAccountName` `quotaSummary` `quotaAccountTools` `chevronButton` `chevronIcon` `quotaAccountMeta` `metaDot` `quotaBody` `quotaBodyInner` `quotaNotices` `metricGrid` `metric` `metricDivider` `metricEyebrow` `metricProduct` `metricLabel` `quotaBarRow` `quotaPercent` `quotaBarTrack` `quotaBarFill` `metricMeta` `metricMetaPart` `metricDot` `quotaMeta` `quotaLowNote` `dataGaps` `skel` `skelLabel` `skelValue` `skelBar` `skelMeta` |
 | 账户管理 | `accountGrid` `accountTile` `accountIdentityCell` `accountMark` `accountIdentity` `accountNameRow` `accountName` `accountMeta` `planPanel` `planRow` `planRowMain` `planRowName` `planTier` `planRowState` `accountFoot` `accountRefresh` `accountActions` `miniButton` `accountAddTile` `accountAddIcon` `accountAddLabel` `accountEmptyNote` `accountNotice` |
-| 中转站 | `relayQuotaView` `relayForm` `relayTokenForm` `relaySectionLabel` `relayAmount` `relayQuotaBody` `relayQuotaGrid` `relayQuotaCell` `relayQuotaLabel` `relayQuotaCaption` `relayMeterRow` `relayMeterValue` `relayBar` `relayBarFill` `relayWindows` `relayWindow` `relayWindowHead` `relaySkipped` `accountStack` `accountCard` `accountHead` `accountTitleBlock` `accountMetaLine` `accountHint` `accountTools` `updatedAt` `refreshButton` `chevronButton` `chevronIcon` `inlineConfirm` `inlineConfirmActions` |
-| 状态/提示 | `noticeDanger` `noticeStale` `noticeAside` `globalNotice` `authStatus` `authDot` `draftBanner` `draftIcon` `draftTag` `draftText` `saveState` `planTag` `providerTag` |
+| 中转站 | `relayQuotaView` `relayForm` `relayTokenForm` `relaySectionLabel` `relayAmount` `relayQuotaGrid` `relayQuotaCell` `relayQuotaLabel` `relayQuotaCaption` `relayMeterRow` `relayMeterValue` `relayBar` `relayBarFill` `relayWindows` `relayWindow` `relayWindowHead` `relaySkipped` `accountStack` `accountCard` `accountHead` `accountTitleBlock` `accountMetaLine` `accountHint` `accountTools` `updatedAt` `refreshButton` `chevronButton` `chevronIcon` `inlineConfirm` `inlineConfirmActions` |
+| 状态/提示 | `noticeDanger` `noticeStale` `noticeAside` `globalNotice` `authStatus` `authDot` `draftBanner` `draftIcon` `draftTag` `draftText` `saveState` `planTag` |
 | 设置 | `settingRow` `settingRowStatic` `settingText` `settingLabel` `stackRow` `pills` `pill` `pillThumb` `pillText` `switchWrap` `switchInput` `switchTrack` `switchKnob` `range` `rangeHead` `rangeValue` `rangeScale` `testButton` `buttonRow` |
 | 表单/按钮 | `field` `fieldLabel` `textInput` `button` `buttonGhost` `dangerButton` |
 | 弹窗 | `dialogBackdrop` `dialog` `dialogClose` `dialogHeader` `dialogSubtitle` `dialogSteps` `dialogStep` `stepMarker` `stepBody` `stepTitle` `stepText` `dialogFieldGroup` `dialogNote` `authBlock` `authUrl` `loginStatus` `dialogSuccess` `dialogSuccessIcon` `dialogSuccessBody` `dialogSuccessTitle` `dialogSuccessText` `dialogActions` `dialogForm` |
@@ -664,7 +663,7 @@ export default function FooPanel() {
 ## 10. 维护约定
 
 1. **样式只有一个入口**：新类写进 `src/App.module.css` 的对应分区，并按 `/* ---------- 分区名 ---------- */` 注释归类。
-2. **状态用 `data-*`**：`data-open`、`data-low`、`data-unknown`、`data-stacked`、`data-state`、`data-active`、`data-danger`、`data-disabled`，不要为每个状态造一个类。
+2. **状态用 `data-*`**：`data-low`、`data-unknown`、`data-stacked`、`data-state`、`data-active`、`data-danger`、`data-disabled`，不要为每个状态造一个类。
 3. **命名按语义**：用 `quotaAccount`、`planRowState` 这类描述角色的名字，不用 `box1`、`rowLeft`。
 4. **组件归属**：跨页面复用放 `src/components/`；单页辅助组件和格式化函数留在页面文件内，直到出现第二个使用者。
 5. **文案中文、术语统一**：额度、套餐、账户、授权、刷新、重新授权、移除；同一动作在不同页面用同一个词。

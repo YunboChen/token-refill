@@ -62,7 +62,8 @@ function RelayManageCard({
             <span className={styles.planTag}>
               {RELAY_ORIGIN_LABELS[account.origin]}
             </span>
-            <span className={styles.providerTag}>
+            {/* 平台名与来源、额度口径同属账户元信息，统一用中性标签，不再单独强调。 */}
+            <span className={styles.planTag}>
               {RELAY_PROVIDER_LABELS[account.provider]}
             </span>
             {quota ? (
