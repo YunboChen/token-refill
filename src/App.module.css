@@ -433,8 +433,13 @@
 /* ---------- 总览：平台分组、账户额度卡与剩余额度环 ---------- */
 
 /* 总览类别切换：沿用设置页分段控件的视觉语言，但使用 tab 语义。 */
+/* 与设置页分段控件共用同一个滑块（.pillThumb）：
+   等宽列保证滑块宽度可算，切换时按 --pill-index 平移。 */
 .overviewTabs {
-  display: inline-flex;
+  position: relative;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   max-width: 100%;
   gap: 2px;
   margin-bottom: 20px;
@@ -445,8 +450,11 @@
 }
 
 .overviewTab {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 7px;
   min-height: 30px;
   padding: 0 12px;
@@ -458,17 +466,15 @@
   font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
-  transition: color 150ms ease-out, background-color 150ms ease-out;
+  transition: color 150ms ease-out;
 }
 
 .overviewTab:hover:not([data-active]) {
   color: var(--text);
-  background: var(--hover);
 }
 
 .overviewTab[data-active] {
   color: var(--accent-text);
-  background: var(--accent-strong);
 }
 
 .relayQuotaView {

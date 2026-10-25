@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useState, type CSSProperties } from 'react';
 import {
   ArrowClockwise,
   Gauge,
@@ -640,6 +640,7 @@ function PlatformBoard({
 export default function OverviewPanel({ desktop }: { desktop: boolean }) {
   const { state, ready, refresh } = useAppState();
   const [tab, setTab] = useState<OverviewTab>('subscription');
+  const tabIndex = Math.max(0, OVERVIEW_TABS.findIndex(({ key }) => key === tab));
   const threshold = state.preferences.lowQuotaThreshold;
   const lowOn = state.preferences.lowQuotaEnabled;
   const groups = groupAccountsByPlatform(state.accounts);
@@ -650,7 +651,12 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
         className={styles.overviewTabs}
         role="tablist"
         aria-label="总览类别"
+        style={{
+          '--pill-index': tabIndex,
+          '--pill-count': OVERVIEW_TABS.length,
+        } as CSSProperties}
       >
+        <span className={styles.pillThumb} aria-hidden="true" />
         {OVERVIEW_TABS.map(({ key, label, Icon }) => (
           <button
             key={key}

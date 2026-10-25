@@ -404,7 +404,7 @@ section
 
 关键行为：
 
-- 标签栏沿用设置页分段控件的视觉语言（独立使用 `.overviewTabs` / `.overviewTab`），但使用 `role="tablist"` / `role="tab"`；默认停留在「订阅账户额度」，切换不改变顶部页头。
+- 标签栏沿用设置页分段控件的视觉语言：独立使用 `.overviewTabs` / `.overviewTab`，但复用 `.pillThumb` 滑块，等宽列 + `--pill-index` / `--pill-count` 驱动滑动；使用 `role="tablist"` / `role="tab"`；默认停留在「订阅账户额度」，切换不改变顶部页头。
 - 中转站账户与「中转站账户管理」页共用 `RelayProvider` 状态：进入任一页面时先展示上次成功快照，再扫描本地配置，并把超过刷新间隔的账户自动刷新一次；之后在任一页面手动刷新都会同步。
 - 平台顺序由 `groupAccountsByPlatform()` 固定，账户增删不会让分组跳动。
 - 同一平台的账户共用一张卡；默认展开第一个，`undefined` 表示沿用默认，`null` 表示全部收起。
