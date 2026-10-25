@@ -1,6 +1,7 @@
 mod antigravity;
 mod api_key;
 mod bailian;
+mod cli;
 mod codex;
 mod commandcode;
 mod discovery;

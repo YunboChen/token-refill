@@ -33,7 +33,7 @@ OpenCode Go 与 Command Code 属于 API Key 账户：添加时先用一次真实
 
 Antigravity 是本机账户：应用只调用 `agy -p /usage --output-format json` 读取官方打印结果，不读取 CLI 的钥匙串、令牌文件或浏览器会话。查询前校验 `agy --version` ≥ 1.1.11，并设置 `AGY_CLI_DISABLE_AUTO_UPDATE=true`；查询带超时并能主动结束未登录时等待交互的进程。返回按模型分组展示每周 / 5 小时剩余比例与重置时间。
 
-网络代理由设置页统一配置（跟随系统 / 不走代理 / 指定代理），状态层在启动与偏好变更后写入全局代理配置。ureq 请求按目标 URL 选择代理并跳过回环地址与 `NO_PROXY`；跟随系统时 `ALL_PROXY` 可能是 `socks5://`，ureq 已开启 `socks-proxy` 特性以支持该形式（未开启时对手动配置的 SOCKS 代理会直接 panic）。子进程（`agy`、Codex app-server）在构造 `Command` 时写入或移除代理环境变量。跟随系统时优先使用进程已有的 `HTTP(S)_PROXY` / `ALL_PROXY`，其次读取 Windows Internet Settings 或 macOS `scutil --proxy`；PAC/自动配置脚本不解析。指定代理只接受不含凭据的 HTTP/HTTPS URL。
+网络代理由设置页统一配置（跟随系统 / 不走代理 / 指定代理），状态层在启动与偏好变更后写入全局代理配置。ureq 请求按目标 URL 选择代理并跳过回环地址与 `NO_PROXY`；跟随系统时 `ALL_PROXY` 可能是 `socks5://`，ureq 已开启 `socks-proxy` 特性以支持该形式（未开启时对手动配置的 SOCKS 代理会直接 panic）。子进程（`agy`、Codex app-server）在构造 `Command` 时写入或移除代理环境变量，并把 CLI 自身目录与 nvm / fnm / Volta / Bun / pnpm、Homebrew 等常见安装目录补到 `PATH` 前面：从 Finder 启动的 GUI 进程只有系统目录，npm 安装的 CLI 是 `#!/usr/bin/env node` 脚本，解释器找不到时会以退出码 127 结束。补齐只作用于子进程，不改动应用进程的环境。跟随系统时优先使用进程已有的 `HTTP(S)_PROXY` / `ALL_PROXY`，其次读取 Windows Internet Settings 或 macOS `scutil --proxy`；PAC/自动配置脚本不解析。指定代理只接受不含凭据的 HTTP/HTTPS URL。
 
 ## 3. 候选职责划分
 

@@ -51,6 +51,8 @@ pnpm tauri dev
 
 网络代理在“设置 → 网络代理”统一配置，三种模式：**跟随系统**（Windows 读取 Internet Settings，macOS 读取 `scutil --proxy`；进程环境变量优先，`ALL_PROXY` 为 `socks5://` 时也可用）、**不走代理**（直连）、**指定代理**（手动填写 `http://host:port`）。该设置作用于应用的全部 HTTPS 额度查询、版本检查，以及 `agy`、Codex app-server 等外置 CLI；指定代理不支持 PAC，且不能包含用户名或密码。
 
+外置 CLI 启动时会拿到补齐的 `PATH`：CLI 自身所在目录优先，其次是 nvm / fnm / Volta / Bun / pnpm 与 Homebrew 等常见目录，最后才是进程原有的 `PATH`。从 Finder 或资源管理器启动的 GUI 进程只有系统目录，npm 安装的 `codex`、`opencode` 是 `#!/usr/bin/env node` 脚本，缺了这一层补充会以退出码 127 结束。
+
 百炼额度通过百炼控制台网关读取，依赖控制台会话，不能使用推理 API Key 替代。会话过期后账户页会提示重新授权。
 
 只预览网页：
