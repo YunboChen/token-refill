@@ -94,7 +94,7 @@ Windows 目标目录：
 
 - Windows 产物只有两种：免安装单文件 exe（`pnpm tauri build --no-bundle`）与 NSIS 安装器（`pnpm tauri build` 或 `--bundles nsis`）。`src-tauri/tauri.windows.conf.json` 把 `bundle.targets` 收窄为 `["nsis"]`，所以本地构建与 CI 都不再生成 MSI。
 - 免安装 exe 约 12 MiB（含版本检查的 TLS 依赖），前端资源已内嵌，运行依赖系统 WebView2（Win10/11 通常已预装），数据仍写入 `%APPDATA%\dev.tokenrefill.desktop\`。
-- Windows 构建由 `.github/workflows/release.yml` 的 `build-windows` job（`windows-latest`、MSVC、Node 24）完成，只在版本号变化、tag 推送或手动触发时运行：先 `pnpm test:rust`，再 `--no-bundle` 生成便携 exe，随后 `tauri-action` 用 `--bundles nsis` 生成安装器并创建 draft Release，最后用 `softprops/action-gh-release@v3` 把便携 exe 追加到同一个 Release。该 job 目前只通过 actionlint 静态校验，尚未在 GitHub Actions 实际跑过。
+- Windows 构建由 `.github/workflows/release.yml` 的 `build-windows` job（`windows-latest`、MSVC、Node 24）完成，只在版本号变化、tag 推送或手动触发时运行：先 `pnpm test:rust`，再 `--no-bundle` 生成便携 exe，随后 `tauri-action` 用 `--bundles nsis` 生成安装器，最后用 `softprops/action-gh-release@v3` 把便携 exe 追加到同一个 Release 并直接发布（`draft: false`）。该 job 已在 GitHub Actions 实际运行通过（v0.2.0）；安装、卸载与升级验收仍未完成。
 - 代码签名与发布渠道未定：当前未配置 Authenticode 证书，两种产物都未签名，首次运行会有 SmartScreen 提示，需要在发布说明中写明。
 - 最低 Windows 版本、架构（x64 / arm64）与实际安装验收仍待确认；当前 CI 只构建 x64。
 

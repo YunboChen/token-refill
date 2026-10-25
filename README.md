@@ -167,7 +167,7 @@ public/               浏览器标签图标、Web manifest
 
 `prepare` job 会对比这次推送前后的 `src-tauri/tauri.conf.json` 版本号：**只有版本号变化才继续构建**，版本未变时其余 job 全部跳过，不会重复生成或上传产物。也可以显式发版：推送 `v*` tag，或在 Actions 页面手动触发 `release`（手动触发不比较版本，总是构建）。
 
-构建流程：先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS 通用包与 Windows x64 产物：macOS 用 `cargo tauri` + ad-hoc 签名；Windows 用 MSVC 工具链，先跑 `pnpm test:rust`，再用 `--no-bundle` 产出免安装 exe，最后用 `--bundles nsis` 产出安装器。两类产物都挂到同一个 **draft Release**（tag 为 `v<版本号>`），确认无误后手动发布。`tauri.conf.json` / `package.json` / `Cargo.toml` 三处版本不一致时构建直接失败；tag 推送还会校验 tag 与版本号一致。
+构建流程：先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS 通用包与 Windows x64 产物：macOS 用 `cargo tauri` + ad-hoc 签名；Windows 用 MSVC 工具链，先跑 `pnpm test:rust`，再用 `--no-bundle` 产出免安装 exe，最后用 `--bundles nsis` 产出安装器。两类产物都挂到同一个 **Release**（tag 为 `v<版本号>`）并直接发布，没有草稿确认环节；推送到 `main` 前请自行确认版本号与产物。`tauri.conf.json` / `package.json` / `Cargo.toml` 三处版本不一致时构建直接失败；tag 推送还会校验 tag 与版本号一致。
 
 ### 签名状态
 
