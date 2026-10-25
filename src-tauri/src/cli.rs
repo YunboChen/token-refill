@@ -143,7 +143,8 @@ mod tests {
     #[test]
     fn binary_dir_comes_before_inherited_path() {
         let binary = PathBuf::from("/opt/tools/bin/codex");
-        let inherited = OsString::from("/usr/bin:/bin");
+        // 用 join_paths 生成，Windows 的条目分隔符是 `;`，不能直接写字面量。
+        let inherited = env::join_paths(["/usr/bin", "/bin"]).expect("inherited path");
         let path = child_path(&binary, Some(inherited)).expect("joined");
 
         let dirs = entries(&path);
