@@ -6,7 +6,7 @@
 
 - Tauri 2 + Rust 桌面应用；前端 React 19 + TypeScript + Vite；依赖用 pnpm 12 管理，Node.js ≥ 22.12（CI 用 24）。
 - 本地优先：额度查询、状态持久化、系统通知、开机自启、版本检查都在本机完成，没有自建后端、账号体系或云同步。
-- 支持平台：macOS（首发，Apple Silicon + Intel 通用包，最低 12.0）与 Windows x64（MSVC）。其他平台未发布。
+- 支持平台：macOS（首发，Apple Silicon 与 Intel 分别提供 DMG，最低 12.0）与 Windows x64（MSVC）。其他平台未发布。
 - 应用标识 `dev.tokenrefill.desktop`；数据目录由 Tauri `app_data_dir()` 决定：
   - macOS `~/Library/Application Support/dev.tokenrefill.desktop/`
   - Windows `%APPDATA%\dev.tokenrefill.desktop\`
@@ -45,7 +45,7 @@
 
 ### macOS
 
-- 发布构建使用 `--target universal-apple-darwin`，最低系统 12.0；当前 ad-hoc 签名、未公证，不得把产物描述为已签名/已公证。
+- 发布构建分别使用 `--target aarch64-apple-darwin` 与 `--target x86_64-apple-darwin`，各产出一个 `.dmg`；不合并 Universal fat binary（体积与构建成本都会翻倍）。最低系统 12.0；当前 ad-hoc 签名、未公证，不得把产物描述为已签名/已公证。
 - CI 使用 `cargo tauri` 而不是 `pnpm tauri`：Node 版 CLI 下 libuv 会关闭继承的 fd 0，`actool` 的 helper 崩溃，`.icon` 编不出 `Assets.car`（tauri#15315）。改回 `pnpm tauri` 前必须验证打包产物里存在 `Assets.car` 与 `CFBundleIconName`。
 - 不引入需要关闭 Gatekeeper 或降低系统安全设置的常规安装步骤。
 
@@ -59,7 +59,7 @@
 - 三处版本必须一致：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`；改 `Cargo.toml` 后同步 `Cargo.lock`。CI 会校验，不一致直接失败。
 - 发布由 `.github/workflows/release.yml` 完成，触发条件：`main` 分支推送且版本号变化、`v*` tag 推送、手动触发。版本未变化时跳过全部构建。
 - 两个平台并行构建，产物上传到同一个 Release（tag `v<版本号>`）：
-  - macOS：通用 `.dmg`
+  - macOS：`Token.Refill_<版本>_arm64.dmg` 与 `Token.Refill_<版本>_x64.dmg`
   - Windows：`Token.Refill_<版本>_x64.exe`（便携）+ `Token Refill_<版本>_x64-setup.exe`（NSIS）
 - Release 构建成功后直接发布（`draft: false`），不设草稿确认环节；推送 `main` 前必须自行确认版本号、产物与签名状态，发布即对用户可见。
 - 版本检查只做「比较 + 跳转发布页」，不自动下载、不替换正在运行的程序；自动更新需要签名密钥与回滚策略，属另行决策。
