@@ -247,6 +247,7 @@
 }
 
 .planTag {
+  flex-shrink: 0;
   padding: 1px 8px;
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
@@ -257,33 +258,49 @@
   white-space: nowrap;
 }
 
-/* ---------- 中转站：识别表单、金额与额度条 ---------- */
+/* ---------- 中转站：管理卡、扫描入口与未识别配置 ---------- */
 
-.relayForm {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 12px;
+/* 标题右侧的扫描入口：沿用设置页动作按钮，图标与文字同排。 */
+.relayScanButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.relayForm .field {
-  flex: 1 1 220px;
-  min-width: 180px;
+/* 管理卡中段：额度状态与刷新错误。卡片窄，所有文案单行省略。 */
+.relayTileStatus {
+  display: grid;
+  gap: 5px;
+  align-content: start;
+  min-width: 0;
+  margin: 14px 0;
 }
 
-.relayTokenForm {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 12px;
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
+.relayTileMeta {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.relayTokenForm .field {
-  flex: 1 1 260px;
-  min-width: 200px;
+/* 刷新失败：有旧数据时保持中性，没有旧数据时才转危险色；最多两行。 */
+.relayTileNotice {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.relayTileNotice[data-danger] {
+  color: var(--danger);
 }
 
 .relaySectionLabel {
@@ -351,9 +368,27 @@
 }
 
 .relaySkipped {
-  margin-top: 14px;
+  margin-top: 18px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+}
+
+/* 未识别配置默认收起：只占一行，展开后才列出原因。 */
+.relaySkippedToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  color: var(--muted);
+  background: none;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.relaySkippedToggle:hover {
+  color: var(--text);
 }
 
 .relaySkipped ul {
@@ -2077,21 +2112,6 @@
 .miniButton:disabled {
   cursor: not-allowed;
   opacity: 0.45;
-}
-
-.inlineConfirm {
-  display: grid;
-  gap: 8px;
-  margin-top: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--sunken);
-}
-
-.inlineConfirmActions {
-  display: flex;
-  gap: 8px;
 }
 
 .dangerButton {

@@ -1,235 +1,157 @@
-import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { createPortal } from 'react-dom';
+import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import {
   ArrowClockwiseIcon,
   KeyIcon,
+  LockSimple,
   PlugsIcon,
+  Plus,
   TrashIcon,
+  X,
 } from '@phosphor-icons/react';
 import type { RelayAccount } from '../lib/desktop';
 import { clockLabel } from '../lib/format';
 import { useRelay } from '../lib/relay';
 import {
-  RELAY_MODE_LABELS,
   RELAY_ORIGIN_LABELS,
   RELAY_PROVIDER_LABELS,
   relayHost,
 } from '../lib/relayFormat';
 import { useAppState } from '../lib/store';
+import { useDialogA11y } from '../lib/useDialogA11y';
+import ChevronIcon from '../components/ChevronIcon';
 import styles from '../App.module.css';
 
-function RelayManageCard({
+type RelayDialog =
+  | { kind: 'add' }
+  | { kind: 'token'; accountId: string; host: string; userId: string | null }
+  | { kind: 'remove'; accountId: string; host: string };
+
+/** 管理页的账户卡：身份、状态、操作三段，与账户页的网格卡同一结构。 */
+function RelayAccountTile({
   account,
   desktop,
   refreshing,
-  confirming,
-  tokenEditing,
-  savingToken,
   onRefresh,
-  onAskRemove,
-  onCancelRemove,
-  onRemove,
   onBeginTokenEdit,
-  onCancelTokenEdit,
-  onSubmitToken,
+  onAskRemove,
 }: {
   account: RelayAccount;
   desktop: boolean;
   refreshing: boolean;
-  confirming: boolean;
-  tokenEditing: boolean;
-  savingToken: boolean;
   onRefresh: () => void;
-  onAskRemove: () => void;
-  onCancelRemove: () => void;
-  onRemove: () => void;
-  onBeginTokenEdit: () => void;
-  onCancelTokenEdit: () => void;
-  onSubmitToken: (token: string, userId: string) => void;
+  onBeginTokenEdit: (trigger: HTMLElement) => void;
+  onAskRemove: (trigger: HTMLElement) => void;
 }) {
-  const quota = account.quota;
   const host = relayHost(account.baseUrl);
-  const tokenInput = useRef<HTMLInputElement>(null);
-  const userIdInput = useRef<HTMLInputElement>(null);
+  const quota = account.quota;
+  const meta = [
+    RELAY_ORIGIN_LABELS[account.origin],
+    account.persisted ? '凭证已保存' : '凭证仅本次运行',
+    account.hasAccountToken ? '访问令牌已配置' : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  // 管理页只说明额度是否已同步，金额与窗口留给总览，避免两页重复展示。
+  const updated =
+    account.checkedAtEpoch !== null
+      ? `更新于 ${clockLabel(account.checkedAtEpoch)}`
+      : null;
+  const status = quota
+    ? quota.valid
+      ? ['额度已同步', updated, refreshing ? '刷新中' : null]
+          .filter(Boolean)
+          .join(' · ')
+      : '密钥不可用'
+    : refreshing
+      ? '正在识别并查询额度…'
+      : '尚未获取额度';
 
   return (
-    <article className={styles.accountCard} aria-live="polite">
-      <header className={styles.accountHead}>
-        <div className={styles.accountTitleBlock}>
-          <h3 className={styles.accountName} title={account.baseUrl}>
-            {host}
-          </h3>
-          <p className={styles.accountMetaLine}>
-            <span className={styles.planTag}>
-              {RELAY_ORIGIN_LABELS[account.origin]}
-            </span>
-            {/* 平台名与来源、额度口径同属账户元信息，统一用中性标签，不再单独强调。 */}
+    <article className={styles.accountTile} aria-live="polite">
+      <div className={styles.accountIdentityCell}>
+        <span className={styles.accountMark} aria-hidden="true">
+          <PlugsIcon size={17} weight="duotone" />
+        </span>
+        <div className={styles.accountIdentity}>
+          <div className={styles.accountNameRow}>
+            <h3 className={styles.accountName} title={account.baseUrl}>
+              {host}
+            </h3>
             <span className={styles.planTag}>
               {RELAY_PROVIDER_LABELS[account.provider]}
             </span>
-            {quota ? (
-              <span className={styles.planTag}>
-                {RELAY_MODE_LABELS[quota.mode]}
-              </span>
-            ) : null}
-            {quota?.keyName ? (
-              <span className={styles.accountHint}>{quota.keyName}</span>
-            ) : null}
-            {quota?.planName ? (
-              <span className={styles.accountHint}>{quota.planName}</span>
-            ) : null}
-            {quota && !quota.valid ? (
-              <span className={styles.authStatus} data-state="needs-reauth">
-                <span className={styles.authDot} aria-hidden="true" />
-                密钥不可用
-              </span>
-            ) : null}
-            <span className={styles.accountHint}>
-              {account.persisted ? '凭证已保存' : '凭证仅本次运行'}
-            </span>
-            {account.hasAccountToken ? (
-              <span className={styles.accountHint}>已配置访问令牌</span>
-            ) : null}
+          </div>
+          <p className={styles.accountMeta} title={meta}>
+            {meta}
           </p>
         </div>
-        <div className={styles.accountTools}>
-          {account.checkedAtEpoch !== null ? (
-            <span className={styles.updatedAt}>
-              更新于 {clockLabel(account.checkedAtEpoch)}
-              {refreshing ? ' · 刷新中' : ''}
-            </span>
-          ) : null}
+      </div>
+
+      <div className={styles.relayTileStatus}>
+        {quota && !quota.valid ? (
+          <span className={styles.authStatus} data-state="needs-reauth">
+            <span className={styles.authDot} aria-hidden="true" />
+            {status}
+          </span>
+        ) : (
+          <p className={styles.relayTileMeta}>{status}</p>
+        )}
+        {account.lastError ? (
+          <p
+            className={styles.relayTileNotice}
+            data-danger={!quota || undefined}
+            title={account.lastError}
+          >
+            刷新失败：{account.lastError}
+          </p>
+        ) : null}
+      </div>
+
+      <div className={styles.accountFoot}>
+        <button
+          type="button"
+          className={styles.accountRefresh}
+          onClick={onRefresh}
+          disabled={!desktop || refreshing}
+          aria-label={`刷新 ${host} 的额度`}
+          title={desktop ? '重新识别并刷新额度' : '浏览器预览无法调用 Rust'}
+        >
+          <ArrowClockwiseIcon
+            size={13}
+            className={refreshing ? styles.spin : undefined}
+            aria-hidden
+          />
+          刷新
+        </button>
+        <div className={styles.accountActions}>
           {account.provider === 'new-api' ? (
             <button
               type="button"
               className={styles.miniButton}
-              onClick={onBeginTokenEdit}
-              disabled={!desktop || savingToken}
+              onClick={(event) => onBeginTokenEdit(event.currentTarget)}
+              disabled={!desktop}
               aria-label={`为 ${host} 设置访问令牌`}
-              title="补充 New API 访问令牌以读取完整账户额度"
+              title="设置或更新访问令牌"
             >
-              <KeyIcon size={15} aria-hidden />
+              <KeyIcon size={14} aria-hidden />
             </button>
           ) : null}
           <button
             type="button"
-            className={styles.refreshButton}
-            onClick={onRefresh}
-            disabled={!desktop || refreshing}
-            aria-label={`刷新 ${host} 的额度`}
-            title={desktop ? '重新识别并刷新额度' : '浏览器预览无法调用 Rust'}
-          >
-            <ArrowClockwiseIcon
-              size={16}
-              weight="regular"
-              className={refreshing ? styles.spin : undefined}
-            />
-          </button>
-          <button
-            type="button"
             className={styles.miniButton}
-            onClick={onAskRemove}
+            onClick={(event) => onAskRemove(event.currentTarget)}
+            disabled={!desktop}
             aria-label={`移除 ${host}`}
+            title="移除账户"
             data-danger
           >
-            <TrashIcon size={15} aria-hidden />
+            <TrashIcon size={14} aria-hidden />
           </button>
         </div>
-      </header>
-
-      {confirming ? (
-        <div className={styles.inlineConfirm}>
-          <span className={styles.usageNote}>
-            移除后会删除本应用保存的密钥与访问令牌。
-          </span>
-          <div className={styles.inlineConfirmActions}>
-            <button
-              type="button"
-              className={styles.dangerButton}
-              onClick={onRemove}
-            >
-              移除
-            </button>
-            <button
-              type="button"
-              className={styles.buttonGhost}
-              onClick={onCancelRemove}
-            >
-              取消
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {tokenEditing ? (
-        <form
-          className={styles.relayTokenForm}
-          onSubmit={(event) => {
-            event.preventDefault();
-            const token = tokenInput.current?.value.trim() ?? '';
-            const userId = userIdInput.current?.value.trim() ?? '';
-            if (token) onSubmitToken(token, userId);
-          }}
-        >
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>New API 访问令牌</span>
-            <input
-              ref={tokenInput}
-              className={styles.textInput}
-              type="password"
-              placeholder="旧版单令牌或个人访问令牌"
-              disabled={!desktop || savingToken}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </label>
-          <label className={styles.field}>
-            <span className={styles.fieldLabel}>用户 ID（旧版令牌需要）</span>
-            <input
-              ref={userIdInput}
-              className={styles.textInput}
-              type="text"
-              inputMode="numeric"
-              placeholder="New-Api-User"
-              defaultValue={account.newApiUserId ?? ''}
-              disabled={!desktop || savingToken}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </label>
-          <button
-            type="submit"
-            className={styles.button}
-            disabled={savingToken}
-          >
-            {savingToken ? '保存中…' : '保存并刷新'}
-          </button>
-          <button
-            type="button"
-            className={styles.buttonGhost}
-            onClick={onCancelTokenEdit}
-            disabled={savingToken}
-          >
-            取消
-          </button>
-        </form>
-      ) : null}
-
-      {account.lastError ? (
-        <p className={styles.noticeStale} role="status">
-          上次刷新失败：{account.lastError}
-          {account.checkedAtEpoch !== null
-            ? ' 当前显示上一次成功的数据。'
-            : null}
-        </p>
-      ) : null}
-
-      {!quota ? (
-        <p className={styles.accountNote}>
-          {refreshing
-            ? '正在识别上游并查询额度…'
-            : '尚未获取额度，可点击右侧刷新重试。'}
-        </p>
-      ) : null}
+      </div>
     </article>
   );
 }
@@ -243,29 +165,85 @@ export default function RelayPanel() {
     loaded,
     error,
     refreshingId,
-    savingTokenId,
     ensureLoaded,
-    rescan: rescanAccounts,
+    rescan,
     addAccount,
     refresh,
     remove,
     saveAccountToken,
+    clearError,
   } = useRelay();
+  const [dialog, setDialog] = useState<RelayDialog | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [formNotice, setFormNotice] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [confirming, setConfirming] = useState<string | null>(null);
-  const [tokenEditing, setTokenEditing] = useState<string | null>(null);
+  const [savingToken, setSavingToken] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [skippedOpen, setSkippedOpen] = useState(false);
+  const reduceMotion = useReducedMotion();
+
+  // 敏感输入一律用 ref 读取，不进入组件状态、日志或持久化数据。
   const keyInput = useRef<HTMLInputElement>(null);
   const accountTokenInput = useRef<HTMLInputElement>(null);
   const userIdInput = useRef<HTMLInputElement>(null);
+  const tokenInput = useRef<HTMLInputElement>(null);
+  const tokenUserIdInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (desktop) ensureLoaded();
   }, [desktop, ensureLoaded]);
 
-  const submit = async (event: SyntheticEvent<HTMLFormElement>) => {
+  const closeDialog = () => {
+    setDialog(null);
+    setFormError(null);
+    clearError();
+  };
+
+  const { dialogRef, captureTrigger } = useDialogA11y(
+    dialog !== null,
+    dialog
+      ? `${dialog.kind}:${'accountId' in dialog ? dialog.accountId : ''}`
+      : '',
+    closeDialog,
+  );
+
+  const prepareDialog = (trigger?: HTMLElement | null) => {
+    setFormError(null);
+    setFormNotice(null);
+    clearError();
+    captureTrigger(trigger);
+  };
+
+  const openAddDialog = (trigger?: HTMLElement | null) => {
+    prepareDialog(trigger);
+    setBaseUrl('');
+    if (keyInput.current) keyInput.current.value = '';
+    if (accountTokenInput.current) accountTokenInput.current.value = '';
+    if (userIdInput.current) userIdInput.current.value = '';
+    setDialog({ kind: 'add' });
+  };
+
+  const openTokenDialog = (account: RelayAccount, trigger: HTMLElement) => {
+    prepareDialog(trigger);
+    setDialog({
+      kind: 'token',
+      accountId: account.id,
+      host: relayHost(account.baseUrl),
+      userId: account.newApiUserId,
+    });
+  };
+
+  const openRemoveDialog = (account: RelayAccount, trigger: HTMLElement) => {
+    prepareDialog(trigger);
+    setDialog({
+      kind: 'remove',
+      accountId: account.id,
+      host: relayHost(account.baseUrl),
+    });
+  };
+
+  const submitAdd = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const apiKey = keyInput.current?.value.trim() ?? '';
     if (!baseUrl.trim()) {
@@ -279,7 +257,6 @@ export default function RelayPanel() {
 
     setSubmitting(true);
     setFormError(null);
-    setFormNotice(null);
     try {
       const accountToken = accountTokenInput.current?.value.trim() ?? '';
       const userId = userIdInput.current?.value.trim() ?? '';
@@ -298,124 +275,170 @@ export default function RelayPanel() {
       if (keyInput.current) keyInput.current.value = '';
       if (accountTokenInput.current) accountTokenInput.current.value = '';
       if (userIdInput.current) userIdInput.current.value = '';
+      setBaseUrl('');
+      setDialog(null);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const saveToken = async (id: string, token: string, userId: string) => {
-    const ok = await saveAccountToken(id, token, userId || undefined);
-    if (ok) setTokenEditing(null);
-  };
-
-  const removeAccount = async (id: string) => {
-    const ok = await remove(id);
-    if (ok) {
-      setConfirming(null);
-      setTokenEditing(null);
+  const submitToken = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (dialog?.kind !== 'token' || savingToken) return;
+    const token = tokenInput.current?.value.trim() ?? '';
+    if (!token) {
+      setFormError('请填写访问令牌。');
+      return;
     }
+
+    setSavingToken(true);
+    setFormError(null);
+    const userId = tokenUserIdInput.current?.value.trim() ?? '';
+    const ok = await saveAccountToken(
+      dialog.accountId,
+      token,
+      userId || undefined,
+    );
+    setSavingToken(false);
+    if (ok) setDialog(null);
   };
 
-  const message = formError ?? error;
+  const confirmRemove = async () => {
+    if (dialog?.kind !== 'remove' || removing) return;
+    setRemoving(true);
+    setFormError(null);
+    const ok = await remove(dialog.accountId);
+    setRemoving(false);
+    if (ok) setDialog(null);
+  };
+
+  const dialogMessage = formError ?? error;
+  const busy = scanning || submitting;
 
   return (
     <section>
-      <div className={styles.overviewStack}>
-        <form className={styles.card} onSubmit={submit}>
-          <div className={styles.relayForm}>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>服务地址</span>
-              <input
-                className={styles.textInput}
-                type="url"
-                inputMode="url"
-                placeholder="https://api.example.com"
-                value={baseUrl}
-                onChange={(event) => setBaseUrl(event.target.value)}
-                disabled={!desktop || submitting}
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>API Key</span>
-              <input
-                ref={keyInput}
-                className={styles.textInput}
-                type="password"
-                placeholder="sk-..."
-                disabled={!desktop || submitting}
-                autoComplete="off"
-                spellCheck={false}
-                aria-describedby="relay-key-note"
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>访问令牌（可选，New API）</span>
-              <input
-                ref={accountTokenInput}
-                className={styles.textInput}
-                type="password"
-                placeholder="用于读取账户余额与订阅"
-                disabled={!desktop || submitting}
-                autoComplete="off"
-                spellCheck={false}
-                aria-describedby="relay-key-note"
-              />
-            </label>
-            <label className={styles.field}>
-              <span className={styles.fieldLabel}>用户 ID（旧版令牌需要）</span>
-              <input
-                ref={userIdInput}
-                className={styles.textInput}
-                type="text"
-                inputMode="numeric"
-                placeholder="New-Api-User"
-                disabled={!desktop || submitting}
-                autoComplete="off"
-                spellCheck={false}
-                aria-describedby="relay-key-note"
-              />
-            </label>
-            <button
-              type="submit"
-              className={styles.button}
-              disabled={!desktop || submitting || scanning}
+      {error && !dialog ? (
+        <p
+          className={`${styles.noticeDanger} ${styles.accountNotice}`}
+          role="alert"
+        >
+          {error}
+        </p>
+      ) : null}
+
+      <section className={styles.platformGroup}>
+        {/* 与账户页、总览的中转站额度共用同一套平台标题：小尺寸图形 + 名称/说明 + 右侧动作。 */}
+        <div className={styles.platformSectionHead}>
+          <div className={styles.platformHeading}>
+            <span
+              className={styles.platformBadge}
+              data-active
+              aria-hidden="true"
             >
-              {submitting ? '识别中…' : '识别并查询'}
-            </button>
+              <PlugsIcon size={20} weight="duotone" />
+            </span>
+            <div className={styles.platformIdentity}>
+              <div className={styles.platformNameRow}>
+                <h2 className={styles.platformName}>中转站账户</h2>
+              </div>
+              <p className={styles.platformDescription}>
+                New API / Sub2API · 账户与凭证管理
+              </p>
+            </div>
+            <div className={styles.platformAside}>
+              {accounts.length > 0 ? (
+                <span className={styles.platformCount}>
+                  {accounts.length} 个账户
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className={`${styles.testButton} ${styles.relayScanButton}`}
+                onClick={() => {
+                  setFormNotice(null);
+                  void rescan();
+                }}
+                disabled={!desktop || busy}
+                title={
+                  desktop
+                    ? '重新扫描 Claude Code 与 Codex 的本地配置'
+                    : '浏览器预览无法调用 Rust'
+                }
+              >
+                <ArrowClockwiseIcon
+                  size={13}
+                  className={scanning ? styles.spin : undefined}
+                  aria-hidden
+                />
+                {scanning ? '扫描中…' : '重新扫描本地配置'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className={styles.accountGrid}>
+          {accounts.map((account) => (
+            <RelayAccountTile
+              key={account.id}
+              account={account}
+              desktop={desktop}
+              refreshing={refreshingId === account.id}
+              onRefresh={() => void refresh(account.id)}
+              onBeginTokenEdit={(trigger) => openTokenDialog(account, trigger)}
+              onAskRemove={(trigger) => openRemoveDialog(account, trigger)}
+            />
+          ))}
+
+          <button
+            type="button"
+            className={styles.accountAddTile}
+            onClick={(event) => openAddDialog(event.currentTarget)}
+            disabled={!desktop || busy}
+            title={
+              !desktop
+                ? '浏览器预览无法调用 Rust'
+                : scanning
+                  ? '正在扫描本地配置，请稍候'
+                  : '添加中转站账户'
+            }
+          >
+            <span className={styles.accountAddIcon} aria-hidden="true">
+              <Plus size={15} weight="bold" />
+            </span>
+            <span className={styles.accountAddLabel}>添加中转站账户</span>
+          </button>
+        </div>
+
+        {accounts.length === 0 ? (
+          <p className={styles.accountNote}>
+            {desktop && (!loaded || scanning)
+              ? '正在扫描 Claude Code 与 Codex 的本地配置…'
+              : '还没有中转站账户。可以点击虚线卡片手动添加，或重新扫描本机配置。'}
+          </p>
+        ) : null}
+
+        {formNotice ? (
+          <p className={styles.accountNote} role="status">
+            {formNotice}
+          </p>
+        ) : null}
+
+        {skipped.length > 0 ? (
+          <div className={styles.relaySkipped}>
             <button
               type="button"
-              className={styles.buttonGhost}
-              onClick={() => void rescanAccounts()}
-              disabled={!desktop || submitting || scanning}
+              className={styles.relaySkippedToggle}
+              aria-expanded={skippedOpen}
+              aria-controls="relay-skipped-list"
+              onClick={() => setSkippedOpen((open) => !open)}
             >
-              {scanning ? '扫描中…' : '重新扫描本地配置'}
+              <ChevronIcon direction={skippedOpen ? 'down' : 'right'} />
+              {skippedOpen
+                ? '收起未识别的本地配置'
+                : `未识别的本地配置 ${skipped.length} 条`}
             </button>
-          </div>
-          <p className={styles.usageNote} id="relay-key-note">
-            添加账户后，额度会显示在总览的「中转站账户额度」；本页负责维护账户与凭证。
-            <br />
-            打开本页或切换到总览的中转站额度时会读取 Claude Code 的{' '}
-            <code className={styles.codeChip}>settings.json</code> 与 Codex 的{' '}
-            <code className={styles.codeChip}>config.toml</code>
-            ，自动识别其中的中转站；识别不出来时也可以手动填写。自动尝试 New API 与
-            Sub2API 的额度接口，无需先选择平台。
-            <br />
-            手动填写的地址、密钥与访问令牌保存在本应用数据目录的{' '}
-            <code className={styles.codeChip}>relay-profiles/</code>
-            ，不会进入状态文件或界面；自动扫描到的配置只在本次运行使用。账户额度方面：New
-            API 需要 v1.0.0-rc.45 及以上并在密钥上开启「允许查询用户额度」，或填写访问令牌（v1.0.0-rc.41
-            及以上，需 profile:read、订阅还需 wallet:read）；旧版单令牌还需要同时填写面板个人设置里的用户 ID（New-Api-User）。部分站点会直接在密钥响应中返回账户额度
-            （quota_scope=account），无需额外配置。Sub2API 在密钥无总额度、无限速且属于普通分组时
-            返回账户钱包余额，订阅分组返回账户订阅额度。
-          </p>
-          {skipped.length > 0 ? (
-            <div className={styles.relaySkipped}>
-              <p className={styles.usageNote}>
-                以下本地配置未识别为 New API / Sub2API：
-              </p>
-              <ul>
+            {skippedOpen ? (
+              <ul id="relay-skipped-list">
                 {skipped.map((item, index) => (
                   <li key={`${item.origin}-${item.baseUrl}-${index}`}>
                     <span>
@@ -425,63 +448,281 @@ export default function RelayPanel() {
                   </li>
                 ))}
               </ul>
-            </div>
-          ) : null}
-          {!desktop ? (
-            <p className={styles.accountNote}>
-              浏览器预览无法调用 Rust，请在桌面应用内使用（
-              <code className={styles.codeChip}>pnpm tauri dev</code>）。
-            </p>
-          ) : null}
-          {message ? (
-            <p className={styles.noticeDanger} role="alert">
-              {message}
-            </p>
-          ) : null}
-          {formNotice ? (
-            <p className={styles.accountNote} role="status">
-              {formNotice}
-            </p>
-          ) : null}
-        </form>
+            ) : null}
+          </div>
+        ) : null}
 
-        {accounts.length === 0 ? (
-          <div className={styles.overviewEmpty}>
-            <span className={styles.emptyGlyph} aria-hidden="true">
-              <PlugsIcon size={24} weight="duotone" />
-            </span>
-            <h2 className={styles.emptyTitle}>还没有中转站账户</h2>
-            <p className={styles.usageNote}>
-              {desktop && (!loaded || scanning)
-                ? '正在扫描 Claude Code 与 Codex 的本地配置…'
-                : '没有从本地配置或手动输入中识别到中转站。在上方填入地址与 API Key，或重新扫描本地配置。'}
-            </p>
-          </div>
-        ) : (
-          <div className={styles.accountStack}>
-            {accounts.map((account) => (
-              <RelayManageCard
-                key={account.id}
-                account={account}
-                desktop={desktop}
-                refreshing={refreshingId === account.id}
-                confirming={confirming === account.id}
-                tokenEditing={tokenEditing === account.id}
-                savingToken={savingTokenId === account.id}
-                onRefresh={() => void refresh(account.id)}
-                onAskRemove={() => setConfirming(account.id)}
-                onCancelRemove={() => setConfirming(null)}
-                onRemove={() => void removeAccount(account.id)}
-                onBeginTokenEdit={() => setTokenEditing(account.id)}
-                onCancelTokenEdit={() => setTokenEditing(null)}
-                onSubmitToken={(token, userId) =>
-                  void saveToken(account.id, token, userId)
+        {!desktop ? (
+          <p className={styles.accountNote}>
+            浏览器预览无法调用 Rust，请在桌面应用内使用（
+            <code className={styles.codeChip}>pnpm tauri dev</code>）。
+          </p>
+        ) : null}
+      </section>
+
+      {/* portal 挂到 body：面板容器带进场 transform，会成为 fixed 后代的包含块。 */}
+      {createPortal(
+        <AnimatePresence>
+          {dialog ? (
+            <m.div
+              key="relay-dialog"
+              className={styles.dialogBackdrop}
+              role="presentation"
+              initial={reduceMotion ? false : { opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={
+                reduceMotion
+                  ? { opacity: 1 }
+                  : {
+                      opacity: 0,
+                      transition: { duration: 0.34, ease: 'easeIn' },
+                    }
+              }
+              transition={
+                reduceMotion ? { duration: 0 } : { duration: 0.16, ease: 'easeOut' }
+              }
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) closeDialog();
+              }}
+            >
+              <m.div
+                ref={dialogRef}
+                tabIndex={-1}
+                className={styles.dialog}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="relay-dialog-title"
+                initial={
+                  reduceMotion ? false : { opacity: 0, scale: 0.96, y: 10 }
                 }
-              />
-            ))}
-          </div>
-        )}
-      </div>
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={
+                  reduceMotion
+                    ? { opacity: 1 }
+                    : {
+                        opacity: 0,
+                        scale: 0.96,
+                        y: 10,
+                        transition: { duration: 0.3, ease: 'easeIn' },
+                      }
+                }
+                transition={
+                  reduceMotion
+                    ? { duration: 0 }
+                    : { type: 'spring', stiffness: 460, damping: 34 }
+                }
+              >
+                <button
+                  type="button"
+                  className={styles.dialogClose}
+                  onClick={closeDialog}
+                  aria-label="关闭"
+                >
+                  <X size={16} />
+                </button>
+
+                {dialog.kind === 'add' ? (
+                  <form className={styles.dialogForm} onSubmit={submitAdd}>
+                    <header className={styles.dialogHeader}>
+                      <h2 id="relay-dialog-title">添加中转站账户</h2>
+                      <p className={styles.dialogSubtitle}>
+                        自动识别 New API 与 Sub2API
+                      </p>
+                    </header>
+                    <div className={styles.dialogFieldGroup}>
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabel}>服务地址</span>
+                        <input
+                          className={styles.textInput}
+                          type="url"
+                          inputMode="url"
+                          placeholder="https://api.example.com"
+                          value={baseUrl}
+                          onChange={(event) => setBaseUrl(event.target.value)}
+                          disabled={submitting}
+                          autoComplete="off"
+                          spellCheck={false}
+                          autoFocus
+                        />
+                      </label>
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabel}>API Key</span>
+                        <input
+                          ref={keyInput}
+                          className={styles.textInput}
+                          type="password"
+                          placeholder="sk-..."
+                          disabled={submitting}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </label>
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabel}>
+                          访问令牌（可选，New API）
+                        </span>
+                        <input
+                          ref={accountTokenInput}
+                          className={styles.textInput}
+                          type="password"
+                          placeholder="用于读取账户余额与订阅"
+                          disabled={submitting}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </label>
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabel}>
+                          用户 ID（旧版令牌）
+                        </span>
+                        <input
+                          ref={userIdInput}
+                          className={styles.textInput}
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="New-Api-User"
+                          disabled={submitting}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </label>
+                      <p className={styles.dialogNote}>
+                        <LockSimple size={13} aria-hidden />
+                        密钥与访问令牌只保存在本机 relay-profiles/，不会进入界面状态或日志。
+                      </p>
+                      <p className={styles.dialogNote}>
+                        New API 需要密钥开启「允许查询用户额度」，或填写访问令牌。
+                      </p>
+                    </div>
+                    {dialogMessage ? (
+                      <p className={styles.noticeDanger} role="alert">
+                        {dialogMessage}
+                      </p>
+                    ) : null}
+                    <div className={styles.dialogActions}>
+                      <button
+                        type="button"
+                        className={styles.buttonGhost}
+                        onClick={closeDialog}
+                        disabled={submitting}
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="submit"
+                        className={styles.button}
+                        disabled={submitting}
+                      >
+                        {submitting ? '识别中…' : '识别并添加'}
+                      </button>
+                    </div>
+                  </form>
+                ) : dialog.kind === 'token' ? (
+                  <form className={styles.dialogForm} onSubmit={submitToken}>
+                    <header className={styles.dialogHeader}>
+                      <h2 id="relay-dialog-title">设置访问令牌</h2>
+                      <p className={styles.dialogSubtitle}>
+                        {dialog.host} · 读取账户余额与订阅
+                      </p>
+                    </header>
+                    <div className={styles.dialogFieldGroup}>
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabel}>
+                          New API 访问令牌
+                        </span>
+                        <input
+                          ref={tokenInput}
+                          className={styles.textInput}
+                          type="password"
+                          placeholder="个人访问令牌"
+                          disabled={savingToken}
+                          autoComplete="off"
+                          spellCheck={false}
+                          autoFocus
+                        />
+                      </label>
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabel}>
+                          用户 ID（旧版令牌需要）
+                        </span>
+                        <input
+                          ref={tokenUserIdInput}
+                          className={styles.textInput}
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="New-Api-User"
+                          defaultValue={dialog.userId ?? ''}
+                          disabled={savingToken}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </label>
+                      <p className={styles.dialogNote}>
+                        <LockSimple size={13} aria-hidden />
+                        令牌只保存在本机 relay-profiles/，不会进入界面状态或日志。
+                      </p>
+                    </div>
+                    {dialogMessage ? (
+                      <p className={styles.noticeDanger} role="alert">
+                        {dialogMessage}
+                      </p>
+                    ) : null}
+                    <div className={styles.dialogActions}>
+                      <button
+                        type="button"
+                        className={styles.buttonGhost}
+                        onClick={closeDialog}
+                        disabled={savingToken}
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="submit"
+                        className={styles.button}
+                        disabled={savingToken}
+                      >
+                        {savingToken ? '保存中…' : '保存并刷新'}
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <>
+                    <h2 id="relay-dialog-title">移除中转站账户</h2>
+                    <p className={styles.usageNote}>
+                      将移除「{dialog.host}」，并删除本应用保存的密钥与访问令牌（如有）。
+                      Claude Code / Codex 的本地配置与其他账户不受影响。
+                    </p>
+                    {dialogMessage ? (
+                      <p className={styles.noticeDanger} role="alert">
+                        {dialogMessage}
+                      </p>
+                    ) : null}
+                    <div className={styles.dialogActions}>
+                      <button
+                        type="button"
+                        className={styles.buttonGhost}
+                        onClick={closeDialog}
+                        disabled={removing}
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.dangerButton}
+                        onClick={() => void confirmRemove()}
+                        disabled={removing}
+                      >
+                        {removing ? '正在移除…' : '确认移除'}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </m.div>
+            </m.div>
+          ) : null}
+        </AnimatePresence>,
+        document.body,
+      )}
     </section>
   );
 }

@@ -192,7 +192,7 @@
 | `.platformGroup` | 单个平台分组容器 | `min-width: 0`；总览、账户、待接入平台共用，不再按页面拆同义类 |
 | `.platformSectionHead` | 压缩版平台标题行 | 把 `PlatformHeading` 的徽标收到 20px、去底色、名称降到 13px |
 | `.accountGrid` | 账户卡网格 | `repeat(auto-fill, minmax(min(100%, 250px), 1fr))`，`gap: 10px`；默认两列，宽窗三列，窄窗一列 |
-| `.accountStack` | 单列卡片列表 | `gap: 10px`；中转站使用 |
+| `.accountStack` | 单列卡片列表 | `gap: 10px`；总览的中转站额度标签页使用 |
 | `.quotaBoard` | 同平台账户合集卡 | 外层一张 14px 圆角卡，内部账户之间用发丝线；总览使用 |
 | `.mainScroll` | 内容滚动容器 | 只有这里滚动；`overscroll-behavior: none` |
 | `.panelWrap` | 页面进场包装 | 切换页面时 `key` 变化触发 220ms 进场 |
@@ -219,8 +219,8 @@
 | 形态 | 类名 | 适合场景 | 参考页面 |
 | --- | --- | --- | --- |
 | 可折叠额度板 | `.quotaBoard` + `.quotaAccount*` + `.metric*` | 同平台多账户，默认只看摘要，展开看完整窗口 | 总览 |
-| 管理网格卡 | `.accountGrid` + `.accountTile*` | 需要并排比较、每张卡都有独立操作 | 账户 |
-| 单列详情卡 | `.accountStack` + `.accountCard*` | 每个对象信息较多、按时间或来源排列 | 总览的中转站额度、中转站账户管理 |
+| 管理网格卡 | `.accountGrid` + `.accountTile*` | 需要并排比较、每张卡都有独立操作 | 账户、中转站账户管理 |
+| 单列详情卡 | `.accountStack` + `.accountCard*` | 每个对象信息较多、按时间或来源排列 | 总览的中转站额度 |
 
 总览额度板关键结构：
 
@@ -256,20 +256,28 @@
 | `.accountAddTile` / `.accountAddIcon` / `.accountAddLabel` | 网格末尾的虚线添加入口，至少 118px 高 |
 | `.accountEmptyNote` | 账户没有套餐时的行内说明 |
 
-中转站单列卡关键结构：
+中转站额度卡（总览）关键结构：
 
 | 类名 | 作用 |
 | --- | --- |
-| `.accountCard` / `.accountHead` / `.accountTitleBlock` | 卡片与标题区 |
+| `.accountCard` / `.accountHead` / `.accountTitleBlock` | 单列额度卡与标题区 |
 | `.accountMetaLine` / `.accountHint` / `.planTag` | 来源、平台、额度模式、密钥名等标签行；平台类型与来源、额度模式同用中性标签 |
 | `.accountTools` / `.refreshButton` / `.updatedAt` / `.chevronButton` | 右侧刷新、更新时间与展开箭头 |
-| `.relayForm` | 地址 + 密钥 + 访问令牌 + 按钮的横向表单 |
-| `.relayTokenForm` | 管理页卡片内补充 New API 访问令牌的行内表单 |
-| `.relayQuotaGrid` / `.relayQuotaCell` | 总览额度卡的「密钥额度 / 账户额度」两列；竖线分隔，窄窗口退成单列 |
+| `.relayQuotaGrid` / `.relayQuotaCell` | 「密钥额度 / 账户额度」两列；竖线分隔，窄窗口退成单列 |
 | `.relayQuotaLabel` / `.relayQuotaCaption` / `.relayAmount` | 单元格标签、额度口径与金额；未知金额用 `data-muted` 弱化 |
 | `.relayMeterRow` / `.relayMeterValue` / `.relayBar` / `.relayBarFill` | 剩余比例条与数值；`data-low` 转危险色 |
 | `.relayWindows` / `.relayWindow` / `.relayWindowHead` / `.relaySectionLabel` | 密钥限速窗口与账户订阅窗口 |
-| `.relaySkipped` | 管理页未识别的本地配置列表 |
+
+中转站管理卡（管理页）沿用账户网格卡：
+
+| 类名 | 作用 |
+| --- | --- |
+| `.accountGrid` / `.accountTile` | 与账户页同一套网格卡；身份、状态、操作三段 |
+| `.accountIdentityCell` / `.accountMark` | 插头徽标 + host 身份区 |
+| `.relayTileStatus` / `.relayTileMeta` / `.relayTileNotice` | 额度同步状态、凭证与访问令牌说明、刷新失败提示（最多两行） |
+| `.accountAddTile` | 网格末尾的虚线添加入口，打开添加弹窗 |
+| `.relayScanButton` | 平台标题右侧的「重新扫描」动作 |
+| `.relaySkipped` / `.relaySkippedToggle` | 未识别的本地配置：默认收起，展开后才列出来源、地址与原因 |
 
 ### 4.4 状态与提示
 
@@ -286,7 +294,6 @@
 | `.updatedAt` | 最近刷新时间 | 卡片标题右侧，等宽数字 |
 | `.saveState` | 设置保存状态 | `data-state="error"` 转红；跟随 `.draftBanner` |
 | `.draftBanner` / `.draftIcon` / `.draftText` | 中性信息条 | 设置页顶部 |
-| `.inlineConfirm` / `.inlineConfirmActions` | 行内二次确认 | 中转站移除；比弹窗更轻 |
 | `.overviewEmpty` / `.emptyGlyph` / `.emptyTitle` | 整页空态 | 没有数据时替代列表 |
 | `.noticeStale` 与 `.accountNote` | 行内补充说明 | 放在数据区下方，字号 12px |
 
@@ -438,28 +445,27 @@ section
 ### 5.3 中转站账户管理（`RelayPanel.tsx`）
 
 ```
-section → overviewStack
-├─ card（添加表单）
-│  ├─ relayForm（地址 / API Key / 访问令牌（可选）/ 用户 ID（旧版令牌）/ 识别并查询 / 重新扫描）
-│  ├─ usageNote（额度展示位置、读取哪些本地配置、凭证保存位置与版本要求）
-│  ├─ relaySkipped（未识别的配置）
-│  ├─ 浏览器预览说明
-│  └─ formError / 操作错误
-├─ 空态 overviewEmpty
-└─ accountStack → accountCard × N
-   ├─ accountHead（host + 来源/平台/额度模式标签 + 保存状态 + 工具）
-   ├─ inlineConfirm（移除确认）
-   ├─ relayTokenForm（补充 New API 访问令牌 + 旧版用户 ID）
-   └─ 上次刷新失败提示 / 尚未获取额度说明
+section
+├─ 页面级错误 noticeDanger（没有弹窗时）
+└─ platformGroup
+   ├─ platformSectionHead（插头徽标 + 中转站账户 + 说明 + 账户数 + 重新扫描）
+   ├─ accountGrid
+   │  ├─ accountTile × N（host、平台标签、来源/凭证/令牌、额度状态、刷新/令牌/移除）
+   │  └─ accountAddTile（虚线添加入口，打开添加弹窗）
+   ├─ 空列表说明 / 操作提示
+   ├─ relaySkipped（默认收起：未识别的本地配置）
+   └─ 浏览器预览说明
+└─ 弹窗（portal）：添加 / 补充访问令牌 / 移除
 ```
 
 关键行为：
 
-- 本页只负责账户与凭证管理；额度金额、比例、窗口与到期时间在总览的「中转站账户额度」展示。
-- 进入页面时若尚未加载，会刷新已保存的手动条目并扫描一次本地配置；「重新扫描」手动重试。数据与总览共用 `RelayProvider`，不会重复扫描。
+- 本页只负责账户与凭证管理；额度金额、比例、窗口与到期时间在总览的「中转站账户额度」展示。管理卡只保留「额度已同步 / 密钥不可用 / 尚未获取额度」与更新时间。
+- 进入页面时若尚未加载，会刷新已保存的手动条目并扫描一次本地配置；标题右侧「重新扫描」手动重试。数据与总览共用 `RelayProvider`，不会重复扫描。
+- 添加、补充访问令牌与移除统一用弹窗，和账户页保持一致；添加位是网格末尾的虚线卡。
 - API Key 与访问令牌都用 ref 读取，不进入组件状态；保存动作由 Rust 完成。
 - New API 卡片提供访问令牌入口；Sub2API 不显示该入口。
-- 移除使用行内确认而不是弹窗，减少打断。
+- 未识别的本地配置默认收起，避免说明文字占满首屏。
 
 ### 5.4 设置（`SettingsPanel.tsx`）
 
@@ -580,8 +586,8 @@ export default function FooPanel() {
 | 需求 | 复制对象 | 外层 | 单元 |
 | --- | --- | --- | --- |
 | 同平台多对象，默认折叠 | 总览 | `.platformStack` / `.platformGroup` | `.quotaBoard` + `.quotaAccount` |
-| 多对象并排管理 | 账户 | `.platformStack` / `.platformGroup` | `.accountGrid` + `.accountTile` |
-| 单列、信息密集 | 中转站 | `.overviewStack` / `.accountStack` | `.accountCard` |
+| 多对象并排管理 | 账户、中转站账户管理 | `.platformStack` / `.platformGroup` | `.accountGrid` + `.accountTile` |
+| 单列、信息密集 | 总览的中转站额度 | `.overviewStack` / `.accountStack` | `.accountCard` |
 
 复用清单：
 
@@ -623,7 +629,7 @@ export default function FooPanel() {
 6. 关闭时重置 `acting` 与请求竞态标记。
 7. 解构 `useDialogA11y` 返回的 `{ dialogRef, captureTrigger }`；容器挂 `dialogRef` 并设 `tabIndex={-1}`，打开前调用 `captureTrigger(event.currentTarget)`；内容切换时传不同的 `contentKey` 重新落定焦点。
 
-比弹窗更轻的破坏性操作优先用 `.inlineConfirm`（参考中转站移除）。
+中转站的添加、补充令牌与移除已和账户页统一为弹窗确认；不再维护行内二次确认样式。
 
 ### 7.6 抽取共用组件
 
@@ -653,7 +659,7 @@ export default function FooPanel() {
 | 平台分组 | `platformStack` `platformGroup` `platformSectionHead` `platformHeading` `platformBadge` `platformLogo` `platformLogoFallback` `platformIdentity` `platformNameRow` `platformName` `platformVendor` `platformDescription` `platformAside` `platformCount` `platformStatus` `plannedNote` |
 | 总览额度板 | `overviewTabs` `overviewTab` `overviewStack` `overviewEmpty` `emptyGlyph` `emptyTitle` `quotaBoard` `quotaAccount` `quotaAccountHead` `quotaAccountToggle` `quotaAccountInfo` `quotaAccountIdentity` `quotaAccountName` `quotaSummary` `quotaAccountTools` `chevronButton` `chevronIcon` `quotaAccountMeta` `metaDot` `quotaBody` `quotaBodyInner` `quotaNotices` `metricGrid` `metric` `metricDivider` `metricEyebrow` `metricProduct` `metricLabel` `quotaBarRow` `quotaPercent` `quotaBarTrack` `quotaBarFill` `metricMeta` `metricMetaPart` `metricDot` `quotaMeta` `quotaLowNote` `dataGaps` `skel` `skelLabel` `skelValue` `skelBar` `skelMeta` |
 | 账户管理 | `accountGrid` `accountTile` `accountIdentityCell` `accountMark` `accountIdentity` `accountNameRow` `accountName` `accountMeta` `planPanel` `planRow` `planRowMain` `planRowName` `planTier` `planRowState` `accountFoot` `accountRefresh` `accountActions` `miniButton` `accountAddTile` `accountAddIcon` `accountAddLabel` `accountEmptyNote` `accountNotice` |
-| 中转站 | `relayQuotaView` `relayForm` `relayTokenForm` `relaySectionLabel` `relayAmount` `relayQuotaGrid` `relayQuotaCell` `relayQuotaLabel` `relayQuotaCaption` `relayMeterRow` `relayMeterValue` `relayBar` `relayBarFill` `relayWindows` `relayWindow` `relayWindowHead` `relaySkipped` `accountStack` `accountCard` `accountHead` `accountTitleBlock` `accountMetaLine` `accountHint` `accountTools` `updatedAt` `refreshButton` `chevronButton` `chevronIcon` `inlineConfirm` `inlineConfirmActions` |
+| 中转站 | `relayQuotaView` `relayScanButton` `relayTileStatus` `relayTileMeta` `relayTileNotice` `relaySectionLabel` `relayAmount` `relayQuotaGrid` `relayQuotaCell` `relayQuotaLabel` `relayQuotaCaption` `relayMeterRow` `relayMeterValue` `relayBar` `relayBarFill` `relayWindows` `relayWindow` `relayWindowHead` `relaySkipped` `relaySkippedToggle` `accountStack` `accountCard` `accountHead` `accountTitleBlock` `accountMetaLine` `accountHint` `accountTools` `updatedAt` `refreshButton` `chevronButton` `chevronIcon` |
 | 状态/提示 | `noticeDanger` `noticeStale` `noticeAside` `globalNotice` `authStatus` `authDot` `draftBanner` `draftIcon` `draftTag` `draftText` `saveState` `planTag` |
 | 设置 | `settingRow` `settingRowStatic` `settingText` `settingLabel` `stackRow` `pills` `pill` `pillThumb` `pillText` `switchWrap` `switchInput` `switchTrack` `switchKnob` `range` `rangeHead` `rangeValue` `rangeScale` `testButton` `buttonRow` |
 | 表单/按钮 | `field` `fieldLabel` `textInput` `button` `buttonGhost` `dangerButton` |

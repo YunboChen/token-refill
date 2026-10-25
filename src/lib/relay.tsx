@@ -33,8 +33,9 @@ interface RelayContextValue {
   loaded: boolean;
   /** 最近一次扫描/查询的错误；卡片自身的额度错误仍在 account.lastError 上。 */
   error: string | null;
+  /** 清除页面级错误；打开新的操作弹窗时避免展示上一次的失败信息。 */
+  clearError: () => void;
   refreshingId: string | null;
-  savingTokenId: string | null;
   /** 首次进入中转站相关页面时调用；重复调用不会重复扫描。 */
   ensureLoaded: () => void;
   rescan: () => Promise<void>;
@@ -64,7 +65,6 @@ export function RelayProvider({ children }: { children: ReactNode }) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
-  const [savingTokenId, setSavingTokenId] = useState<string | null>(null);
   const started = useRef(false);
 
   const discover = useCallback(async () => {
@@ -95,6 +95,8 @@ export function RelayProvider({ children }: { children: ReactNode }) {
     started.current = true;
     await discover();
   }, [desktop, discover]);
+
+  const clearError = useCallback(() => setError(null), []);
 
   const addAccount = useCallback(
     async (
@@ -166,7 +168,6 @@ export function RelayProvider({ children }: { children: ReactNode }) {
   const saveAccountToken = useCallback(
     async (id: string, accountToken: string, newApiUserId?: string) => {
       if (!desktop) return false;
-      setSavingTokenId(id);
       setError(null);
       try {
         const updated = await setRelayAccountToken(
@@ -181,8 +182,6 @@ export function RelayProvider({ children }: { children: ReactNode }) {
       } catch (err) {
         setError(relayErrorText(err));
         return false;
-      } finally {
-        setSavingTokenId((current) => (current === id ? null : current));
       }
     },
     [desktop],
@@ -195,8 +194,8 @@ export function RelayProvider({ children }: { children: ReactNode }) {
       scanning,
       loaded,
       error,
+      clearError,
       refreshingId,
-      savingTokenId,
       ensureLoaded,
       rescan,
       addAccount,
@@ -210,8 +209,8 @@ export function RelayProvider({ children }: { children: ReactNode }) {
       scanning,
       loaded,
       error,
+      clearError,
       refreshingId,
-      savingTokenId,
       ensureLoaded,
       rescan,
       addAccount,
