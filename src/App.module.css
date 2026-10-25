@@ -304,15 +304,6 @@
   font-weight: 600;
 }
 
-.relaySummary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 16px;
-}
-
 .relayAmount {
   margin: 0;
   font-size: 28px;
@@ -322,11 +313,9 @@
   line-height: 1.1;
 }
 
-.relayBarWrap {
-  display: grid;
-  flex: 1 1 240px;
-  gap: 6px;
-  min-width: 180px;
+/* 「未提供」不与真实金额抢视线，但仍保留金额字号维持两列节奏 */
+.relayAmount[data-muted] {
+  color: var(--muted);
 }
 
 .relayBar {
@@ -346,21 +335,6 @@
 
 .relayBar[data-low] .relayBarFill {
   background: var(--danger);
-}
-
-.relayScale {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.relayMetaLine {
-  margin: 12px 0 0;
-  color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.6;
 }
 
 .relayWindows {
@@ -433,6 +407,157 @@
 }
 
 /* ---------- 总览：平台分组、账户额度卡与剩余额度环 ---------- */
+
+/* 总览类别切换：沿用设置页分段控件的视觉语言，但使用 tab 语义。 */
+.overviewTabs {
+  display: inline-flex;
+  max-width: 100%;
+  gap: 2px;
+  margin-bottom: 20px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+}
+
+.overviewTab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 150ms ease-out, background-color 150ms ease-out;
+}
+
+.overviewTab:hover:not([data-active]) {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.overviewTab[data-active] {
+  color: var(--accent-text);
+  background: var(--accent-strong);
+}
+
+.relayQuotaView {
+  min-width: 0;
+}
+
+/* 分组标题已经提供与内容之间的留白，列表与标题保持和订阅额度一致的间距 */
+.relayQuotaView > .accountStack {
+  margin-top: 14px;
+}
+
+/* ---------- 中转站额度卡：密钥额度 / 账户额度两列 ---------- */
+
+/* host 与类型徽标同排：地址过长时省略，徽标不被挤走 */
+.accountCard .accountNameRow .accountName {
+  overflow: hidden;
+  flex: 0 1 auto;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 中转站收起时：摘要与两行身份块垂直居中，靠自身间距与左侧信息隔开 */
+.accountHead > .quotaSummary {
+  align-self: center;
+  margin-left: 0;
+}
+
+/* 与订阅额度一致：头部与内容之间只留间距，不再画一条通栏分隔线 */
+.quotaBodyInner.relayQuotaBody {
+  padding-top: 14px;
+}
+
+/* 两列各自独立排版，中间一条通高竖线；金额缺失时不折算成 0 */
+.relayQuotaGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.relayQuotaCell {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+  padding-inline: 18px;
+}
+
+.relayQuotaCell:first-child {
+  padding-left: 0;
+}
+
+.relayQuotaCell:last-child {
+  padding-right: 0;
+  border-left: 1px solid var(--border);
+}
+
+.relayQuotaLabel {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.relayQuotaCaption {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+/* 比例条与数值同排：数值贴右，和订阅额度的读数方式一致 */
+.relayMeterRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.relayMeterRow .relayBar {
+  flex: 1;
+}
+
+.relayMeterValue {
+  flex-shrink: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 单元格内的窗口列表比整宽时更紧凑，避免半列里出现过多留白 */
+.relayQuotaCell .relayWindows {
+  gap: 10px;
+  margin-top: 8px;
+}
+
+@media (max-width: 720px) {
+  .relayQuotaGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .relayQuotaCell {
+    padding-inline: 0;
+  }
+
+  .relayQuotaCell + .relayQuotaCell {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+}
 
 .overviewStack {
   display: grid;
@@ -622,6 +747,20 @@
   cursor: pointer;
 }
 
+/* 收起时左侧信息占两行：名称/档位 + 身份/来源；摘要与整块垂直居中同排 */
+.quotaAccountInfo {
+  display: grid;
+  flex: 0 1 auto;
+  gap: 2px;
+  min-width: 0;
+}
+
+.quotaAccountInfo .quotaAccountMeta {
+  margin: 0;
+  /* 第二行固定单行；身份过长时由 accountHint 省略，不再折成三行 */
+  flex-wrap: nowrap;
+}
+
 /* 账户名与档位占一个固定起步宽度，折叠摘要按同一条竖线起排 */
 .quotaAccountIdentity {
   display: flex;
@@ -647,7 +786,7 @@
   flex-shrink: 0;
 }
 
-/* 折叠时的额度摘要：只保留最关键的窗口，和账户名同一行 */
+/* 折叠时的额度摘要：位于身份信息右侧，与名称同排；过长时省略 */
 .quotaSummary {
   overflow: hidden;
   flex: 1 1 auto;
@@ -673,8 +812,11 @@
   place-items: center;
   width: 24px;
   height: 24px;
+  padding: 0;
+  border: 0;
   border-radius: 999px;
   color: var(--muted);
+  background: transparent;
   cursor: pointer;
   user-select: none;
   transition: color 150ms ease-out, background-color 150ms ease-out;

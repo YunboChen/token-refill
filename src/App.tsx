@@ -35,7 +35,7 @@ const PANELS: PanelDef[] = [
     label: '总览',
     Icon: Gauge,
     title: '总览',
-    subtitle: '每个账户的额度、周期与重置时间，一处看清。',
+    subtitle: '订阅账户与中转站账户的额度、周期与重置时间，一处看清。',
   },
   {
     key: 'accounts',
@@ -48,8 +48,8 @@ const PANELS: PanelDef[] = [
     key: 'relay',
     label: '中转站',
     Icon: PlugsIcon,
-    title: '中转站额度',
-    subtitle: '自动读取 Claude Code / Codex 配置，也可手动填写地址与 API Key。',
+    title: '中转站账户管理',
+    subtitle: '添加、扫描与维护中转站账户；额度在总览中查看。',
   },
   {
     key: 'settings',

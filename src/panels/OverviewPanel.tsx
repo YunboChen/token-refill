@@ -1,5 +1,11 @@
 import { Fragment, useState } from 'react';
-import { ArrowClockwise, Gauge } from '@phosphor-icons/react';
+import {
+  ArrowClockwise,
+  Gauge,
+  PlugsIcon,
+  UsersThree,
+  type Icon,
+} from '@phosphor-icons/react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import type {
   AccountState,
@@ -17,8 +23,17 @@ import {
   sourceLabel,
 } from '../lib/format';
 import { useAppState } from '../lib/store';
+import ChevronIcon from '../components/ChevronIcon';
 import PlatformHeading from '../components/PlatformHeading';
+import RelayQuotaBoard from '../components/RelayQuotaBoard';
 import styles from '../App.module.css';
+
+type OverviewTab = 'subscription' | 'relay';
+
+const OVERVIEW_TABS: { key: OverviewTab; label: string; Icon: Icon }[] = [
+  { key: 'subscription', label: '订阅账户额度', Icon: UsersThree },
+  { key: 'relay', label: '中转站账户额度', Icon: PlugsIcon },
+];
 
 function amountLabel(window: QuotaWindow): string | null {
   if (window.unit === 'usd') {
@@ -148,31 +163,6 @@ function buildMetrics(account: AccountState): MetricSet {
     showEyebrow: multipleProducts
       || entries.some((entry) => entry.groupLead && entry.group.limitName),
   };
-}
-
-/** 轻量折线箭头：与图标包的填充三角相比更接近总览卡的克制风格。 */
-function ChevronIcon({ direction }: { direction: 'down' | 'right' }) {
-  return (
-    <svg
-      className={styles.chevronIcon}
-      viewBox="0 0 16 16"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        d={
-          direction === 'down'
-            ? 'M4.5 6.5 8 10l3.5-3.5'
-            : 'M6.5 4.5 10 8l-3.5 3.5'
-        }
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
 }
 
 /** 剩余额度条：数值与进度条同行，弧长随剩余比例变化。 */
@@ -422,6 +412,36 @@ function AccountBody({
   );
 }
 
+/** 账户身份与来源：收起时与名称组成两行，展开时仍在额度区顶部。 */
+function AccountIdentity({ account }: { account: AccountState }) {
+  return (
+    <>
+      {account.identityHint ? (
+        <>
+          <span className={styles.accountHint} title={account.identityHint}>
+            {account.identityHint}
+          </span>
+          <span className={styles.metaDot} aria-hidden="true">
+            ·
+          </span>
+        </>
+      ) : null}
+      <span>{sourceLabel(account)}</span>
+      {account.authState === 'needs-reauth' ? (
+        <>
+          <span className={styles.metaDot} aria-hidden="true">
+            ·
+          </span>
+          <span className={styles.authStatus} data-state="needs-reauth">
+            <span className={styles.authDot} aria-hidden="true" />
+            需要重新授权
+          </span>
+        </>
+      ) : null}
+    </>
+  );
+}
+
 function AccountPanel({
   account,
   open,
@@ -462,12 +482,19 @@ function AccountPanel({
           aria-expanded={open}
           aria-controls={bodyId}
         >
-          <span className={styles.quotaAccountIdentity}>
-            <span className={styles.quotaAccountName}>
-              {account.displayName}
+          <span className={styles.quotaAccountInfo}>
+            <span className={styles.quotaAccountIdentity}>
+              <span className={styles.quotaAccountName}>
+                {account.displayName}
+              </span>
+              {tier ? (
+                <span className={styles.planTier}>{planTierLabel(tier)}</span>
+              ) : null}
             </span>
-            {tier ? (
-              <span className={styles.planTier}>{planTierLabel(tier)}</span>
+            {!open ? (
+              <span className={styles.quotaAccountMeta}>
+                <AccountIdentity account={account} />
+              </span>
             ) : null}
           </span>
           {!open ? <span className={styles.quotaSummary}>{summary}</span> : null}
@@ -527,34 +554,7 @@ function AccountPanel({
           >
             <div className={styles.quotaBodyInner}>
               <p className={styles.quotaAccountMeta}>
-                {account.identityHint ? (
-                  <span
-                    className={styles.accountHint}
-                    title={account.identityHint}
-                  >
-                    {account.identityHint}
-                  </span>
-                ) : null}
-                {account.identityHint ? (
-                  <span className={styles.metaDot} aria-hidden="true">
-                    ·
-                  </span>
-                ) : null}
-                <span>{sourceLabel(account)}</span>
-                {account.authState === 'needs-reauth' ? (
-                  <>
-                    <span className={styles.metaDot} aria-hidden="true">
-                      ·
-                    </span>
-                    <span
-                      className={styles.authStatus}
-                      data-state="needs-reauth"
-                    >
-                      <span className={styles.authDot} aria-hidden="true" />
-                      需要重新授权
-                    </span>
-                  </>
-                ) : null}
+                <AccountIdentity account={account} />
               </p>
               <AccountBody
                 account={account}
@@ -637,38 +637,78 @@ function PlatformBoard({
 
 export default function OverviewPanel({ desktop }: { desktop: boolean }) {
   const { state, ready, refresh } = useAppState();
+  const [tab, setTab] = useState<OverviewTab>('subscription');
   const threshold = state.preferences.lowQuotaThreshold;
   const lowOn = state.preferences.lowQuotaEnabled;
   const groups = groupAccountsByPlatform(state.accounts);
 
   return (
     <section>
-      <div className={styles.overviewStack}>
-        {state.accounts.length === 0 ? (
-          <div className={styles.overviewEmpty}>
-            <span className={styles.emptyGlyph} aria-hidden="true">
-              <Gauge size={24} weight="duotone" />
-            </span>
-            <h2 className={styles.emptyTitle}>还没有可查看的额度</h2>
-            <p className={styles.usageNote}>
-              在“账户”页接入账户后，这里会显示每个账户的剩余额度、周期与重置时间。
-            </p>
-          </div>
-        ) : (
-          groups.map((group) => (
-            <PlatformBoard
-              key={group.platform}
-              platform={group.platform}
-              accounts={group.accounts}
-              desktop={desktop}
-              threshold={threshold}
-              lowQuotaEnabled={lowOn}
-              refresh={refresh}
-              ready={ready}
-            />
-          ))
-        )}
+      <div
+        className={styles.overviewTabs}
+        role="tablist"
+        aria-label="总览类别"
+      >
+        {OVERVIEW_TABS.map(({ key, label, Icon }) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            id={`overview-tab-${key}`}
+            aria-selected={tab === key}
+            aria-controls={`overview-panel-${key}`}
+            className={styles.overviewTab}
+            data-active={tab === key || undefined}
+            onClick={() => setTab(key)}
+          >
+            <Icon size={15} aria-hidden />
+            {label}
+          </button>
+        ))}
       </div>
+
+      {tab === 'subscription' ? (
+        <div
+          id="overview-panel-subscription"
+          role="tabpanel"
+          aria-labelledby="overview-tab-subscription"
+        >
+          <div className={styles.overviewStack}>
+            {state.accounts.length === 0 ? (
+              <div className={styles.overviewEmpty}>
+                <span className={styles.emptyGlyph} aria-hidden="true">
+                  <Gauge size={24} weight="duotone" />
+                </span>
+                <h2 className={styles.emptyTitle}>还没有可查看的订阅额度</h2>
+                <p className={styles.usageNote}>
+                  在“账户”页接入账户后，这里会显示每个账户的剩余额度、周期与重置时间。
+                </p>
+              </div>
+            ) : (
+              groups.map((group) => (
+                <PlatformBoard
+                  key={group.platform}
+                  platform={group.platform}
+                  accounts={group.accounts}
+                  desktop={desktop}
+                  threshold={threshold}
+                  lowQuotaEnabled={lowOn}
+                  refresh={refresh}
+                  ready={ready}
+                />
+              ))
+            )}
+          </div>
+        </div>
+      ) : (
+        <div
+          id="overview-panel-relay"
+          role="tabpanel"
+          aria-labelledby="overview-tab-relay"
+        >
+          <RelayQuotaBoard desktop={desktop} />
+        </div>
+      )}
     </section>
   );
 }

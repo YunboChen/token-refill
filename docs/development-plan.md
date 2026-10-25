@@ -216,3 +216,5 @@
 2026-10-23 Windows 产物调整为免安装单文件 exe（`--no-bundle`）与 NSIS 安装器（`--bundles nsis`），不再产出 MSI。本机验证：免安装 exe 10.1 MiB、可正常启动；NSIS 安装器 2.48 MiB。CI 的 `build-windows` job 用 `tauri-action` 创建 draft Release 并上传安装器，再用 `softprops/action-gh-release@v3` 追加免安装 exe；workflow 通过 actionlint，尚未在 GitHub Actions 实际运行。安装、卸载与升级验收仍未完成。
 
 2026-10-23 实现版本检查：新增 `check_for_update` 命令（Rust 侧用 ureq + rustls 请求 GitHub Releases `/releases/latest`，8 秒超时，semver 比较），设置页新增“版本”区块，自动查询并在有新版本时提供“前往下载”；只检查，不下载、不安装。验证：5 项单元测试覆盖版本比较、预发布/草稿与异常 tag；真实接口在无正式版本时返回 404 并映射为“发布仓库暂无正式版本”；临时指向其他公开仓库验证了“发现新版本”界面与按钮（已还原）。`cargo test` 52 项通过，`tsc --noEmit` 与 `vite build` 通过。
+
+2026-10-25 拆分中转站功能：总览新增「订阅账户额度 / 中转站账户额度」标签栏，中转站额度沿用单列额度卡并支持单独刷新；原“中转站”页收敛为“中转站账户管理”，只负责添加、扫描、刷新、补充访问令牌与移除。新增 `RelayProvider` 在总览与管理页之间共享账户状态，首次进入任一入口时才扫描本地配置，避免应用启动时额外查询，也避免两个页面各自扫描导致状态不同步。验证：`pnpm typecheck` 与 `pnpm build` 通过；在运行中的桌面应用内切换两个总览标签页与管理页，确认账户、额度与凭证状态一致。

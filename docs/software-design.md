@@ -15,8 +15,8 @@
 
 | 层次 | 现状 | 位置 |
 | --- | --- | --- |
-| 前端界面 | 总览、账户、中转站、设置四页；读取统一状态并订阅变更事件 | `src/panels/` |
-| 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences`、账户授权/改名/移除命令、中转站查询/刷新/移除/访问令牌命令与 `app-state-changed`、`account-login-changed` 事件 | `src/lib/desktop.ts`、`src/lib/store.tsx` |
+| 前端界面 | 总览（订阅账户额度 / 中转站账户额度）、账户、中转站账户管理、设置四页；读取统一状态并订阅变更事件 | `src/panels/` |
+| 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences`、账户授权/改名/移除命令、中转站查询/刷新/移除/访问令牌命令与 `app-state-changed`、`account-login-changed` 事件；中转站账户由 `RelayProvider` 在总览与管理页之间共享 | `src/lib/desktop.ts`、`src/lib/store.tsx`、`src/lib/relay.tsx` |
 | 本地后端 | Rust 状态存储、后台刷新调度、Codex/百炼/OpenCode Go/Command Code/Antigravity 适配器、中转网关密钥额度适配器、中转站凭证存储与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/bailian.rs`、`src-tauri/src/opencode.rs`、`src-tauri/src/commandcode.rs`、`src-tauri/src/antigravity.rs`、`src-tauri/src/quota/`、`src-tauri/src/relay.rs`、`src-tauri/src/discovery.rs` |
 | 桌面配置 | 窗口、构建、安全策略及打包配置 | `src-tauri/tauri.conf.json` |
 | 权限声明 | 窗口权限与事件监听权限 | `src-tauri/capabilities/` |
@@ -112,7 +112,7 @@ Codex 与百炼两类套餐均已完成真实读取验证，百炼的协议与�
 
 ### 4.4 中转网关密钥额度适配器
 
-Rust 侧实现两类中转平台适配器，代码在 `src-tauri/src/quota/`（`newapi.rs`、`sub2api.rs`），并在“中转站”页提供自动识别与手动输入两种入口。识别时依次请求 New API 与 Sub2API 的额度接口，成功即确定平台类型；都失败时只返回来源与原因，不回显密钥或响应正文。
+Rust 侧实现两类中转平台适配器，代码在 `src-tauri/src/quota/`（`newapi.rs`、`sub2api.rs`），并在“中转站账户管理”页提供自动识别与手动输入两种入口，额度在总览的「中转站账户额度」标签页展示。识别时依次请求 New API 与 Sub2API 的额度接口，成功即确定平台类型；都失败时只返回来源与原因，不回显密钥或响应正文。
 
 - **New API（密钥口径）**：`GET /api/usage/token/`（Bearer）返回 `total_granted` / `total_used` / `total_available` / `unlimited_quota` / `expires_at`；额度单位为平台内部 quota，用公开接口 `GET /api/status` 的 `data.quota_per_unit` 换算，取不到时按上游默认 `500000` 兜底。密钥开启 `allow_user_quota_query`（面板文案「允许查询用户额度」，New API ≥ v1.0.0-rc.45）时，响应还会带上 `user_quota.total_available` / `total_used`。部分站点（例如部分二开站点）会直接返回 `quota_scope: "account"`，此时 `total_*` 是账户口径；若同时带 `display`（已按币种换算的 `remaining` / `used` / `total` / `unit`），优先使用 `display`。这种响应即使 `unlimited_quota=true` 也视为拿到了账户余额，不再按“无限额密钥”丢弃。币种从 `display.unit` 或 `/api/status.quota_display_type` 读取，界面按 USD / CNY 显示对应符号。两者都没有时只显示密钥额度，并给出对应的版本提示。
 - **New API（访问令牌口径）**：用户可选填访问令牌。新版为 scoped PAT（New API ≥ v1.0.0-rc.41，令牌以 `nap_` 开头）；旧版/部分站点仍使用个人设置里的单个系统访问令牌。旧版单令牌必须同时填写用户 ID，应用按 `New-Api-User: <用户 ID>` 发送；新版会忽略该头。`GET /api/user/self` 读取 `quota`（钱包剩余）与 `used_quota`（累计已用），需要 `profile:read`；`GET /api/subscription/self` 读取生效中的订阅，需要 `wallet:read`，接口不存在或失败时只返回空订阅窗口，不影响账户余额。密钥已经返回账户额度时不再请求访问令牌；否则优先使用令牌，失败时把原因记录在 `accountError`。
@@ -122,7 +122,7 @@ Rust 侧实现两类中转平台适配器，代码在 `src-tauri/src/quota/`（`
 
 - 手动填写的服务地址、API Key、New API 访问令牌与用户 ID 保存在 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 的按用户 ACL），先写临时文件再原子替换。凭证只在 Rust 侧读取，不进入前端状态、事件、日志或错误消息。
 - 从 Claude Code / Codex 配置扫描到的密钥只在本次运行的内存中使用，不复制到应用目录；这些条目每次启动重新扫描。界面用「凭证已保存 / 凭证仅本次运行」区分两类条目。
-- 打开“中转站”页会先加载已保存条目及上次成功快照，再扫描本地配置；已保存条目按需刷新，刷新失败保留旧快照并记录脱敏错误。移除条目会删除对应的 `relay-profiles/<relayId>/` 目录。
+- 打开“中转站账户管理”页，或切到总览的「中转站账户额度」标签页时，会先加载已保存条目及上次成功快照，再扫描本地配置；应用启动但未进入这两个入口时不会额外扫描或查询中转站。两处共用同一份前端状态，添加、刷新、补充令牌或移除后立即同步。已保存条目按需刷新，刷新失败保留旧快照并记录脱敏错误。移除条目会删除对应的 `relay-profiles/<relayId>/` 目录。
 - 访问令牌只对 New API 生效；Sub2API 账户不接受或保存访问令牌。
 
 New API 二开兼容策略（响应字段不是上游协议的一部分，按“可缺省、可别名、未知即忽略”解析）：
@@ -251,8 +251,9 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | 页面或区域 | 已确认内容方向 | 主要操作 |
 | --- | --- | --- |
 | 菜单栏弹窗 | 可区分账户的紧凑套餐列表、关键周期额度、重置信息、更新时间及异常提示 | 单账户刷新、全部刷新、打开管理窗口、退出 |
-| 管理窗口：总览 | 按账户与套餐展示完整额度周期，不合并不同计量口径的数据 | 刷新、进入对应账户 |
+| 管理窗口：总览 | 顶部在「订阅账户额度」与「中转站账户额度」间切换；分别按账户与套餐展示完整额度周期，不合并不同计量口径的数据 | 刷新；中转站额度只读展示，管理入口在中转站页 |
 | 管理窗口：账户 | 已接入账户、授权状态、关联套餐 | 添加、改显示名称、重新授权、移除 |
+| 管理窗口：中转站账户管理 | 中转站服务地址、来源、平台、凭证保存状态与访问令牌配置；额度详情移至总览 | 添加、扫描本地配置、刷新、补充访问令牌、移除 |
 | 管理窗口：设置 | 刷新间隔、提醒及阈值、自启开关 | 保存设置、解释权限与不可用状态 |
 
 建议账户移除仅影响本应用账户记录及其自有凭证、缓存和提醒状态，不删除源工具配置或默认执行平台全局注销。实际移除范围须在详细设计中列清并获确认。
