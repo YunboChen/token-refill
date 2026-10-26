@@ -433,6 +433,14 @@ pub fn find_codex_binary() -> Result<PathBuf, UsageError> {
     ))
 }
 
+/// 本机是否存在可用的 Codex 客户端（独立 CLI 或桌面端内置 CLI）。
+///
+/// `CODEX_BIN` 显式配置错误时仍返回 true：那属于用户可修正的配置问题，
+/// 界面应展示具体错误，而不是把账户静默隐藏。
+pub fn local_available() -> bool {
+    find_codex_binary().is_ok() || std::env::var_os("CODEX_BIN").is_some()
+}
+
 /// 桌面端使用的 CLI 路径变量；只接受真实可执行的文件。
 fn codex_cli_path_hint() -> Option<PathBuf> {
     std::env::var_os("CODEX_CLI_PATH")
