@@ -23,7 +23,7 @@
 
 现有调用链为：前端启动 → 订阅 `app-state-changed` → `get_app_state` 取缓存快照 → Rust 调度器按间隔或手动请求查询 Codex app-server → 状态落盘并广播。
 
-账户分两类：本机账户沿用现有登录态；独立账户在应用数据目录的 `codex-profiles/<accountId>/` 下拥有独立 `CODEX_HOME`。每次查询会在同一 app-server 会话中先读取 `account/read` 获取脱敏邮箱与套餐档位，再读取额度；即使额度请求失败（如网络异常），只要身份读取成功，账户页仍能显示当前登录账号，身份读取本身失败则保留原值，不误清空。添加或重新授权时，Rust 启动该目录下的 app-server，调用官方 `account/login/start` 取得浏览器授权 URL，等待 `account/login/completed` 后读取身份与额度。登录令牌由 Codex CLI 写入隔离目录，应用不解析、不复制、不向前端返回；`account-login-changed` 仅携带流程标识、账户标识、状态和脱敏错误。
+账户分两类：本机账户沿用现有登录态；独立账户在应用数据目录的 `codex-profiles/<accountId>/` 下拥有独立 `CODEX_HOME`。启动加载状态时按本机是否存在 Codex 客户端（独立 CLI 或桌面端内置 CLI）校正本机账户：客户端不存在则移除占位账户，存在但状态里缺少时补回。未安装 Codex 的用户因此不会看到必然失败的账户，调度器也不会反复查询；卸载后重新安装会在下次启动恢复。客户端存在但未登录时仍保留账户并展示授权错误，便于用户完成登录。每次查询会在同一 app-server 会话中先读取 `account/read` 获取脱敏邮箱与套餐档位，再读取额度；即使额度请求失败（如网络异常），只要身份读取成功，账户页仍能显示当前登录账号，身份读取本身失败则保留原值，不误清空。添加或重新授权时，Rust 启动该目录下的 app-server，调用官方 `account/login/start` 取得浏览器授权 URL，等待 `account/login/completed` 后读取身份与额度。登录令牌由 Codex CLI 写入隔离目录，应用不解析、不复制、不向前端返回；`account-login-changed` 仅携带流程标识、账户标识、状态和脱敏错误。
 
 百炼账户属于独立授权账户：Rust 在 `127.0.0.1` 随机端口启动一次性回调服务，打开官方控制台登录页；浏览器把控制台 `access_token` 回传到该地址，`state` 校验通过后才写入 `bailian-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600）。一个百炼账户下有两个产品：Token Plan 与 Coding Plan。每次刷新顺序请求两类额度接口，任一失败只影响对应产品并保留其上次成功快照；两者都判定会话失效时才把账户标为需要重新授权。令牌不进入 `PersistedState`、IPC 返回值、事件或日志；移除账户会删除该目录。
 
@@ -59,7 +59,7 @@ Antigravity 是本机账户：应用只调用 `agy -p /usage --output-format jso
 
 Windows 兼容层已落地，变化集中在四处，业务状态模型不变：
 
-- Codex CLI 查找按平台区分候选名（`codex` 与 `codex.exe` / `.cmd` / `.bat` / `.com`）、可执行判定与常见安装目录，覆盖 npm、pnpm、Volta、Bun、Scoop、nvm-windows、fnm 及官方安装包。
+- Codex CLI 查找按平台区分候选名（`codex` 与 `codex.exe` / `.cmd` / `.bat` / `.com`）、可执行判定与常见安装目录，覆盖 npm、pnpm、Volta、Bun、Scoop、nvm-windows、fnm 及官方安装包。Codex 桌面端（ChatGPT.app / Codex 桌面应用）自带的 CLI 排在查找链最后：macOS 探测 `Contents/Resources/codex-cli/bin`，Windows 探测安装目录的 `resources\codex-cli\bin` 与 Microsoft Store 的 `WindowsApps\OpenAI.Codex_*`；桌面端与独立 CLI 共用登录态，只装桌面端也能查询本机额度，但仍通过官方 `app-server --stdio` 读取，不解析桌面端内部状态文件。
 - 授权链接在 Windows 上交给 `ShellExecuteW`，避免 `cmd /C start` 把 URL 查询串里的 `&` 当作命令分隔符。
 - 数据继续写入 `app_data_dir()`（Windows 为 `%APPDATA%\<identifier>`）；Unix 权限位保持不变，Windows 依赖该目录的按用户 ACL。
 - 窗口在 Windows 使用系统标题栏；前端读取 `get_app_info().platform` 后收窄侧栏顶部留白。
