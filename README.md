@@ -175,7 +175,11 @@ public/               浏览器标签图标、Web manifest
 
 4. 发布完成后把 `main` 合回 `dev`，让两边版本号保持一致。
 
-`prepare` job 会对比这次推送前后的 `src-tauri/tauri.conf.json` 版本号：**只有版本号变化才继续构建**，版本未变时其余 job 全部跳过，不会重复生成或上传产物。也可以显式发版：推送 `v*` tag，或在 Actions 页面手动触发 `release`（手动触发不比较版本，总是构建）。
+`main` 分支推送带 `paths` 过滤：只有 `src-tauri/tauri.conf.json` 被改动的推送才会启动 `release` workflow（提升版本号必然改这个文件），普通代码提交不再产生空的 Actions 记录；tag 推送不受该过滤影响。启动后 `prepare` job 会对比这次推送前后的 `src-tauri/tauri.conf.json` 版本号：**只有版本号变化才继续构建**，版本未变时其余 job 全部跳过，不会重复生成或上传产物。也可以显式发版：推送 `v*` tag，或在 Actions 页面**从 `main`** 手动触发 `release`（手动触发不比较版本，总是构建；在其他分支上触发会直接报错，测试构建请用 `build-test`）。`prepare` 还会拒绝低于已发布版本的版本号——`releases/latest` 按发布时间选取，重发旧版本会让用户被更新回旧版。
+
+合并前的检查由 [.github/workflows/ci.yml](./.github/workflows/ci.yml) 承担：PR 与推送到 `main` / `dev` 时，在 macOS 上跑 `pnpm build`、`cargo fmt --check`、`clippy -D warnings` 与 `cargo test`，并在 Windows 上跑 `pnpm test:rust` 覆盖 Windows 专属分支。`main` 的分支保护要求 `ci / check` 与 `ci / check (windows)` 通过（不要求 review）；版本号三处一致仍只在 release 的 `check` 里校验。依赖与 action 版本由 `.github/dependabot.yml` 每周检查。
+
+改 workflow 文件时由独立的 `lint-workflows` workflow 用 [actionlint](https://github.com/rhysd/actionlint) 做静态检查（只监听 `.github/workflows/**` 的推送与 PR，不构建、不发版）：表达式、`needs` 引用、action 输入这类只在运行时才暴露的问题能在提交阶段被发现。本地也可以直接跑 `actionlint`。
 
 构建流程：先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS arm64 / x64 与 Windows x64 产物：macOS 用 `cargo tauri` + ad-hoc 签名，并额外生成 `.app.tar.gz` 更新包；Windows 用 MSVC 工具链，先跑 `pnpm test:rust`，再执行一次 `pnpm tauri build --bundles nsis --config <临时配置文件>`（Windows 的 PowerShell 会吞掉内联 JSON 的双引号，CI 把 `{"bundle":{"createUpdaterArtifacts":true}}` 写到临时文件后传入），同时得到免安装 exe、NSIS 安装器与安装器的 `.exe.sig` 更新签名。所有产物都挂到同一个 **Release**（tag 为 `v<版本号>`）并直接发布，没有草稿确认环节；推送到 `main` 前请自行确认版本号与产物。`tauri.conf.json` / `package.json` / `Cargo.toml` 三处版本不一致时构建直接失败；tag 推送还会校验 tag 与版本号一致。
 
@@ -230,7 +234,7 @@ Windows 的免安装 exe 与 NSIS 安装器由 `build-windows` job 用 MSVC 工�
 
 开机自启已接入系统登录项：默认关闭，开关只反映系统实际状态；写入失败会如实报错且不改本地状态，启动时以系统登录项为准回写偏好。
 
-低额度、授权失效与重置提醒已接入系统通知：低额度在剩余比例低于设置阈值时发送，同一重置周期只提醒一次；授权失效只在状态从正常跃迁到失效时提醒一次，重复查询与应用重启都不会重复；重置提醒默认关闭，只有查询结果同时确认旧周期结束和新周期开始时才发送，不根据本地倒计时推断。去重记录随状态持久化，设置页提供测试通知入口。系统通知是否展示仍由系统通知设置控制，桌面端没有应用内授权弹窗。
+低额度、授权失效与重置提醒已接入系统通知：低额度在剩余比例低于设置阈值时发送，同一重置周期只提醒一次；授权失效只在状态从正常跃迁到失效时提醒一次，重复查询与应用重启都不会重复；重置提醒默认关闭，只有查询结果同时确认旧周期结束和新周期开始时才发送，不根据本地倒计时推断。去重记录随状态持久化，设置页提供测试通知入口。macOS 侧改用 `UNUserNotificationCenter`：启动时申请一次系统通知授权，应用位于前台时也会弹出横幅；权限被拒绝或尚未允许时，设置页会给出可直接处理的提示。通知是否展示仍受系统通知设置控制。
 
 设置页的“版本”区块会读取 GitHub Releases 的最新正式版本并与当前版本比较：有新版本时显示版本号；安装版可以点“下载更新”查看进度，下载完成后再点“重启并安装”，两步都由用户显式触发。macOS 用 `.app.tar.gz` 原地替换并重启；Windows 只支持 NSIS 安装版，免安装单文件 exe 会提示前往发布页手动替换。更新包通过 minisign 签名校验后才会安装，安装期间应用会退出并重启。首个带更新器的版本（0.2.3 起）仍需从发布页手动安装一次，之后才能应用内更新。应用启动时也会静默检查一次（只检查，不下载），发现新版本时在侧栏底部版本号旁提示；运行期间每 6 小时自动复查，窗口重新获得焦点时（距上次检查超过 1 小时）也会复查，检查失败后 30 分钟静默重试，避免长时间驻留时错过新版本。百炼账户不做版本或订阅档位的额外推断：Token Plan 只展示平台返回的月度比例与重置时间，Coding Plan 额外保留调用次数与三个窗口。请求只包含固定 User-Agent，不携带账户或本机数据。设置页重复进入复用已有结果，手动点击“检查更新”会重新查询；离线、无正式版本或接口限流时会显示对应提示。macOS 产物仍是 ad-hoc 签名，替换后系统可能重新询问通知权限或开机自启，这是当前签名方式的限制。
 

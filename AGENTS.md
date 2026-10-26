@@ -60,7 +60,7 @@
 ## 5. 版本与发布
 
 - 三处版本必须一致：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`；改 `Cargo.toml` 后同步 `Cargo.lock`。CI 会校验，不一致直接失败。
-- 发布由 `.github/workflows/release.yml` 完成，触发条件：`main` 分支推送且版本号变化、`v*` tag 推送、手动触发。版本未变化时跳过全部构建。
+- 发布由 `.github/workflows/release.yml` 完成，触发条件：`main` 分支推送且版本号变化、`v*` tag 推送、手动触发。`main` 推送带 `paths` 过滤，只有 `src-tauri/tauri.conf.json` 变更才启动 workflow（提升版本号必然改这个文件），版本未变化时仍跳过全部构建；不要为「省一次 Actions 记录」移除该过滤，否则普通提交会重新产生空跑记录。
 - 发布只走 `main`：发布相关改动从 `main` 切出分支，PR 到 `main` 并合并，然后**在 `main` 上**提升版本号再推送。不要把 `dev` 整体合并或快进到 `main`——`dev` 只承载日常集成，未完成或未验证的功能不得随发版进入发布分支。发版后把 `main` 合回 `dev`，保持版本号一致。
 - 两个平台并行构建，产物上传到同一个 Release（tag `v<版本号>`）：
   - macOS：`Token.Refill_<版本>_arm64.dmg` / `Token.Refill_<版本>_x64.dmg`，以及应用内更新用的 `.app.tar.gz` 与 `.sig`
@@ -82,6 +82,7 @@
 - Windows 本机必须使用 MSVC 工具链；`tauri dev` 启动的 `cargo run` 不采纳 `RUSTUP_TOOLCHAIN` 环境变量，需用 `rustup default` 或目录级 override。
 - 行为改动要配套测试；依赖 Python 的假 `codex app-server` 端到端用例只在 Unix 运行（`#[cfg(unix)]`），Windows 专属分支需要平台内测试。
 - 更新链路无法用单元测试覆盖的部分（签名校验、`.app` 替换、NSIS 静默安装）必须在两个平台用真实 Release 验证：安装旧版本 → 检查 → 下载 → 重启安装 → 确认版本、数据目录与权限状态。
+- 改动 `.github/workflows/**` 时由 `lint-workflows.yml` 用 actionlint 做静态检查（固定版本 1.7.12 + sha256 校验，只读权限，不构建不发版）；本地改完也应跑一次 `actionlint`，且本机需装 `shellcheck`（否则 CI 的 shellcheck 报错在本地复现不出来），不要靠「下次发版」验证。
 - 提交信息使用 Conventional Commits（类型: 中文描述），不添加无关的 `Co-Authored-By`。
 - 不提交 `node_modules/`、`dist/`、`src-tauri/target/`、生成物或本机状态文件。
 - 改动影响范围、限制或使用方式时，同步更新 README 与 `docs/`（requirements / software-design / development-plan / windows-support）。

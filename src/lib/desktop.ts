@@ -203,7 +203,7 @@ export function setAutoLaunch(enabled: boolean): Promise<AppState> {
   return invoke<AppState>('set_auto_launch', { enabled });
 }
 
-/** 设置页的显式测试入口；桌面端没有应用内通知授权弹窗。 */
+/** 设置页的显式测试入口；失败时返回可直接展示的原因（如通知权限被拒绝）。 */
 export function sendTestNotification(): Promise<void> {
   return invoke<void>('send_test_notification');
 }

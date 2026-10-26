@@ -176,7 +176,7 @@ jobs:
           unzip -q "$RUNNER_TEMP/cargo-tauri.zip" -d "$RUNNER_TEMP/cargo-tauri"
           bin=$(find "$RUNNER_TEMP/cargo-tauri" -type f -name cargo-tauri | head -1)
           chmod +x "$bin"
-          echo "$(dirname "$bin")" >> "$GITHUB_PATH"
+          dirname "$bin" >> "$GITHUB_PATH"
 
       - name: Build dmg
         shell: bash
@@ -184,7 +184,7 @@ jobs:
           label="${{ needs.meta.outputs.label }}"
           cargo tauri build --target "${{ matrix.target }}" --bundles dmg
           mkdir -p output
-          dmg=$(ls src-tauri/target/"${{ matrix.target }}"/release/bundle/dmg/*.dmg 2>/dev/null | head -1) || true
+          dmg=$(find "src-tauri/target/${{ matrix.target }}/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' 2>/dev/null | head -1) || true
           if [ -z "$dmg" ]; then
             echo "::error::dmg not found"
             exit 1

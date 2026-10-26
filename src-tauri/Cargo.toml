@@ -1,6 +1,6 @@
 [package]
 name = "token-refill"
-version = "0.2.3"
+version = "0.2.4"
 license = "MIT"
 description = "A local desktop companion for AI subscription usage"
 edition = "2021"
@@ -20,7 +20,7 @@ semver = "1"
 # 跟随系统代理时 ALL_PROXY 可能是 socks5://；未开启该特性时 ureq 遇到
 # 手动配置的 SOCKS 代理会直接 panic，而不是回退直连。
 ureq = { version = "3.5", features = ["socks-proxy"] }
-getrandom = "0.3"
+getrandom = "0.4"
 url = "2"
 # Sub2API 的时间字段是 RFC 3339（Go time.Time），统一解析为 Unix 秒。
 time = { version = "0.3", features = ["parsing"] }
@@ -31,6 +31,14 @@ tauri-plugin-autostart = "2.7.0"
 tauri-plugin-single-instance = "2.5.4"
 # 应用内更新：用 minisign 校验更新包，安装由 install 显式触发。
 tauri-plugin-updater = "2"
+
+# 系统通知走 UNUserNotificationCenter：旧 NSUserNotification 已废弃，
+# 且应用在前台时不会弹出横幅。
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-user-notifications = "0.3"
 
 # 打开授权链接直接调 ShellExecuteW，避免经 cmd.exe 解析 URL 里的 & 等字符。
 [target.'cfg(windows)'.dependencies]
