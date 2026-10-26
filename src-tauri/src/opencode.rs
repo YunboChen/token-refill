@@ -232,6 +232,7 @@ fn run_cli(binary: &Path, args: &[&str]) -> Result<ProcessOutput, ProviderError>
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     crate::cli::apply_child_path(&mut command, binary);
+    crate::cli::apply_no_window(&mut command);
     crate::proxy::apply_to_command(&mut command);
 
     let mut child = command

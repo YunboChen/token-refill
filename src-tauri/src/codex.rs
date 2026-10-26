@@ -597,6 +597,7 @@ impl AppServer {
             command.env("CODEX_HOME", codex_home);
         }
         crate::cli::apply_child_path(&mut command, binary);
+        crate::cli::apply_no_window(&mut command);
         crate::proxy::apply_to_command(&mut command);
         let mut child = command.spawn().map_err(io_error)?;
 
