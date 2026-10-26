@@ -58,6 +58,7 @@
 
 - 三处版本必须一致：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`；改 `Cargo.toml` 后同步 `Cargo.lock`。CI 会校验，不一致直接失败。
 - 发布由 `.github/workflows/release.yml` 完成，触发条件：`main` 分支推送且版本号变化、`v*` tag 推送、手动触发。版本未变化时跳过全部构建。
+- 发布只走 `main`：发布相关改动从 `main` 切出分支，PR 到 `main` 并合并，然后**在 `main` 上**提升版本号再推送。不要把 `dev` 整体合并或快进到 `main`——`dev` 只承载日常集成，未完成或未验证的功能不得随发版进入发布分支。发版后把 `main` 合回 `dev`，保持版本号一致。
 - 两个平台并行构建，产物上传到同一个 Release（tag `v<版本号>`）：
   - macOS：`Token.Refill_<版本>_arm64.dmg` 与 `Token.Refill_<版本>_x64.dmg`
   - Windows：`Token.Refill_<版本>_x64.exe`（便携）+ `Token Refill_<版本>_x64-setup.exe`（NSIS）
