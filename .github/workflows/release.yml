@@ -220,7 +220,7 @@ jobs:
           unzip -q "$RUNNER_TEMP/cargo-tauri.zip" -d "$RUNNER_TEMP/cargo-tauri"
           bin=$(find "$RUNNER_TEMP/cargo-tauri" -type f -name cargo-tauri | head -1)
           chmod +x "$bin"
-          echo "$(dirname "$bin")" >> "$GITHUB_PATH"
+          dirname "$bin" >> "$GITHUB_PATH"
 
       # 用 cargo tauri 而不是 pnpm tauri，见上面 tauri#15315 的说明。
       # 同时产出 dmg 与 updater 用的 .app.tar.gz：后者由应用内更新下载并替换 .app。
@@ -235,14 +235,14 @@ jobs:
           cargo tauri build --target "$target" --bundles app,dmg \
             --config '{"bundle":{"createUpdaterArtifacts":true}}'
           mkdir -p output
-          dmg=$(ls "$bundle_dir"/dmg/*.dmg 2>/dev/null | head -1) || true
+          dmg=$(find "$bundle_dir/dmg" -maxdepth 1 -type f -name '*.dmg' 2>/dev/null | head -1) || true
           if [ -z "$dmg" ]; then
             echo "::error::dmg not found"
             exit 1
           fi
           cp "$dmg" "output/Token.Refill_${version}_${label}.dmg"
 
-          archive=$(ls "$bundle_dir"/macos/*.app.tar.gz 2>/dev/null | head -1) || true
+          archive=$(find "$bundle_dir/macos" -maxdepth 1 -type f -name '*.app.tar.gz' 2>/dev/null | head -1) || true
           if [ -z "$archive" ] || [ ! -f "${archive}.sig" ]; then
             echo "::error::updater archive or signature not found"
             exit 1
