@@ -29,6 +29,14 @@
       "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost https://ipc.localhost http://127.0.0.1:5173 ws://127.0.0.1:5174; img-src 'self' asset: http://asset.localhost data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/YunboChen/token-refill/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNGQjRGNjMyOTRGMUYzM0EKUldRNjgvR1VNdmEwUDJ4MzBZendnQ0pDQlh3Z2pya0JDQWVRb05GcHp6UFFuVXErYXJOZTl4VWEK"
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

@@ -106,6 +106,8 @@ pnpm tauri build
 
 首次编译需要下载并构建 Tauri 的 Rust 依赖，耗时通常明显长于后续增量编译。
 
+本地 `pnpm tauri build` 不生成应用内更新包、也不需要更新私钥：`createUpdaterArtifacts` 只在 CI 发布时通过 `--config` 打开。需要本地验证更新包时，自行提供 `TAURI_SIGNING_PRIVATE_KEY` 并加上同样的 `--config`。
+
 `pnpm-lock.yaml` 和 `src-tauri/Cargo.lock` 应随项目提交。正式分发前需要配置自己的应用标识、代码签名与 macOS 公证；当前 `dev.tokenrefill.desktop` 仅作开发标识。
 
 ### 应用图标
@@ -152,6 +154,8 @@ public/               浏览器标签图标、Web manifest
 
 打包由 [.github/workflows/release.yml](./.github/workflows/release.yml) 在 GitHub Actions 上完成：macOS 分别提供 Apple Silicon（arm64）与 Intel（x64）的 `.dmg`，以及 Windows x64 的免安装单文件 exe 与 NSIS 安装器（`-setup.exe`）。Windows 不产出 MSI。
 
+应用内更新另需各平台的更新包与签名：macOS 的 `.app.tar.gz` 及 `.sig`，Windows 的 NSIS 安装器（同时作为更新包）及 `.exe.sig`，再加一份 `latest.json`。清单由 `publish` job 生成并和其它产物一起挂到 Release；应用从 `releases/latest/download/latest.json` 读取版本、下载地址与签名。
+
 发版步骤：
 
 1. 发布相关改动从 `main` 切出分支，PR 到 `main` 并合并。**不要把 `dev` 整体合并到 `main`**：`dev` 可能包含未完成或未验证的功能，发版不应把它们带出去。
@@ -173,7 +177,17 @@ public/               浏览器标签图标、Web manifest
 
 `prepare` job 会对比这次推送前后的 `src-tauri/tauri.conf.json` 版本号：**只有版本号变化才继续构建**，版本未变时其余 job 全部跳过，不会重复生成或上传产物。也可以显式发版：推送 `v*` tag，或在 Actions 页面手动触发 `release`（手动触发不比较版本，总是构建）。
 
-构建流程：先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS arm64 / x64 与 Windows x64 产物：macOS 用 `cargo tauri` + ad-hoc 签名；Windows 用 MSVC 工具链，先跑 `pnpm test:rust`，再执行一次 `pnpm tauri build --bundles nsis`，同时得到免安装 exe 与 NSIS 安装器。两类产物都挂到同一个 **Release**（tag 为 `v<版本号>`）并直接发布，没有草稿确认环节；推送到 `main` 前请自行确认版本号与产物。`tauri.conf.json` / `package.json` / `Cargo.toml` 三处版本不一致时构建直接失败；tag 推送还会校验 tag 与版本号一致。
+构建流程：先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS arm64 / x64 与 Windows x64 产物：macOS 用 `cargo tauri` + ad-hoc 签名，并额外生成 `.app.tar.gz` 更新包；Windows 用 MSVC 工具链，先跑 `pnpm test:rust`，再执行一次 `pnpm tauri build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'`，同时得到免安装 exe、NSIS 安装器与安装器的 `.exe.sig` 更新签名。所有产物都挂到同一个 **Release**（tag 为 `v<版本号>`）并直接发布，没有草稿确认环节；推送到 `main` 前请自行确认版本号与产物。`tauri.conf.json` / `package.json` / `Cargo.toml` 三处版本不一致时构建直接失败；tag 推送还会校验 tag 与版本号一致。
+
+### 更新签名密钥
+
+应用内更新用 minisign 校验更新包，和 Apple / Windows 代码签名互相独立。首次启用或更换发布仓库时：
+
+```sh
+cargo tauri signer generate -w ~/.tauri/token-refill.key
+```
+
+把输出的公钥填入 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`，把私钥文件内容与密码分别存为仓库 Secrets `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。私钥丢失后无法再给已发布版本推送更新，只能换公钥并让用户手动重装一次，因此务必离线备份。更新清单本身不签名，但每个更新包都由私钥签名，客户端会先校验再安装。
 
 ### 签名状态
 
@@ -205,14 +219,14 @@ Windows 的免安装 exe 与 NSIS 安装器由 `build-windows` job 用 MSVC 工�
 
 低额度、授权失效与重置提醒已接入系统通知：低额度在剩余比例低于设置阈值时发送，同一重置周期只提醒一次；授权失效只在状态从正常跃迁到失效时提醒一次，重复查询与应用重启都不会重复；重置提醒默认关闭，只有查询结果同时确认旧周期结束和新周期开始时才发送，不根据本地倒计时推断。去重记录随状态持久化，设置页提供测试通知入口。系统通知是否展示仍由系统通知设置控制，桌面端没有应用内授权弹窗。
 
-设置页的“版本”区块会读取 GitHub Releases 的最新正式版本并与当前版本比较：有新版本时显示版本号并提供“前往下载”，点击后用系统浏览器打开发布页；只检查、不下载、不自动安装。应用启动时也会静默检查一次，发现新版本时在侧栏底部版本号旁提示；运行期间每 6 小时自动复查，窗口重新获得焦点时（距上次检查超过 1 小时）也会复查，检查失败后 30 分钟静默重试，避免长时间驻留时错过新版本。百炼账户不做版本或订阅档位的额外推断：Token Plan 只展示平台返回的月度比例与重置时间，Coding Plan 额外保留调用次数与三个窗口。请求只包含固定 User-Agent，不携带账户或本机数据。设置页重复进入复用已有结果，手动点击“检查更新”会重新查询；离线、无正式版本或接口限流时会显示对应提示。
+设置页的“版本”区块会读取 GitHub Releases 的最新正式版本并与当前版本比较：有新版本时显示版本号；安装版可以点“下载更新”查看进度，下载完成后再点“重启并安装”，两步都由用户显式触发。macOS 用 `.app.tar.gz` 原地替换并重启；Windows 只支持 NSIS 安装版，免安装单文件 exe 会提示前往发布页手动替换。更新包通过 minisign 签名校验后才会安装，安装期间应用会退出并重启。首个带更新器的版本（0.2.3 起）仍需从发布页手动安装一次，之后才能应用内更新。应用启动时也会静默检查一次（只检查，不下载），发现新版本时在侧栏底部版本号旁提示；运行期间每 6 小时自动复查，窗口重新获得焦点时（距上次检查超过 1 小时）也会复查，检查失败后 30 分钟静默重试，避免长时间驻留时错过新版本。百炼账户不做版本或订阅档位的额外推断：Token Plan 只展示平台返回的月度比例与重置时间，Coding Plan 额外保留调用次数与三个窗口。请求只包含固定 User-Agent，不携带账户或本机数据。设置页重复进入复用已有结果，手动点击“检查更新”会重新查询；离线、无正式版本或接口限流时会显示对应提示。macOS 产物仍是 ad-hoc 签名，替换后系统可能重新询问通知权限或开机自启，这是当前签名方式的限制。
 
 尚未实现：
 
 - 独立账户凭证的系统级安全存储（当前使用应用数据目录的私有文件：Codex 由 CLI 维护授权文件，百炼保存控制台会话令牌）。
 - 平台限流退避参数、休眠唤醒后的补偿策略。
 - 菜单栏常驻、弹窗定位和窗口焦点策略。
-- 应用内自动下载与安装更新（当前只检查版本并跳转下载页）。
+- Windows 免安装 exe 的应用内更新（NSIS 安装版已支持）。
 - 原生 Liquid Glass 与旧系统材质回退。目前没有将 CSS 毛玻璃伪称为系统 Liquid Glass。
 
 前端不应持有账户密钥或在日志中输出凭证。后续平台请求和凭证访问优先放在 Rust / 系统层。

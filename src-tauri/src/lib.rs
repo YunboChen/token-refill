@@ -355,6 +355,8 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             None,
         ))
+        // 更新器只从 Rust 侧调用；前端没有 updater 权限，下载与安装均需显式命令。
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             fs::create_dir_all(&data_dir)?;
@@ -366,6 +368,7 @@ pub fn run() {
             app.manage(Arc::new(relay::RelayStore::load(
                 data_dir.join("relay-profiles"),
             )));
+            app.manage(update::UpdateStore::default());
 
             // 自启以系统登录项为准：启动时回写实际状态，避免本地开关与系统不一致。
             match app.autolaunch().is_enabled() {
@@ -394,6 +397,9 @@ pub fn run() {
             send_test_notification,
             set_auto_launch,
             check_for_update,
+            update::download_update,
+            update::downloaded_update_version,
+            update::install_update,
             relay_query,
             relay_set_account_token,
             relay_discover,

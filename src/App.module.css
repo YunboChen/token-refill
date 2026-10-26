@@ -1303,6 +1303,23 @@
   gap: 8px;
 }
 
+/* 更新下载进度：整行高度很薄，避免把版本区块撑高 */
+.updateProgress {
+  height: 4px;
+  margin: 0 2px 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--sunken);
+}
+
+.updateProgress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+
 .testButton[data-primary] {
   border-color: var(--accent);
   color: var(--accent);

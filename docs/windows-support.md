@@ -100,9 +100,10 @@ Windows 目标目录：
 ## 8. 打包
 
 - Windows 产物只有两种：免安装单文件 exe（`pnpm tauri build --no-bundle`）与 NSIS 安装器（`pnpm tauri build` 或 `--bundles nsis`）。`src-tauri/tauri.windows.conf.json` 把 `bundle.targets` 收窄为 `["nsis"]`，所以本地构建与 CI 都不再生成 MSI。
-- 免安装 exe 约 12 MiB（含版本检查的 TLS 依赖），前端资源已内嵌，运行依赖系统 WebView2（Win10/11 通常已预装），数据仍写入 `%APPDATA%\dev.tokenrefill.desktop\`。
-- Windows 构建由 `.github/workflows/release.yml` 的 `build-windows` job（`windows-latest`、MSVC、Node 24）完成，只在版本号变化、tag 推送或手动触发时运行：先 `pnpm test:rust`，再 `--no-bundle` 生成便携 exe，随后 `tauri-action` 用 `--bundles nsis` 生成安装器，最后用 `softprops/action-gh-release@v3` 把便携 exe 追加到同一个 Release 并直接发布（`draft: false`）。该 job 已在 GitHub Actions 实际运行通过（v0.2.0）；安装、卸载与升级验收仍未完成。
-- 代码签名与发布渠道未定：当前未配置 Authenticode 证书，两种产物都未签名，首次运行会有 SmartScreen 提示，需要在发布说明中写明。
+- 免安装 exe 约 12 MiB（含版本检查与更新器的 TLS 依赖），前端资源已内嵌，运行依赖系统 WebView2（Win10/11 通常已预装），数据仍写入 `%APPDATA%\dev.tokenrefill.desktop\`。
+- 应用内更新只面向 NSIS 安装版：CI 用 `pnpm tauri build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'` 构建，v2 updater 直接把 NSIS 安装器作为更新包，并在旁边产出 `.exe.sig`；免安装 exe 没有安装目录可交换，只保留发布页跳转。客户端通过注册表 `Software\Microsoft\Windows\CurrentVersion\Uninstall\Token Refill` 的 `InstallLocation` 与当前 exe 所在目录比对，判断是否为安装版；两处不一致或读不到时按免安装版处理。
+- Windows 构建由 `.github/workflows/release.yml` 的 `build-windows` job（`windows-latest`、MSVC、Node 24）完成，只在版本号变化、tag 推送或手动触发时运行：先 `pnpm test:rust`，再用 `pnpm tauri build --bundles nsis` 生成便携 exe、NSIS 安装器与 updater 包，最后由 `softprops/action-gh-release@v3` 统一发布。该 job 已在 GitHub Actions 实际运行通过；安装、卸载与升级验收仍未完成，尤其是 NSIS 静默安装（`/P /UPDATE`）与注册表判断需在 Windows 机器上实测。
+- 代码签名与发布渠道未定：当前未配置 Authenticode 证书，两种产物都未签名，首次运行会有 SmartScreen 提示，需要在发布说明中写明。更新包的完整性由独立的 minisign 签名保护，不依赖 Authenticode。
 - 最低 Windows 版本、架构（x64 / arm64）与实际安装验收仍待确认；当前 CI 只构建 x64。
 
 ## 9. 验证记录

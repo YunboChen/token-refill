@@ -1,8 +1,8 @@
 # Token Refill 软件设计文档
 
-- 文档版本：0.14
-- 状态：已实现 Codex、百炼、OpenCode Go、Command Code 与 Antigravity 额度查询、多账户接入、统一状态层与后台刷新调度
-- 最近更新：2026-10-23
+- 文档版本：0.15
+- 状态：已实现 Codex、百炼、OpenCode Go、Command Code 与 Antigravity 额度查询、多账户接入、统一状态层、后台刷新调度与应用内更新
+- 最近更新：2026-10-26
 - 需求来源：[需求文档](./requirements.md)
 
 ## 1. 设计边界
@@ -323,7 +323,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 - 初期方案已确认：Apple Silicon、Intel 分别提供 DMG，采用 ad-hoc 签名、暂不公证，如实说明安装限制。后续 Developer ID 签名与公证作为升级路径，不把现阶段没有证书视为需求设计或业务开发阻塞。
 - ad-hoc 的签名完整性验证不等于 Gatekeeper 放行、公证或身份认证。使用 Tauri 2 的构建打包能力适配，不复制 devup 手工组装脚本、宽泛 entitlements 或未经验证的公证分支，不提供关闭系统安全保护的常规安装方案。
 - 保留现有 macOS 12.0 配置作为兼容验证起点，不继承 devup 的 11.0 声明。两类架构必须分别验证安装启动与业务行为，不未经验证宣称支持。
-- 首版不自动加入应用内自动更新服务。若不另行确认，先规划可从发布渠道手动下载新版本，后续再讨论自动更新及其签名链。
+- 应用内更新已确认采用 Tauri 官方 updater：更新包用独立的 minisign 密钥签名，下载与安装分两步由用户确认；免安装 Windows exe 不参与原地替换，只跳转发布页。未配置 Developer ID 时更新后仍是 ad-hoc 签名，通知权限或开机自启是否重置需在实机验证。
 
 ### 9.3 全新安装与发布材料
 
@@ -337,7 +337,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 
 ## 10. IPC 与平台适配契约草案
 
-下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_discover`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`。其余仍为计划名称。
+下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_discover`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`、`download_update`、`downloaded_update_version`、`install_update`。其余仍为计划名称。
 
 ### 10.1 前端命令边界
 
@@ -355,7 +355,10 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | update_preferences | 经校验的设置变更 | 保存常规设置并协调系统操作；系统拒绝通知或自启时如实返回实际状态 | REQ-004、REQ-006、REQ-010 |
 | get_system_permissions / request_notification_permission | 读取状态或用户明确触发的权限请求 | 区分应用设置与系统许可；不在额度查询失败时反复弹出权限申请 | REQ-006、REQ-010 |
 | open_management_window / quit_app | 用户明确操作 | 窗口复用或退出清理，不能把关闭管理窗口等同于退出 | REQ-005、REQ-009 |
-| check_for_update（已实现） | 无敏感输入 | 读取 GitHub Releases 最新正式版本的版本号与发布页地址；只比较与跳转，不下载、不安装 | REQ-012 |
+| check_for_update（已实现） | 无敏感输入 | 读取 GitHub Releases 最新正式版本的版本号与发布页地址；只比较与展示，不下载、不安装 | REQ-012 |
+| download_update（已实现） | 无敏感输入，用户点击触发 | 从 `latest.json` 取最新更新包，按应用代理设置下载并校验 minisign 签名；进度通过事件推送，包暂存在内存 | REQ-012 |
+| downloaded_update_version（已实现） | 无 | 返回已下载待安装的版本号，供设置页重建状态 | REQ-012 |
+| install_update（已实现） | 无，用户点击触发 | 安装已校验的更新包：macOS 替换 `.app` 后重启，Windows 启动 NSIS 安装器并退出；免安装 exe 直接拒绝 | REQ-012 |
 
 授权输入通道必须按平台实际能力设计；不为方便而把 Keychain 内容或原始响应回传前端。若某平台需要手动输入秘密，应先设计合适的受控输入通道，而不是在普通前端状态或日志中保存。
 
@@ -365,6 +368,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 - 事件不是唯一数据来源。窗口首次打开、重连或发现版本缺口时读取完整脱敏状态，避免漏事件导致永久不同步。
 - 同一会话内忽略过期修订，应用重启后按新会话重建状态，不比较不同会话的修订号。
 - 不广播秘密、完整平台响应或账户私有路径。授权流程事件仅包含流程标识与安全的状态提示。
+- 更新下载进度使用单独的 `update-download-progress` 事件，只包含已下载字节数与可选总大小；Rust 侧按 120ms 节流，收尾补发一次完整大小。
 - 接收 IPC 时由 Rust 校验产品类型、本地标识、设置范围与允许的操作；不信任前端传入的任意 URL、路径或 shell 片段。
 
 ### 10.3 平台适配器职责
