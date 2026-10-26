@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+    # 提升版本号必然改动这个文件，所以正常发版不受影响；
+    # 普通代码提交不再产生空的 Actions 记录。paths 只作用于分支推送，
+    # tag 推送仍会触发（GitHub 不对 tag 推送计算路径过滤）。
+    paths:
+      - "src-tauri/tauri.conf.json"
     tags:
       - "v*"
   workflow_dispatch:
