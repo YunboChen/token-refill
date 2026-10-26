@@ -63,6 +63,7 @@
   - macOS：`Token.Refill_<版本>_arm64.dmg` 与 `Token.Refill_<版本>_x64.dmg`
   - Windows：`Token.Refill_<版本>_x64.exe`（便携）+ `Token.Refill_<版本>_x64-setup.exe`（NSIS）
 - Release 构建成功后直接发布（`draft: false`），不设草稿确认环节；推送 `main` 前必须自行确认版本号、产物与签名状态，发布即对用户可见。
+- 测试包走 `.github/workflows/build-test.yml`（手动触发，可选任意分支与平台），只上传 workflow artifact，不创建 Release、不打 tag、不改版本号；验证分支不必先合入 `main`，也不得用 `release.yml` 的手动触发代替测试构建。
 - 版本检查只做「比较 + 跳转发布页」，不自动下载、不替换正在运行的程序；自动更新需要签名密钥与回滚策略，属另行决策。
 
 ## 6. 开发与验证

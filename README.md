@@ -175,6 +175,17 @@ public/               浏览器标签图标、Web manifest
 
 构建流程：先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS arm64 / x64 与 Windows x64 产物：macOS 用 `cargo tauri` + ad-hoc 签名；Windows 用 MSVC 工具链，先跑 `pnpm test:rust`，再执行一次 `pnpm tauri build --bundles nsis`，同时得到免安装 exe 与 NSIS 安装器。两类产物都挂到同一个 **Release**（tag 为 `v<版本号>`）并直接发布，没有草稿确认环节；推送到 `main` 前请自行确认版本号与产物。`tauri.conf.json` / `package.json` / `Cargo.toml` 三处版本不一致时构建直接失败；tag 推送还会校验 tag 与版本号一致。
 
+### 测试版构建
+
+需要在不发版的情况下验证某个分支时，用 [.github/workflows/build-test.yml](./.github/workflows/build-test.yml)：在 Actions 页面手动触发 `build-test`，选择要构建的分支（通常是 `dev` 或特性分支），并可只构建 macOS 或 Windows。
+
+- 只产出 workflow artifact（在本次运行的 Artifacts 区下载），**不创建 Release、不打 tag**，不会覆盖已发布版本；产物保留 14 天。
+- 检查与打包步骤和正式发布一致，版本号保持当前值、不在构建时改写。
+- 产物名带短提交 SHA（如 `Token.Refill_0.2.1-f4296bf_arm64.dmg`），多个测试包下载到同一目录不会互相覆盖；应用内显示的仍是不带 SHA 的版本号，需要靠文件名区分是哪一个提交。
+- 签名状态与正式包相同：macOS ad-hoc 签名未公证、Windows 未签名，首次打开的限制见下一节。
+
+不要用 `release` workflow 的手动触发打测试包——那条路径会直接发布 Release。
+
 ### 签名状态
 
 当前未接入 Apple Developer 证书，产物是 ad-hoc 签名、未公证，其他 Mac 首次打开会提示"无法验证开发者"。可以右键 →「打开」，或先移除隔离属性：
