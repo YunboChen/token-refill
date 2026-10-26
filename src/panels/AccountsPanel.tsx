@@ -26,8 +26,9 @@ import {
 } from '../lib/platforms';
 import { planTierLabel, sourceLabel } from '../lib/format';
 import { useDialogA11y } from '../lib/useDialogA11y';
-import { useAppState } from '../lib/store';
+import { useAppState, type LoginAttempt } from '../lib/store';
 import PlatformHeading from '../components/PlatformHeading';
+import DangerToast from '../components/DangerToast';
 import styles from '../App.module.css';
 
 const AUTH_LABELS: Record<AuthState, string> = {
@@ -248,14 +249,12 @@ export default function AccountsPanel() {
     state,
     desktop,
     refresh,
-    loginError,
     beginLogin,
     beginBailianLogin,
     addApiKeyAccount,
     replaceApiKey,
     addAntigravityAccount,
     cancelLogin,
-    clearLoginError,
     renameAccount,
     removeAccount,
     openExternal,
@@ -263,7 +262,8 @@ export default function AccountsPanel() {
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [draftName, setDraftName] = useState('');
   const [draftKey, setDraftKey] = useState('');
-  const [formError, setFormError] = useState<string | null>(null);
+  // 操作失败只弹一次 toast，不占弹窗或页面的布局。
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   // 改名与移除都在弹窗里确认，提交期间锁住按钮避免重复请求。
   const [acting, setActing] = useState(false);
@@ -272,7 +272,7 @@ export default function AccountsPanel() {
   // 不再在 startAdd / startReauth 里写平台三元表达式。
   const loginCommands: Record<
     LoginPlatform,
-    (accountId?: string, displayName?: string) => Promise<LoginStart | null>
+    (accountId?: string, displayName?: string) => Promise<LoginAttempt>
   > = {
     codex: beginLogin,
     bailian: beginBailianLogin,
@@ -299,12 +299,6 @@ export default function AccountsPanel() {
       void cancelLogin(pendingLoginId);
     };
   }, [pendingLoginId, cancelLogin]);
-
-  // 授权失败只在账户页提示。进入页面时从干净的提示开始，
-  // 之前离场后才返回的失败结果不会作为旧错误显示出来。
-  useEffect(() => {
-    clearLoginError();
-  }, [clearLoginError]);
 
   // 授权在 Rust 后台线程完成；这里只接收脱敏状态并更新对话框。
   useEffect(() => {
@@ -359,11 +353,10 @@ export default function AccountsPanel() {
   const startAdd = async (platform: LoginPlatform) => {
     const attempt = startAttemptRef.current + 1;
     startAttemptRef.current = attempt;
-    // 重试时先收起上一次的失败提示，结果出来后再按需展示。
-    clearLoginError();
+    setToastMessage(null);
     setStarting(true);
     const name = draftName.trim() || undefined;
-    const start = await loginCommands[platform](undefined, name);
+    const { start, error } = await loginCommands[platform](undefined, name);
     if (attempt !== startAttemptRef.current) {
       // 弹窗在请求返回前已关闭：授权流程不该在后台继续等待。
       if (start) void cancelLogin(start.loginId);
@@ -371,7 +364,8 @@ export default function AccountsPanel() {
     }
     setStarting(false);
     if (!start) {
-      setDialog(null);
+      // 授权没能启动时弹一次 toast，添加弹窗保持打开，方便改完再试或取消。
+      setToastMessage(error ?? '授权未能启动，请稍后重试。');
       return;
     }
     setDialog({
@@ -391,12 +385,12 @@ export default function AccountsPanel() {
     dialog: Extract<DialogState, { kind: 'add-form' }>,
   ) => {
     const platform = dialog.platform;
-    setFormError(null);
+    setToastMessage(null);
 
     if (isApiKeyPlatform(platform)) {
       const key = draftKey.trim();
       if (!key) {
-        setFormError('请填写 API Key。');
+        setToastMessage('请填写 API Key。');
         return;
       }
       setStarting(true);
@@ -405,7 +399,7 @@ export default function AccountsPanel() {
           ? await replaceApiKey(dialog.accountId, key)
           : await addApiKeyAccount(platform, draftName.trim() || undefined, key);
       setStarting(false);
-      if (error) setFormError(error);
+      if (error) setToastMessage(error);
       else setDialog(null);
       return;
     }
@@ -414,7 +408,7 @@ export default function AccountsPanel() {
       setStarting(true);
       const error = await addAntigravityAccount(draftName.trim() || undefined);
       setStarting(false);
-      if (error) setFormError(error);
+      if (error) setToastMessage(error);
       else setDialog(null);
       return;
     }
@@ -430,15 +424,19 @@ export default function AccountsPanel() {
   ) => {
     const attempt = startAttemptRef.current + 1;
     startAttemptRef.current = attempt;
-    clearLoginError();
+    setToastMessage(null);
     setStarting(true);
-    const start = await loginCommands[platform](accountId);
+    const { start, error } = await loginCommands[platform](accountId);
     if (attempt !== startAttemptRef.current) {
       if (start) void cancelLogin(start.loginId);
       return;
     }
     setStarting(false);
-    if (!start) return;
+    if (!start) {
+      // 重新授权没有前置弹窗，失败原因用 toast 提示，不落到页面或空弹窗上。
+      setToastMessage(error ?? '授权未能启动，请稍后重试。');
+      return;
+    }
     setDialog({
       kind: 'login',
       platform,
@@ -457,7 +455,7 @@ export default function AccountsPanel() {
     if (isApiKeyPlatform(account.platform)) {
       setDraftName('');
       setDraftKey('');
-      setFormError(null);
+      setToastMessage(null);
       setDialog({
         kind: 'add-form',
         platform: account.platform,
@@ -526,7 +524,7 @@ export default function AccountsPanel() {
     captureTrigger(trigger);
     setDraftName('');
     setDraftKey('');
-    setFormError(null);
+    setToastMessage(null);
     setDialog({ kind: 'add-form', platform, mode: 'add' });
   };
 
@@ -548,12 +546,6 @@ export default function AccountsPanel() {
 
   return (
     <section>
-      {/* 发起授权失败只属于账户页：错误留在本页，不占用其他页面的全局提示条。 */}
-      {loginError ? (
-        <p className={`${styles.noticeDanger} ${styles.accountNotice}`} role="alert">
-          {loginError}
-        </p>
-      ) : null}
       <div className={styles.platformStack}>
         {groups.map((group) => (
           <section className={styles.platformGroup} key={group.platform}>
@@ -748,6 +740,13 @@ export default function AccountsPanel() {
         ))}
       </div>
 
+      {toastMessage ? (
+        <DangerToast
+          message={toastMessage}
+          onDismiss={() => setToastMessage(null)}
+        />
+      ) : null}
+
       {/* 用 portal 挂到 body：面板容器带进场 transform，会成为 fixed 后代的包含块，
           就地渲染会让蒙层只盖住内容区。 */}
       {createPortal(
@@ -856,11 +855,6 @@ export default function AccountsPanel() {
                         {choice.note}
                       </p>
                     </div>
-                    {formError ? (
-                      <p className={styles.noticeDanger} role="alert">
-                        {formError}
-                      </p>
-                    ) : null}
                     <div className={styles.dialogActions}>
                       <button
                         type="button"

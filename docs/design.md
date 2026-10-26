@@ -291,7 +291,7 @@
 | `.authStatus` + `.authDot` | 授权状态 | `data-state="ok"` 绿色，`"needs-reauth"` 红色，未知态中性 |
 | `.planRowState` | 套餐查询状态 | 状态键由 `planStateKey()` 提供（`inactive / busy / error / ok / idle`）；CSS 只为 `busy` 和 `error` 上色 |
 | `.updatedAt` | 最近刷新时间 | 卡片标题右侧，等宽数字 |
-| `.toast` | 保存失败 toast | 固定窗口底部居中，`--danger-soft` 底色；成功时不出现 |
+| `.toast` | 瞬时错误 toast | 固定窗口底部居中，`--danger-soft` 底色；保存失败、授权没能启动等操作级失败用 `DangerToast` 自动消失 |
 | `.overviewEmpty` / `.emptyGlyph` / `.emptyTitle` | 整页空态 | 没有数据时替代列表 |
 | `.noticeStale` 与 `.accountNote` | 行内补充说明 | 放在数据区下方，字号 12px |
 
@@ -421,7 +421,6 @@ section
 
 ```
 section
-├─ loginError 提示（本页专属）
 ├─ platformStack
 │  ├─ 每个已开放平台 platformGroup
 │  │  ├─ platformSectionHead → PlatformHeading（带账户数）
@@ -439,6 +438,7 @@ section
 - 弹窗是状态联合类型 `DialogState`，授权流程还包含 `phase`：`waiting / succeeded / failed / canceled`。
 - 授权事件由 `onAccountLoginChanged` 驱动，只携带脱敏状态；离开页面或关闭弹窗要取消后台流程。
 - 添加流程的平台由入口决定，弹窗内不再切换平台。
+- 授权没能启动（例如本机没有 Codex 客户端）、API Key 校验失败等操作级错误统一用窗口底部的 `DangerToast` 提示（4 秒自动消失），不占弹窗和页面的布局；添加弹窗保持打开，方便改完重试或取消。
 
 ### 5.3 中转站账户管理（`RelayPanel.tsx`）
 
@@ -506,8 +506,9 @@ section
 
 | 级别 | 表现 | 类名 |
 | --- | --- | --- |
-| 全局 | 状态读取、授权入口等跨页面错误 | `.noticeDanger.globalNotice`（App 顶部） |
-| 页面 | 添加授权失败、表单错误 | `.noticeDanger.accountNotice` 或卡片内 `.noticeDanger` |
+| 全局 | 状态读取等跨页面错误 | `.noticeDanger.globalNotice`（App 顶部） |
+| 瞬时 | 操作失败（保存设置、发起授权、添加账户） | `DangerToast` + `.toast`（窗口底部居中，自动消失） |
+| 页面 | 本页的数据加载/扫描失败 | `.noticeDanger.accountNotice`（RelayPanel）或卡片内 `.noticeDanger` |
 | 对象 | 单个套餐/账户刷新失败 | `.noticeStale`（有旧数据）或 `.noticeDanger`（无数据） |
 | 行内 | 字段、设置项、套餐状态 | `.settingHint[data-danger]`、`.planRowState[data-state="error"]`、`.quotaLowNote` |
 
