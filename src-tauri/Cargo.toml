@@ -28,6 +28,7 @@ time = { version = "0.3", features = ["parsing"] }
 toml = "1"
 tauri-plugin-notification = "2.7.0"
 tauri-plugin-autostart = "2.7.0"
+tauri-plugin-single-instance = "2.5.4"
 
 # 打开授权链接直接调 ShellExecuteW，避免经 cmd.exe 解析 URL 里的 & 等字符。
 [target.'cfg(windows)'.dependencies]
