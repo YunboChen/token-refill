@@ -177,7 +177,9 @@ public/               浏览器标签图标、Web manifest
 
 ### 测试版构建
 
-需要在不发版的情况下验证某个分支时，用 [.github/workflows/build-test.yml](./.github/workflows/build-test.yml)：在 Actions 页面手动触发 `build-test`，选择要构建的分支（通常是 `dev` 或特性分支），并可只构建 macOS 或 Windows。
+需要在不发版的情况下验证某个分支时，用 [.github/workflows/build-test.yml](./.github/workflows/build-test.yml)：在 Actions 页面手动触发 `build-test`，用 `ref` 输入指定要构建的分支、tag 或提交（默认 `dev`），并可只构建 macOS 或 Windows。
+
+GitHub 只为**默认分支**（本仓库是 `main`）上的工作流文件登记手动触发入口，所以这个文件需要存在于 `main`；要构建的分支由 `ref` 指定，业务代码不必合入 `main`，目标分支本身也不需要包含该文件。
 
 - 只产出 workflow artifact（在本次运行的 Artifacts 区下载），**不创建 Release、不打 tag**，不会覆盖已发布版本；产物保留 14 天。
 - 检查与打包步骤和正式发布一致，版本号保持当前值、不在构建时改写。

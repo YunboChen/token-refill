@@ -6,12 +6,20 @@ name: build-test
 # 因此可以随时在 dev 或特性分支上跑，不会覆盖已发布的版本。
 # 注意：不要用 release.yml 的“手动触发”来打测试包——那条路径会直接发布 Release。
 #
+# workflow_dispatch 的入口只登记默认分支（main）上的工作流文件，所以要构建的分支由 ref 输入指定，
+# 目标分支本身不必包含这个文件。触发时用的仍是入口分支上的工作流定义。
+#
 # 构建步骤与 release.yml 保持一致，改发布流程时请同步两边：
 # macOS 的 cargo-tauri 安装步骤（tauri#15315）、Windows 的打包命令与版本三处一致的检查。
 
 on:
   workflow_dispatch:
     inputs:
+      ref:
+        description: "要构建的分支、tag 或提交（不必包含本工作流文件）"
+        type: string
+        required: true
+        default: dev
       platforms:
         description: "构建哪些平台"
         type: choice
@@ -25,9 +33,9 @@ on:
 permissions:
   contents: read
 
-# 同一分支重复触发的测试构建可以互相取消，省 CI 时间；正式发布不要这样做。
+# 同一目标分支重复触发的测试构建可以互相取消，省 CI 时间；正式发布不要这样做。
 concurrency:
-  group: build-test-${{ github.ref }}
+  group: build-test-${{ inputs.ref }}
   cancel-in-progress: true
 
 env:
@@ -44,6 +52,8 @@ jobs:
       label: ${{ steps.meta.outputs.label }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Read version and commit
         id: meta
@@ -59,7 +69,7 @@ jobs:
           {
             echo "### 测试构建"
             echo ""
-            echo "- 分支／提交：\`${GITHUB_REF_NAME}\` @ \`${sha}\`"
+            echo "- 分支／提交：\`${{ inputs.ref }}\` @ \`${sha}\`"
             echo "- 版本：\`${version}\`"
             echo "- 产物名会带 \`${label}\` 后缀，便于与正式版区分"
           } >> "${GITHUB_STEP_SUMMARY}"
@@ -72,6 +82,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: pnpm/action-setup@v6
 
@@ -129,6 +141,8 @@ jobs:
       APPLE_SIGNING_IDENTITY: "-"
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: pnpm/action-setup@v6
 
@@ -193,6 +207,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: pnpm/action-setup@v6
 
