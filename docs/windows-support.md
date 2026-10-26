@@ -88,6 +88,7 @@ Windows 目标目录：
 - `tauri.conf.json` 里的 `titleBarStyle: "Overlay"` 与 `hiddenTitle` 只在 macOS 生效（Tauri 在 macOS 分支才应用这两个字段），Windows 保留系统标题栏与关闭/最小化按钮。
 - 所有 Windows 构建（含 debug）都使用 GUI 子系统（`#![cfg_attr(windows, windows_subsystem = "windows")]`）。此前 debug 构建是控制台子系统，从资源管理器双击会额外拉起一个控制台窗口（默认由 Windows Terminal 承载）；改为 GUI 后不再出现。从终端运行 `cargo run` / `tauri dev` 时 stdio 仍被继承，日志与 panic 照常输出。
 - GUI 子系统进程没有控制台，启动 `codex.exe` 这类控制台程序（以及 `.cmd` 背后的 `cmd.exe`）时 Windows 会为子进程新建控制台窗口。`cli::apply_no_window` 给所有外置 CLI 子进程加 `CREATE_NO_WINDOW`，额度刷新与授权等待期间不再出现黑色控制台窗口；子进程的 stdin/stdout 管道不受影响。
+- 单实例由 `tauri-plugin-single-instance` 保证，标识来自应用 `identifier`：免安装 exe 与 NSIS 安装版同时启动也只会保留一个进程，第二次启动把已有窗口从最小化恢复并置顶。
 - 前端启动后调用 `get_app_info` 取 `platform`，写到根节点 `data-platform`。Windows 下侧栏顶部的红绿灯安全区从 44px 收窄到 10px，页面头仍作为拖拽区。
 - 取不到平台信息时保持 macOS 布局；浏览器预览不请求平台信息。
 
