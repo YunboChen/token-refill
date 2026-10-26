@@ -152,22 +152,26 @@ public/               浏览器标签图标、Web manifest
 
 发版步骤：
 
-1. 把三处版本号改成同一个值，并重新生成 `Cargo.lock`：
+1. 发布相关改动从 `main` 切出分支，PR 到 `main` 并合并。**不要把 `dev` 整体合并到 `main`**：`dev` 可能包含未完成或未验证的功能，发版不应把它们带出去。
+
+2. 在 `main` 上把三处版本号改成同一个值，并重新生成 `Cargo.lock`：
 
    ```sh
    # package.json / src-tauri/tauri.conf.json 手动改
    cargo check --manifest-path src-tauri/Cargo.toml   # 同步 Cargo.lock
    ```
 
-2. 提交并推送到 `main`：
+3. 提交并推送到 `main`：
 
    ```sh
    git push origin main
    ```
 
+4. 发布完成后把 `main` 合回 `dev`，让两边版本号保持一致。
+
 `prepare` job 会对比这次推送前后的 `src-tauri/tauri.conf.json` 版本号：**只有版本号变化才继续构建**，版本未变时其余 job 全部跳过，不会重复生成或上传产物。也可以显式发版：推送 `v*` tag，或在 Actions 页面手动触发 `release`（手动触发不比较版本，总是构建）。
 
-构建流程：先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS arm64 / x64 与 Windows x64 产物：macOS 用 `cargo tauri` + ad-hoc 签名；Windows 用 MSVC 工具链，先跑 `pnpm test:rust`，再用 `--no-bundle` 产出免安装 exe，最后用 `--bundles nsis` 产出安装器。两类产物都挂到同一个 **Release**（tag 为 `v<版本号>`）并直接发布，没有草稿确认环节；推送到 `main` 前请自行确认版本号与产物。`tauri.conf.json` / `package.json` / `Cargo.toml` 三处版本不一致时构建直接失败；tag 推送还会校验 tag 与版本号一致。
+构建流程：先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS arm64 / x64 与 Windows x64 产物：macOS 用 `cargo tauri` + ad-hoc 签名；Windows 用 MSVC 工具链，先跑 `pnpm test:rust`，再执行一次 `pnpm tauri build --bundles nsis`，同时得到免安装 exe 与 NSIS 安装器。两类产物都挂到同一个 **Release**（tag 为 `v<版本号>`）并直接发布，没有草稿确认环节；推送到 `main` 前请自行确认版本号与产物。`tauri.conf.json` / `package.json` / `Cargo.toml` 三处版本不一致时构建直接失败；tag 推送还会校验 tag 与版本号一致。
 
 ### 签名状态
 
