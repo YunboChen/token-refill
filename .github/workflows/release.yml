@@ -299,7 +299,10 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ needs.prepare.outputs.version }}"
-          pnpm tauri build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          # PowerShell 传原生参数时会吞掉内联 JSON 的双引号，改用临时配置文件。
+          $updaterConfig = Join-Path $env:RUNNER_TEMP "updater.json"
+          [System.IO.File]::WriteAllText($updaterConfig, '{"bundle":{"createUpdaterArtifacts":true}}')
+          pnpm tauri build --bundles nsis --config $updaterConfig
           New-Item -ItemType Directory -Force output | Out-Null
           Copy-Item "src-tauri/target/release/token-refill.exe" "output/Token.Refill_${version}_x64.exe"
 
