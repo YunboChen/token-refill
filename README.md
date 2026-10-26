@@ -177,6 +177,8 @@ public/               浏览器标签图标、Web manifest
 
 `main` 分支推送带 `paths` 过滤：只有 `src-tauri/tauri.conf.json` 被改动的推送才会启动 `release` workflow（提升版本号必然改这个文件），普通代码提交不再产生空的 Actions 记录；tag 推送不受该过滤影响。启动后 `prepare` job 会对比这次推送前后的 `src-tauri/tauri.conf.json` 版本号：**只有版本号变化才继续构建**，版本未变时其余 job 全部跳过，不会重复生成或上传产物。也可以显式发版：推送 `v*` tag，或在 Actions 页面手动触发 `release`（手动触发不比较版本，总是构建）。
 
+改 workflow 文件时由独立的 `lint-workflows` workflow 用 [actionlint](https://github.com/rhysd/actionlint) 做静态检查（只监听 `.github/workflows/**` 的推送与 PR，不构建、不发版）：表达式、`needs` 引用、action 输入这类只在运行时才暴露的问题能在提交阶段被发现。本地也可以直接跑 `actionlint`。
+
 构建流程：先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS arm64 / x64 与 Windows x64 产物：macOS 用 `cargo tauri` + ad-hoc 签名，并额外生成 `.app.tar.gz` 更新包；Windows 用 MSVC 工具链，先跑 `pnpm test:rust`，再执行一次 `pnpm tauri build --bundles nsis --config <临时配置文件>`（Windows 的 PowerShell 会吞掉内联 JSON 的双引号，CI 把 `{"bundle":{"createUpdaterArtifacts":true}}` 写到临时文件后传入），同时得到免安装 exe、NSIS 安装器与安装器的 `.exe.sig` 更新签名。所有产物都挂到同一个 **Release**（tag 为 `v<版本号>`）并直接发布，没有草稿确认环节；推送到 `main` 前请自行确认版本号与产物。`tauri.conf.json` / `package.json` / `Cargo.toml` 三处版本不一致时构建直接失败；tag 推送还会校验 tag 与版本号一致。
 
 ### 更新签名密钥

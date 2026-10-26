@@ -1,0 +1,48 @@
+name: lint-workflows
+
+# workflow 文件的静态检查。release.yml 的 paths 过滤让 workflow 改动不会触发发布流程，
+# 而只读 YAML 语法查不出表达式、needs 引用、action 输入这类运行时才暴露的错误，
+# 所以这里用 actionlint 单独兜住。不创建 Release、不构建产物、无写权限。
+
+on:
+  push:
+    paths:
+      - ".github/workflows/**"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-workflows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # 固定版本并校验校验和，避免每次拉取最新版导致检查结果漂移。
+      ACTIONLINT_VERSION: "1.7.12"
+      ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive=/tmp/actionlint.tar.gz
+          curl -fsSL \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            -o "${archive}"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "${archive}" -C /tmp actionlint
+
+      # 默认检查 .github/workflows 下的全部文件；runner 自带 shellcheck 时会一并检查 run 片段。
+      - name: Run actionlint
+        run: /tmp/actionlint -color

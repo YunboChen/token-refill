@@ -81,6 +81,7 @@
 - Windows 本机必须使用 MSVC 工具链；`tauri dev` 启动的 `cargo run` 不采纳 `RUSTUP_TOOLCHAIN` 环境变量，需用 `rustup default` 或目录级 override。
 - 行为改动要配套测试；依赖 Python 的假 `codex app-server` 端到端用例只在 Unix 运行（`#[cfg(unix)]`），Windows 专属分支需要平台内测试。
 - 更新链路无法用单元测试覆盖的部分（签名校验、`.app` 替换、NSIS 静默安装）必须在两个平台用真实 Release 验证：安装旧版本 → 检查 → 下载 → 重启安装 → 确认版本、数据目录与权限状态。
+- 改动 `.github/workflows/**` 时由 `lint-workflows.yml` 用 actionlint 做静态检查（固定版本 1.7.12 + sha256 校验，只读权限，不构建不发版）；本地改完也应跑一次 `actionlint`，不要靠「下次发版」验证。
 - 提交信息使用 Conventional Commits（类型: 中文描述），不添加无关的 `Co-Authored-By`。
 - 不提交 `node_modules/`、`dist/`、`src-tauri/target/`、生成物或本机状态文件。
 - 改动影响范围、限制或使用方式时，同步更新 README 与 `docs/`（requirements / software-design / development-plan / windows-support）。
