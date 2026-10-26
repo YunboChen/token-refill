@@ -219,10 +219,19 @@ export interface UpdateStatus {
   currentVersion: string;
   latestVersion: string | null;
   updateAvailable: boolean;
+  /** 当前安装形态是否支持应用内下载与替换；免安装 exe 为 false。 */
+  selfUpdateSupported: boolean;
   releaseUrl: string | null;
   releaseNotes?: string;
   publishedAt: string | null;
 }
+
+export interface UpdateDownloadProgress {
+  downloaded: number;
+  total: number | null;
+}
+
+const UPDATE_PROGRESS_EVENT = 'update-download-progress';
 
 /**
  * 查询 GitHub 最新正式版本。同一会话内复用首次结果，避免每次打开设置页
@@ -240,6 +249,32 @@ export function checkForUpdate(force = false): Promise<UpdateStatus> {
     );
   }
   return pendingUpdateCheck;
+}
+
+/**
+ * 下载更新包并校验签名。必须由用户点击触发；下载完成后还需要调用
+ * installUpdate 才会替换应用。返回下载到的版本号。
+ */
+export function downloadUpdate(): Promise<string> {
+  return invoke<string>('download_update');
+}
+
+/** 安装已下载的更新并重启（Windows 上由 NSIS 安装器接管）。 */
+export function installUpdate(): Promise<void> {
+  return invoke<void>('install_update');
+}
+
+/** 已下载待安装的版本号；设置页重新打开时恢复状态。 */
+export function downloadedUpdateVersion(): Promise<string | null> {
+  return invoke<string | null>('downloaded_update_version');
+}
+
+export function onUpdateDownloadProgress(
+  handler: (progress: UpdateDownloadProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<UpdateDownloadProgress>(UPDATE_PROGRESS_EVENT, (event) =>
+    handler(event.payload),
+  );
 }
 
 export function onAccountLoginChanged(

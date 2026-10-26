@@ -1,7 +1,7 @@
 # Token Refill 界面设计规范
 
 - 文档版本：0.1
-- 最近更新：2026-10-25
+- 最近更新：2026-10-26
 - 适用范围：管理窗口前端（React + TypeScript）
 - 事实来源：`src/App.module.css`、`src/styles.css`、`src/App.tsx`、`src/panels/`、`src/components/`、`src/lib/format.ts`、`src/lib/useDialogA11y.ts`
 - 关联文档：[软件设计文档](./software-design.md)、[需求文档](./requirements.md)、[开发计划文档](./development-plan.md)
@@ -291,7 +291,7 @@
 | `.authStatus` + `.authDot` | 授权状态 | `data-state="ok"` 绿色，`"needs-reauth"` 红色，未知态中性 |
 | `.planRowState` | 套餐查询状态 | 状态键由 `planStateKey()` 提供（`inactive / busy / error / ok / idle`）；CSS 只为 `busy` 和 `error` 上色 |
 | `.updatedAt` | 最近刷新时间 | 卡片标题右侧，等宽数字 |
-| `.toast` | 保存失败 toast | 固定窗口底部居中，`--danger-soft` 底色；成功时不出现 |
+| `.toast` | 瞬时错误 toast | 固定窗口底部居中，`--danger-soft` 底色；保存失败、授权没能启动等操作级失败用 `DangerToast` 自动消失 |
 | `.overviewEmpty` / `.emptyGlyph` / `.emptyTitle` | 整页空态 | 没有数据时替代列表 |
 | `.noticeStale` 与 `.accountNote` | 行内补充说明 | 放在数据区下方，字号 12px |
 
@@ -326,7 +326,8 @@
 | `.accountRefresh` | 带文字的轻量刷新 | 26px 高、11.5px 字，账户卡底部使用 |
 | `.accountAddTile` | 添加入口 | 虚线卡片，悬浮转实线主色；与账户卡同网格 |
 | `.updateChip` | 侧栏更新提示 | 胶囊，悬浮反转为主色实底 |
-| `.buttonRow` | 按钮并排 | 设置页版本检查使用 |
+| `.buttonRow` | 按钮并排 | 设置页版本检查与更新使用 |
+| `.updateProgress` | 更新下载进度条 | 细轨道 + accent 填充，下载中/已下载时显示 |
 
 按钮状态统一：`hover` 只改底色/描边，`active` 轻微缩放，`disabled` 降透明度 + `cursor: not-allowed`。所有图标按钮都要有可读文本（`aria-label`），不能只靠图形。
 
@@ -421,7 +422,6 @@ section
 
 ```
 section
-├─ loginError 提示（本页专属）
 ├─ platformStack
 │  ├─ 每个已开放平台 platformGroup
 │  │  ├─ platformSectionHead → PlatformHeading（带账户数）
@@ -439,6 +439,7 @@ section
 - 弹窗是状态联合类型 `DialogState`，授权流程还包含 `phase`：`waiting / succeeded / failed / canceled`。
 - 授权事件由 `onAccountLoginChanged` 驱动，只携带脱敏状态；离开页面或关闭弹窗要取消后台流程。
 - 添加流程的平台由入口决定，弹窗内不再切换平台。
+- 授权没能启动（例如本机没有 Codex 客户端）、API Key 校验失败等操作级错误统一用窗口底部的 `DangerToast` 提示（4 秒自动消失），不占弹窗和页面的布局；添加弹窗保持打开，方便改完重试或取消。
 
 ### 5.3 中转站账户管理（`RelayPanel.tsx`）
 
@@ -481,13 +482,16 @@ section
 ├─ groupTitle「网络代理」+ card.listCard
 │  └─ settingRowStatic（代理方式 + 分段单选；指定代理时追加地址输入）
 ├─ groupTitle「版本」+ card.listCard
-│  └─ settingRowStatic（当前版本 + 更新状态 + 按钮）
+│  ├─ settingRowStatic（当前版本 + 更新状态 + 按钮）
+│  └─ updateProgress（下载中/已下载时显示）
 └─ 若干 groupNote（分组脚注）
 ```
 
 关键行为：
 
 - 设置页持有本地草稿 `prefs`，用 `dirty` ref 标记未保存改动；连续改动 250ms 防抖后写入 Rust，离开页面前补发一次。
+- 版本区块把下载与安装拆成两步：点击“下载更新”后才请求更新包，进度由 `update-download-progress` 事件驱动；下载并通过签名校验后按钮变为“重启并安装”。重新打开设置页时用 `downloaded_update_version` 恢复已下载状态，避免重复下载。
+- Windows 免安装 exe 没有可替换的安装目录，不显示“下载更新”，只保留“前往发布页”；macOS 更新替换 `.app` 后重启，Windows 由 NSIS 安装器接管并退出应用。
 - 后端状态变化时，只有在没有本地未保存改动时才覆盖草稿。
 - 保存成功不打扰用户；只有保存失败时在窗口底部弹一次 `.toast`（4 秒后自动消失，重复失败会重新计时）。
 - 主题切换立即应用并单独持久化，不等待防抖保存。
@@ -506,8 +510,9 @@ section
 
 | 级别 | 表现 | 类名 |
 | --- | --- | --- |
-| 全局 | 状态读取、授权入口等跨页面错误 | `.noticeDanger.globalNotice`（App 顶部） |
-| 页面 | 添加授权失败、表单错误 | `.noticeDanger.accountNotice` 或卡片内 `.noticeDanger` |
+| 全局 | 状态读取等跨页面错误 | `.noticeDanger.globalNotice`（App 顶部） |
+| 瞬时 | 操作失败（保存设置、发起授权、添加账户） | `DangerToast` + `.toast`（窗口底部居中，自动消失） |
+| 页面 | 本页的数据加载/扫描失败 | `.noticeDanger.accountNotice`（RelayPanel）或卡片内 `.noticeDanger` |
 | 对象 | 单个套餐/账户刷新失败 | `.noticeStale`（有旧数据）或 `.noticeDanger`（无数据） |
 | 行内 | 字段、设置项、套餐状态 | `.settingHint[data-danger]`、`.planRowState[data-state="error"]`、`.quotaLowNote` |
 
