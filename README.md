@@ -175,7 +175,9 @@ public/               浏览器标签图标、Web manifest
 
 4. 发布完成后把 `main` 合回 `dev`，让两边版本号保持一致。
 
-`main` 分支推送带 `paths` 过滤：只有 `src-tauri/tauri.conf.json` 被改动的推送才会启动 `release` workflow（提升版本号必然改这个文件），普通代码提交不再产生空的 Actions 记录；tag 推送不受该过滤影响。启动后 `prepare` job 会对比这次推送前后的 `src-tauri/tauri.conf.json` 版本号：**只有版本号变化才继续构建**，版本未变时其余 job 全部跳过，不会重复生成或上传产物。也可以显式发版：推送 `v*` tag，或在 Actions 页面手动触发 `release`（手动触发不比较版本，总是构建）。
+`main` 分支推送带 `paths` 过滤：只有 `src-tauri/tauri.conf.json` 被改动的推送才会启动 `release` workflow（提升版本号必然改这个文件），普通代码提交不再产生空的 Actions 记录；tag 推送不受该过滤影响。启动后 `prepare` job 会对比这次推送前后的 `src-tauri/tauri.conf.json` 版本号：**只有版本号变化才继续构建**，版本未变时其余 job 全部跳过，不会重复生成或上传产物。也可以显式发版：推送 `v*` tag，或在 Actions 页面**从 `main`** 手动触发 `release`（手动触发不比较版本，总是构建；在其他分支上触发会直接报错，测试构建请用 `build-test`）。`prepare` 还会拒绝低于已发布版本的版本号——`releases/latest` 按发布时间选取，重发旧版本会让用户被更新回旧版。
+
+合并前的检查由 [.github/workflows/ci.yml](./.github/workflows/ci.yml) 承担：PR 与推送到 `main` / `dev` 时，在 macOS 上跑 `pnpm build`、`cargo fmt --check`、`clippy -D warnings` 与 `cargo test`，并在 Windows 上跑 `pnpm test:rust` 覆盖 Windows 专属分支。`main` 的分支保护要求 `ci / check` 与 `ci / check (windows)` 通过（不要求 review）；版本号三处一致仍只在 release 的 `check` 里校验。依赖与 action 版本由 `.github/dependabot.yml` 每周检查。
 
 改 workflow 文件时由独立的 `lint-workflows` workflow 用 [actionlint](https://github.com/rhysd/actionlint) 做静态检查（只监听 `.github/workflows/**` 的推送与 PR，不构建、不发版）：表达式、`needs` 引用、action 输入这类只在运行时才暴露的问题能在提交阶段被发现。本地也可以直接跑 `actionlint`。
 

@@ -13,8 +13,9 @@ on:
       - "v*"
   workflow_dispatch:
 
+# 默认只读：check 与 build job 只读仓库，写权限只在 publish job 单独授予。
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -25,7 +26,9 @@ env:
 
 jobs:
   # 发布判定：分支推送只有在 tauri.conf.json 的版本号相对推送前发生变化时才构建；
-  # tag 推送与手动触发视为显式发布，直接构建。
+  # tag 推送与 main 上的手动触发视为显式发布，直接构建。
+  # 另外拒绝低于已发布版本的版本号：releases/latest 按发布时间选取，
+  # 重发旧版本会让用户被"更新"到旧版。
   prepare:
     name: prepare
     runs-on: ubuntu-latest
@@ -44,8 +47,29 @@ jobs:
         id: decide
         shell: bash
         run: |
+          # 手动触发只允许在 main 上执行：workflow_dispatch 可以选任意分支，
+          # 从 dev / 特性分支直接发布会把未验证的代码推给用户。
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ] && [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "::error::release 的手动触发只允许在 main 上执行（当前为 ${GITHUB_REF}）。测试构建请使用 build-test workflow。"
+            exit 1
+          fi
+
           version=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json', 'utf8')).version")
+          # 版本号会进入安装包名、updater 清单与 shell 命令，先按 semver 约束格式。
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tauri.conf.json 的版本 ${version} 不是合法的 semver（期望 X.Y.Z）。"
+            exit 1
+          fi
           tag="v${version}"
+          # 比较两个版本号的数字主干：$1 比 $2 新时返回 0。预发布后缀不参与比较。
+          version_gt() {
+            local a_major a_minor a_patch b_major b_minor b_patch
+            IFS=. read -r a_major a_minor a_patch <<< "${1%%[-+]*}"
+            IFS=. read -r b_major b_minor b_patch <<< "${2%%[-+]*}"
+            (( a_major > b_major \
+              || (a_major == b_major && a_minor > b_minor) \
+              || (a_major == b_major && a_minor == b_minor && a_patch > b_patch) ))
+          }
           prev_version=""
           should_build=false
           reason=""
@@ -74,6 +98,21 @@ jobs:
             fi
           else
             reason="unsupported event: ${GITHUB_EVENT_NAME}"
+          fi
+
+          # 版本单调性：低于已发布版本的版本号一律拒绝。底线取「推送前的版本」与
+          # 「仓库里最新的 v* tag」中较大的一个，覆盖 tag / 手动触发没有 before 的情况。
+          # 发布旧版本会让 releases/latest 回退，用户被更新到旧版。
+          latest_tag_version=$(git tag --list 'v[0-9]*' --sort=-v:refname \
+            | sed 's/^v//' | grep -Fvx "$version" | head -1 || true)
+          if [ -z "$prev_version" ]; then
+            prev_version="$latest_tag_version"
+          elif [ -n "$latest_tag_version" ] && version_gt "$latest_tag_version" "$prev_version"; then
+            prev_version="$latest_tag_version"
+          fi
+          if [ -n "$prev_version" ] && version_gt "$prev_version" "$version"; then
+            echo "::error::版本 ${version} 低于已发布的 ${prev_version}。发布旧版本会让 releases/latest 回退，用户被更新到旧版。"
+            exit 1
           fi
 
           {
@@ -333,6 +372,9 @@ jobs:
     if: needs.prepare.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # 只有创建/更新 Release 需要写权限。
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v8
         with:
