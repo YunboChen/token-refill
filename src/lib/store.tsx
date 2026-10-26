@@ -31,18 +31,25 @@ import {
 } from './desktop';
 import { clearLegacyPreferences, defaultAppState, readLegacyPreferences } from './prefs';
 
+/** 发起授权的结果：失败原因随结果返回，由发起方在弹窗内展示，不进入页面级提示。 */
+export interface LoginAttempt {
+  start: LoginStart | null;
+  error: string | null;
+}
+
 interface AppStateContextValue {
   state: AppState;
   ready: boolean;
   desktop: boolean;
   error: string | null;
-  /** 发起授权失败的提示；只属于账户页，不进入其他页面的全局错误条。 */
-  loginError: string | null;
   update: UpdateStatus | null;
   refresh: (accountId?: string) => Promise<void>;
   savePreferences: (preferences: Preferences) => Promise<boolean>;
-  beginLogin: (accountId?: string, displayName?: string) => Promise<LoginStart | null>;
-  beginBailianLogin: (accountId?: string, displayName?: string) => Promise<LoginStart | null>;
+  beginLogin: (accountId?: string, displayName?: string) => Promise<LoginAttempt>;
+  beginBailianLogin: (
+    accountId?: string,
+    displayName?: string,
+  ) => Promise<LoginAttempt>;
   addApiKeyAccount: (
     platform: string,
     displayName: string | undefined,
@@ -51,7 +58,6 @@ interface AppStateContextValue {
   replaceApiKey: (accountId: string, apiKey: string) => Promise<string | null>;
   addAntigravityAccount: (displayName?: string) => Promise<string | null>;
   cancelLogin: (loginId: string) => Promise<void>;
-  clearLoginError: () => void;
   renameAccount: (accountId: string, displayName: string) => Promise<boolean>;
   removeAccount: (accountId: string) => Promise<boolean>;
   setAutoLaunch: (enabled: boolean) => Promise<boolean>;
@@ -73,7 +79,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(defaultAppState);
   const [ready, setReady] = useState(!desktop);
   const [error, setError] = useState<string | null>(null);
-  const [loginError, setLoginError] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
 
   // 启动时静默检查一次版本；失败（离线、限流）不打扰用户，设置页仍可手动重试。
@@ -188,30 +193,26 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
 
   const beginLogin = useCallback(
-    async (accountId?: string, displayName?: string) => {
-      if (!desktop) return null;
+    async (accountId?: string, displayName?: string): Promise<LoginAttempt> => {
+      if (!desktop) return { start: null, error: '浏览器预览无法发起桌面授权。' };
       try {
         const start = await beginAccountLogin(accountId, displayName);
-        setLoginError(null);
-        return start;
+        return { start, error: null };
       } catch (err) {
-        setLoginError(errorMessage(err));
-        return null;
+        return { start: null, error: errorMessage(err) };
       }
     },
     [desktop],
   );
 
   const beginBailianLogin = useCallback(
-    async (accountId?: string, displayName?: string) => {
-      if (!desktop) return null;
+    async (accountId?: string, displayName?: string): Promise<LoginAttempt> => {
+      if (!desktop) return { start: null, error: '浏览器预览无法发起桌面授权。' };
       try {
         const start = await beginBailianLoginCommand(accountId, displayName);
-        setLoginError(null);
-        return start;
+        return { start, error: null };
       } catch (err) {
-        setLoginError(errorMessage(err));
-        return null;
+        return { start: null, error: errorMessage(err) };
       }
     },
     [desktop],
@@ -281,8 +282,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [desktop],
   );
 
-  const clearLoginError = useCallback(() => setLoginError(null), []);
-
   const renameAccount = useCallback(
     async (accountId: string, displayName: string) => {
       if (!desktop) return false;
@@ -349,7 +348,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       ready,
       desktop,
       error,
-      loginError,
       update,
       refresh,
       savePreferences,
@@ -359,7 +357,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       replaceApiKey,
       addAntigravityAccount,
       cancelLogin,
-      clearLoginError,
       renameAccount,
       removeAccount,
       setAutoLaunch,
@@ -370,7 +367,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       ready,
       desktop,
       error,
-      loginError,
       update,
       refresh,
       savePreferences,
@@ -380,7 +376,6 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       replaceApiKey,
       addAntigravityAccount,
       cancelLogin,
-      clearLoginError,
       renameAccount,
       removeAccount,
       setAutoLaunch,

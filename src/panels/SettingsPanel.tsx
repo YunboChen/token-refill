@@ -1,5 +1,4 @@
 import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
-import { createPortal } from 'react-dom';
 import { version as appVersion } from '../../package.json';
 import {
   checkForUpdate,
@@ -19,6 +18,7 @@ import {
 } from '../lib/prefs';
 import { useAppState } from '../lib/store';
 import { applyTheme } from '../lib/theme';
+import DangerToast from '../components/DangerToast';
 import styles from '../App.module.css';
 
 function Toggle({
@@ -66,7 +66,6 @@ function Toggle({
 }
 
 const SAVE_ERROR_MESSAGE = '设置保存失败，请重试。';
-const SAVE_ERROR_DURATION = 4000;
 
 const PROXY_OPTIONS: { value: ProxyMode; label: string }[] = [
   { value: 'system', label: '跟随系统' },
@@ -92,7 +91,6 @@ export default function SettingsPanel() {
   const [autoLaunchError, setAutoLaunchError] = useState<string | null>(null);
   const dirty = useRef(false);
   const latestPrefs = useRef(prefs);
-  const saveErrorTimer = useRef<number | null>(null);
   latestPrefs.current = prefs;
 
   const refreshLabelId = useId();
@@ -121,25 +119,15 @@ export default function SettingsPanel() {
         if (ok) return;
         dirty.current = true;
         setSaveError(SAVE_ERROR_MESSAGE);
-        if (saveErrorTimer.current !== null) {
-          window.clearTimeout(saveErrorTimer.current);
-        }
-        saveErrorTimer.current = window.setTimeout(() => {
-          saveErrorTimer.current = null;
-          setSaveError(null);
-        }, SAVE_ERROR_DURATION);
       });
     }, 250);
     return () => window.clearTimeout(timer);
   }, [prefs, savePreferences]);
 
-  // 切换页面前把尚未写入的改动补发一次，并清掉待触发的 toast 计时。
+  // 切换页面前把尚未写入的改动补发一次；toast 的计时由组件自己清理。
   useEffect(
     () => () => {
       if (dirty.current) void savePreferences(latestPrefs.current);
-      if (saveErrorTimer.current !== null) {
-        window.clearTimeout(saveErrorTimer.current);
-      }
     },
     [savePreferences],
   );
@@ -505,14 +493,9 @@ export default function SettingsPanel() {
         检查只读取版本号与发布页地址，不下载文件、不修改本地数据。
       </p>
 
-      {saveError
-        ? createPortal(
-            <p className={styles.toast} role="alert">
-              {saveError}
-            </p>,
-            document.body,
-          )
-        : null}
+      {saveError ? (
+        <DangerToast message={saveError} onDismiss={() => setSaveError(null)} />
+      ) : null}
     </section>
   );
 }
