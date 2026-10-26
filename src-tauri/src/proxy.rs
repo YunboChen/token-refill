@@ -9,8 +9,9 @@
 //! - macOS：读取 `scutil --proxy`；
 //! - 其他平台：不主动探测系统设置。
 //!
-//! 跟随系统时，进程已有的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 优先；
-//! 不走代理时会从子进程环境中移除这些变量；指定代理覆盖已有环境变量。
+//! 跟随系统时，进程已有的 `HTTP_PROXY` / `HTTPS_PROXY` 优先，`ALL_PROXY`
+//! 只在两者都缺失时兜底（与 curl 一致）；不走代理时会从子进程环境中移除这些
+//! 变量；指定代理覆盖已有环境变量。
 //! PAC / 自动配置脚本无法安全地转换成代理地址，这里不做解析。
 
 use std::process::Command;
@@ -245,29 +246,44 @@ fn remove_proxy_env(command: &mut Command) {
 }
 
 /// 跟随系统：环境变量优先，其次读取系统设置。
+///
+/// 与 curl 一致，`ALL_PROXY` 只在协议专属变量缺失时兜底，不能盖过
+/// `HTTP(S)_PROXY`：否则当 `ALL_PROXY` 指向未启用的 SOCKS 端口时，
+/// 明明可用的 HTTP 代理也会被绕过，请求直接 ECONNREFUSED。
 fn system_proxy() -> Option<ResolvedProxy> {
-    if let Some(all) = env_var("ALL_PROXY") {
-        return Some(ResolvedProxy {
-            http: Some(all.clone()),
-            https: Some(all),
-            no_proxy: env_var("NO_PROXY"),
-        });
-    }
-
     let http = env_var("HTTP_PROXY");
     let https = env_var("HTTPS_PROXY");
-    if http.is_none() && https.is_none() {
+    let all = env_var("ALL_PROXY");
+    if http.is_none() && https.is_none() && all.is_none() {
         return detect_os();
     }
+    proxy_from_env(http, https, all, env_var("NO_PROXY"))
+}
 
-    let no_proxy = env_var("NO_PROXY");
-    let http = http.or_else(|| https.clone());
-    let https = https.or_else(|| http.clone());
-    Some(ResolvedProxy {
-        http,
-        https,
-        no_proxy,
-    })
+/// 把环境变量解析成按协议区分的代理。`ALL_PROXY` 是最后的选择；
+/// 只设置了一个协议的变量时，另一侧沿用同一地址（单端口代理很常见）。
+fn proxy_from_env(
+    http: Option<String>,
+    https: Option<String>,
+    all: Option<String>,
+    no_proxy: Option<String>,
+) -> Option<ResolvedProxy> {
+    let http_target = http
+        .clone()
+        .or_else(|| https.clone())
+        .or_else(|| all.clone());
+    let https_target = https
+        .clone()
+        .or_else(|| http.clone())
+        .or_else(|| all.clone());
+    match (http_target, https_target) {
+        (None, None) => None,
+        (http, https) => Some(ResolvedProxy {
+            http,
+            https,
+            no_proxy,
+        }),
+    }
 }
 
 fn detect_os() -> Option<ResolvedProxy> {
@@ -605,6 +621,56 @@ mod tests {
         assert!(bypasses_proxy("192.168.1.5", Some("192.168.*")));
         assert!(!bypasses_proxy("opencode.ai", Some(".example.com")));
         assert!(!bypasses_proxy("opencode.ai", None));
+    }
+
+    #[test]
+    fn scheme_specific_env_wins_over_all_proxy() {
+        // 复现真实配置：HTTP(S)_PROXY 指向可用的 7890，ALL_PROXY 指向未启用的
+        // SOCKS 7891。此时 https 请求必须走 7890，而不是回落到 7891。
+        let proxy = proxy_from_env(
+            Some("http://127.0.0.1:7890".to_string()),
+            Some("http://127.0.0.1:7890".to_string()),
+            Some("socks5://127.0.0.1:7891".to_string()),
+            Some("localhost,127.0.0.1".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(proxy.http.as_deref(), Some("http://127.0.0.1:7890"));
+        assert_eq!(proxy.https.as_deref(), Some("http://127.0.0.1:7890"));
+        assert_eq!(proxy.no_proxy.as_deref(), Some("localhost,127.0.0.1"));
+    }
+
+    #[test]
+    fn all_proxy_is_used_only_when_both_schemes_are_missing() {
+        let proxy = proxy_from_env(
+            None,
+            None,
+            Some("socks5://127.0.0.1:7891".to_string()),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(proxy.http.as_deref(), Some("socks5://127.0.0.1:7891"));
+        assert_eq!(proxy.https.as_deref(), Some("socks5://127.0.0.1:7891"));
+    }
+
+    #[test]
+    fn single_scheme_env_covers_the_other_scheme() {
+        let proxy = proxy_from_env(
+            Some("http://127.0.0.1:7890".to_string()),
+            None,
+            Some("socks5://127.0.0.1:7891".to_string()),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(proxy.http.as_deref(), Some("http://127.0.0.1:7890"));
+        assert_eq!(proxy.https.as_deref(), Some("http://127.0.0.1:7890"));
+    }
+
+    #[test]
+    fn no_proxy_env_values_resolve_to_no_env_proxy() {
+        assert!(proxy_from_env(None, None, None, None).is_none());
     }
 
     #[test]
