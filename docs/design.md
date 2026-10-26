@@ -1,7 +1,7 @@
 # Token Refill 界面设计规范
 
 - 文档版本：0.1
-- 最近更新：2026-10-25
+- 最近更新：2026-10-26
 - 适用范围：管理窗口前端（React + TypeScript）
 - 事实来源：`src/App.module.css`、`src/styles.css`、`src/App.tsx`、`src/panels/`、`src/components/`、`src/lib/format.ts`、`src/lib/useDialogA11y.ts`
 - 关联文档：[软件设计文档](./software-design.md)、[需求文档](./requirements.md)、[开发计划文档](./development-plan.md)
@@ -326,7 +326,8 @@
 | `.accountRefresh` | 带文字的轻量刷新 | 26px 高、11.5px 字，账户卡底部使用 |
 | `.accountAddTile` | 添加入口 | 虚线卡片，悬浮转实线主色；与账户卡同网格 |
 | `.updateChip` | 侧栏更新提示 | 胶囊，悬浮反转为主色实底 |
-| `.buttonRow` | 按钮并排 | 设置页版本检查使用 |
+| `.buttonRow` | 按钮并排 | 设置页版本检查与更新使用 |
+| `.updateProgress` | 更新下载进度条 | 细轨道 + accent 填充，下载中/已下载时显示 |
 
 按钮状态统一：`hover` 只改底色/描边，`active` 轻微缩放，`disabled` 降透明度 + `cursor: not-allowed`。所有图标按钮都要有可读文本（`aria-label`），不能只靠图形。
 
@@ -481,13 +482,16 @@ section
 ├─ groupTitle「网络代理」+ card.listCard
 │  └─ settingRowStatic（代理方式 + 分段单选；指定代理时追加地址输入）
 ├─ groupTitle「版本」+ card.listCard
-│  └─ settingRowStatic（当前版本 + 更新状态 + 按钮）
+│  ├─ settingRowStatic（当前版本 + 更新状态 + 按钮）
+│  └─ updateProgress（下载中/已下载时显示）
 └─ 若干 groupNote（分组脚注）
 ```
 
 关键行为：
 
 - 设置页持有本地草稿 `prefs`，用 `dirty` ref 标记未保存改动；连续改动 250ms 防抖后写入 Rust，离开页面前补发一次。
+- 版本区块把下载与安装拆成两步：点击“下载更新”后才请求更新包，进度由 `update-download-progress` 事件驱动；下载并通过签名校验后按钮变为“重启并安装”。重新打开设置页时用 `downloaded_update_version` 恢复已下载状态，避免重复下载。
+- Windows 免安装 exe 没有可替换的安装目录，不显示“下载更新”，只保留“前往发布页”；macOS 更新替换 `.app` 后重启，Windows 由 NSIS 安装器接管并退出应用。
 - 后端状态变化时，只有在没有本地未保存改动时才覆盖草稿。
 - 保存成功不打扰用户；只有保存失败时在窗口底部弹一次 `.toast`（4 秒后自动消失，重复失败会重新计时）。
 - 主题切换立即应用并单独持久化，不等待防抖保存。

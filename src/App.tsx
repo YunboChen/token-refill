@@ -70,8 +70,27 @@ export default function App() {
   // 侧栏页脚只放一个轻量入口，详细状态仍在设置页。
   const updateAvailable =
     update?.updateAvailable && update.releaseUrl
-      ? { version: update.latestVersion, url: update.releaseUrl }
+      ? {
+          version: update.latestVersion,
+          url: update.releaseUrl,
+          selfUpdateSupported: update.selfUpdateSupported,
+        }
       : null;
+
+  // 安装版直接进入设置页的版本区块；免安装版仍打开发布页手动替换。
+  function openUpdateEntry() {
+    if (!updateAvailable) return;
+    if (updateAvailable.selfUpdateSupported) {
+      setActive('settings');
+      window.requestAnimationFrame(() => {
+        document
+          .getElementById('settings-version')
+          ?.scrollIntoView({ block: 'start' });
+      });
+      return;
+    }
+    void openExternal(updateAvailable.url);
+  }
 
   const renderNavItem = (panel: PanelDef) => (
     <button
@@ -140,9 +159,9 @@ export default function App() {
             <button
               type="button"
               className={styles.updateChip}
-              onClick={() => void openExternal(updateAvailable.url)}
-              title={`发现新版本 v${updateAvailable.version}，前往下载页`}
-              aria-label={`发现新版本 v${updateAvailable.version}，前往下载页`}
+              onClick={openUpdateEntry}
+              title={`发现新版本 v${updateAvailable.version}，前往更新`}
+              aria-label={`发现新版本 v${updateAvailable.version}，前往更新`}
             >
               <ArrowUp size={11} weight="bold" aria-hidden />
               v{updateAvailable.version}
