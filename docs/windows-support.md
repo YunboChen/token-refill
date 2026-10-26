@@ -19,6 +19,7 @@
 | 用户目录 | `HOME` | `USERPROFILE`（Git Bash 等可能把 `HOME` 设为 POSIX 形式） | `home_dir()`：Windows 先取 `USERPROFILE`，Unix 先取 `HOME` |
 | 版本管理器 | nvm：`~/.nvm/versions/node/*/bin` | nvm-windows：`NVM_HOME\v*`；fnm：`%APPDATA%\fnm\node-versions\*\installation` | `version_dirs()` 返回版本根目录与相对子路径 |
 | 包管理器默认目录 | Homebrew、`~/.local/bin` | `%APPDATA%\npm`、`%LOCALAPPDATA%\pnpm`、Volta、`.bun\bin`、Scoop shims、OpenAI 官方安装目录、WindowsApps | `extra_search_dirs()` |
+| 桌面端内置 CLI | `ChatGPT.app/Contents/Resources/codex-cli/bin`（含 `~/Applications`） | `<安装目录>\resources\codex-cli\bin`；Store 版扫描 `WindowsApps\OpenAI.Codex_*` | `desktop_cli_dirs()` / `find_in_msix_desktop_app()`；排在显式安装的 CLI 之后 |
 | 打开授权链接 | `open` | `ShellExecuteW` | 不走 `cmd /C start`，URL 不经 shell 解析 |
 | 数据目录 | `~/Library/Application Support/<identifier>` | `%APPDATA%\<identifier>` | `app.path().app_data_dir()`，应用代码不拼平台路径 |
 | 目录/文件权限 | 0700 / 0600 | 继承 `%APPDATA%` 的按用户 ACL | Unix 显式设权限位，Windows 不设 |
@@ -27,9 +28,11 @@
 ## 3. Codex CLI 查找顺序
 
 1. `CODEX_BIN`：显式指定；文件不可执行时直接报 `codex-not-found`，不静默回退。
-2. `PATH`：按目录顺序探测候选文件名（Windows 优先 `codex.exe`，其次 `.cmd`、`.bat`、`.com`）。
-3. 版本管理器：目录名按字符串降序，跳过没有安装 CLI 的版本目录。
-4. 包管理器默认目录：从资源管理器启动的 GUI 进程拿不到终端里临时追加的 `PATH`，因此再按默认安装位置找一遍。
+2. `CODEX_CLI_PATH`：Codex 桌面端使用该变量指定自带 CLI；文件不可执行时忽略并继续查找，避免桌面端留下的失效值阻断本应用。
+3. `PATH`：按目录顺序探测候选文件名（Windows 优先 `codex.exe`，其次 `.cmd`、`.bat`、`.com`）。
+4. 版本管理器：目录名按字符串降序，跳过没有安装 CLI 的版本目录。
+5. 包管理器默认目录：从资源管理器启动的 GUI 进程拿不到终端里临时追加的 `PATH`，因此再按默认安装位置找一遍。
+6. Codex 桌面端内置 CLI：只装桌面端、没有单独安装 CLI 时由这些位置兜底；排在最后，用户自己安装的 CLI 仍然优先。
 
 Windows 目标目录：
 
@@ -42,10 +45,12 @@ Windows 目标目录：
 | Scoop | `%USERPROFILE%\scoop\shims\codex.cmd` |
 | 官方安装包 | `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe` |
 | winget / 应用别名 | `%LOCALAPPDATA%\Microsoft\WindowsApps\codex.exe` |
+| 桌面端（安装版） | `%LOCALAPPDATA%\Programs\ChatGPT\resources\codex-cli\bin\codex.exe`；同时探测 `Codex`、`OpenAI\Codex` 目录名 |
+| 桌面端（Microsoft Store） | `%ProgramFiles%\WindowsApps\OpenAI.Codex_<版本>_x64__<hash>\app\resources\...`；目录受 ACL 保护，枚举失败时跳过 |
 | nvm-windows | `%NVM_HOME%\v*\codex.cmd`，以及 `%NVM_SYMLINK%` |
 | fnm | `%APPDATA%\fnm\node-versions\v*\installation\codex.cmd` |
 
-未找到时返回同一个结构化错误，界面提示安装 CLI 或设置 `CODEX_BIN`。
+桌面端与独立 CLI 共用 `%USERPROFILE%\.codex` 登录态，因此不需要额外登录；查询仍通过官方 `app-server --stdio` 进行，不读取桌面端的内部状态文件。未找到时返回同一个结构化错误，界面提示安装 CLI 或桌面端、或设置 `CODEX_BIN`。
 
 ## 4. 子进程启动
 

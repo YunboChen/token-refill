@@ -38,11 +38,11 @@ pnpm install --frozen-lockfile
 pnpm tauri dev
 ```
 
-桌面应用启动后进入总览页：先展示 Rust 侧缓存（首次为空时显示查询中），随后按设置自动刷新。总览顶部可在「订阅账户额度」与「中转站账户额度」之间切换；后者在切换时先展示上次成功快照，再扫描本地配置，并把超过刷新间隔的账户自动刷新一次；两处与「中转站账户管理」页共享同一份结果。Codex 需要本机已安装官方 CLI；本机账户沿用 CLI 已有登录态，未安装或未登录时界面会显示对应错误，其他界面仍可用。
+桌面应用启动后进入总览页：先展示 Rust 侧缓存（首次为空时显示查询中），随后按设置自动刷新。总览顶部可在「订阅账户额度」与「中转站账户额度」之间切换；后者在切换时先展示上次成功快照，再扫描本地配置，并把超过刷新间隔的账户自动刷新一次；两处与「中转站账户管理」页共享同一份结果。Codex 需要本机已安装官方 CLI 或 Codex 桌面端；本机账户沿用已有登录态，未安装或未登录时界面会显示对应错误，其他界面仍可用。
 
 在“账户”页可以添加独立账户：
 
-- **Codex**：应用会为每个账户创建单独的 `CODEX_HOME`，通过 Codex 官方浏览器授权登录。各账户的登录令牌由 Codex CLI 保存在应用数据目录下的独立授权目录中（macOS/Linux 目录权限 0700，Windows 继承 `%APPDATA%` 的按用户 ACL），应用不读取、不复制、也不向前端展示令牌；添加独立账户不会修改本机 Codex 的默认登录态。本机账户也会读取当前 CLI 登录的脱敏邮箱与套餐档位，便于确认正在查看的是哪个账号。
+- **Codex**：应用会为每个账户创建单独的 `CODEX_HOME`，通过 Codex 官方浏览器授权登录。各账户的登录令牌由 Codex CLI 保存在应用数据目录下的独立授权目录中（macOS/Linux 目录权限 0700，Windows 继承 `%APPDATA%` 的按用户 ACL），应用不读取、不复制、也不向前端展示令牌；添加独立账户不会修改本机 Codex 的默认登录态。本机账户也会读取当前本机登录的脱敏邮箱与套餐档位，便于确认正在查看的是哪个账号。
 - **百炼**：应用打开阿里云百炼控制台登录页，登录成功后控制台会话令牌通过 `127.0.0.1` 回环地址直接交给 Rust，写入应用数据目录下的 `bailian-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 继承 `%APPDATA%` 的按用户 ACL）。令牌不进入前端状态、事件或日志，也不会修改 `bl` CLI 或其他工具的配置。一次授权同时查询 Token Plan 与 Coding Plan。Token Plan 会读取订阅档位（Lite / Essential / Standard / Pro）；账号提示优先使用控制台返回的昵称，昵称为数字时回退为脱敏 UID（控制台令牌接口拿不到阿里云登录名）。Coding Plan 未订阅时接口返回空列表，应用显示为数据缺口；Token Plan 对未订阅账户的返回尚未验证，不据此推断为零额度。
 - **OpenCode Go**：启动时先调用本机 `opencode auth export`，若存在活动的 `opencode-go`（或 `opencode`）API Key，会自动接入“本机 OpenCode”账户并在每次刷新时重新读取 CLI 凭据；未检测到时，可在添加账户弹窗粘贴 Go API Key。手动添加的密钥写入 `api-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600）。展示 5 小时、每周与订阅月三个窗口；订阅月按购买日滚动，不推算天数。403 表示该 Key 未开通 Go 订阅。
 - **Command Code**：使用 Provider API Key（通常以 `user_` 开头），访问 CLI 同款 `/alpha/billing/*` 与 `/alpha/usage/summary` 接口。展示 5 小时、每周滚动窗口与订阅月额度；月度窗口以“已用 + 剩余”推导上限，订阅接口不可用时仍保留滚动窗口并标注能力缺口。
@@ -65,7 +65,7 @@ pnpm dev
 
 ### Windows 说明
 
-- Codex CLI 查找顺序：`CODEX_BIN` → `PATH` → nvm-windows / fnm 的版本目录 → npm、pnpm、Volta、Bun、Scoop、`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` 等默认安装位置。候选文件为 `codex.exe`、`codex.cmd`、`codex.bat`、`codex.com`，优先原生可执行文件；找不到时设置 `CODEX_BIN` 指向完整路径。
+- Codex CLI 查找顺序：`CODEX_BIN` → `CODEX_CLI_PATH` → `PATH` → nvm-windows / fnm 的版本目录 → npm、pnpm、Volta、Bun、Scoop、`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` 等默认安装位置 → Codex 桌面端内置 CLI（`%LOCALAPPDATA%\Programs\ChatGPT\resources\codex-cli\bin`、Microsoft Store 版 `WindowsApps\OpenAI.Codex_<版本>\` 等）。候选文件为 `codex.exe`、`codex.cmd`、`codex.bat`、`codex.com`，优先原生可执行文件；只装桌面端、没有单独安装 CLI 时也能查询本机额度（两者共用 `~/.codex` 登录态）。找不到时设置 `CODEX_BIN` 指向完整路径。
 - 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立 Codex 账户的 `CODEX_HOME`，`bailian-profiles\<accountId>\` 与 `api-profiles\<accountId>\` 分别保存百炼控制台令牌和 OpenCode / Command Code 的 API Key，`relay-profiles\<relayId>\` 保存手动填写的中转站凭证。
 - Antigravity 需要本机可运行的 `agy`，查找顺序为 `AGY_BIN` → `PATH` → `%LOCALAPPDATA%\agy\bin` 等常见目录；额度通过 `agy -p /usage --output-format json` 读取。
 - 窗口使用系统标题栏，前端按 `get_app_info().platform` 收窄侧栏顶部留白。
@@ -195,7 +195,7 @@ Windows 的免安装 exe 与 NSIS 安装器由 `build-windows` job 用 MSVC 工�
 
 桌面应用启动后先读取 Rust 侧的缓存快照，再按设置自动刷新：默认每 5 分钟一次，可在设置中调整；支持手动刷新，同一账户的在途请求会去重。查询在 Rust 后台线程执行，窗口切换不会重复发起；失败时保留上一次成功数据并标明错误，不把失败显示成零额度。账户、套餐、额度窗口、更新时间与查询状态由统一状态模型管理，偏好保存到应用数据目录的版本化 JSON。
 
-当前 Codex 查询依赖本机已安装的 Codex CLI。本机账户沿用本机已有登录态；独立账户通过官方授权登录，各自使用隔离的 `CODEX_HOME`，支持添加、改名、重新授权与移除。账户页不再只读。
+当前 Codex 查询依赖本机已安装的 Codex CLI，或 Codex 桌面端自带的 CLI（桌面端与独立 CLI 共用 `~/.codex` 登录态，只装桌面端即可读取本机额度）。本机账户沿用本机已有登录态；独立账户通过官方授权登录，各自使用隔离的 `CODEX_HOME`，支持添加、改名、重新授权与移除。账户页不再只读。
 
 百炼账户通过控制台浏览器授权接入，不依赖 `bl` CLI；同一账户下的 Token Plan 与 Coding Plan 作为两个独立产品展示。账户页会把每个已开通套餐单独列出（名称、档位、最近更新时间），未开通的套餐不占位。Token Plan 展示订阅月的已用/剩余比例，Coding Plan 保留原始调用次数与 5 小时、周、订阅月三个窗口，不把不同单位合并成一个总数。
 

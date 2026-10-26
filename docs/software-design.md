@@ -59,7 +59,7 @@ Antigravity 是本机账户：应用只调用 `agy -p /usage --output-format jso
 
 Windows 兼容层已落地，变化集中在四处，业务状态模型不变：
 
-- Codex CLI 查找按平台区分候选名（`codex` 与 `codex.exe` / `.cmd` / `.bat` / `.com`）、可执行判定与常见安装目录，覆盖 npm、pnpm、Volta、Bun、Scoop、nvm-windows、fnm 及官方安装包。
+- Codex CLI 查找按平台区分候选名（`codex` 与 `codex.exe` / `.cmd` / `.bat` / `.com`）、可执行判定与常见安装目录，覆盖 npm、pnpm、Volta、Bun、Scoop、nvm-windows、fnm 及官方安装包。Codex 桌面端（ChatGPT.app / Codex 桌面应用）自带的 CLI 排在查找链最后：macOS 探测 `Contents/Resources/codex-cli/bin`，Windows 探测安装目录的 `resources\codex-cli\bin` 与 Microsoft Store 的 `WindowsApps\OpenAI.Codex_*`；桌面端与独立 CLI 共用登录态，只装桌面端也能查询本机额度，但仍通过官方 `app-server --stdio` 读取，不解析桌面端内部状态文件。
 - 授权链接在 Windows 上交给 `ShellExecuteW`，避免 `cmd /C start` 把 URL 查询串里的 `&` 当作命令分隔符。
 - 数据继续写入 `app_data_dir()`（Windows 为 `%APPDATA%\<identifier>`）；Unix 权限位保持不变，Windows 依赖该目录的按用户 ACL。
 - 窗口在 Windows 使用系统标题栏；前端读取 `get_app_info().platform` 后收窄侧栏顶部留白。
