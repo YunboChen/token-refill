@@ -24,7 +24,7 @@
 | 核心问题与产品方向 | 已确认 | 减少在软件与 CLI 之间切换，集中查看三类 AI 套餐 |
 | 首发系统与形态 | 已确认 | macOS，菜单栏快速查看 + 独立管理窗口；后续 Windows |
 | Windows 兼容层 | 已实现 | CLI 查找、授权链接、数据目录、标题栏按平台适配；Windows 本机构建、单元测试、真实 CLI 握手与启动验证通过，安装包与运行验收未完成，详见 [Windows 兼容设计](./windows-support.md) |
-| 版本检查 | 已实现 | 设置页查询 GitHub Releases 最新正式版本并与当前版本比较；有新版本时跳转发布页，不自动下载或安装 |
+| 版本检查 | 已实现 | 设置页查询 GitHub Releases 最新正式版本并与当前版本比较；启动时静默检查，运行期间定期复查；有新版本时跳转发布页，不自动下载或安装 |
 | 展示信息与多账户 | 已确认 | 额度或比例、各周期、重置时间或倒计时、更新时间与状态都需要；支持多个账户 |
 | 接入原则 | 已确认 | 应用独立管理多账户、可选主动导入、CLI 非正式版强制依赖；不包含本机凭证读取操作授权 |
 | 刷新、后台运行与提醒 | 已确认 | 默认 5 分钟可调自动刷新 + 单账户/全部手动刷新；缓存与失败反馈；关闭窗口常驻、明确退出、自启可选默认关闭；低额度、授权失效及可选重置提醒 |
@@ -225,3 +225,5 @@
 2026-10-26 优化 Codex 本机额度获取：桌面端（ChatGPT.app / Codex 桌面应用）内置的 CLI 纳入查找链，排在用户显式安装的 CLI 之后；同时接受桌面端使用的 `CODEX_CLI_PATH`（指向不可执行文件时静默忽略，不阻断常规查找）。macOS 探测 `/Applications` 与 `~/Applications` 下 `ChatGPT.app` / `Codex.app` 的 `Contents/Resources/codex-cli/bin`，并兜底 `CodexCLI.app/Contents/MacOS`；Windows 探测安装版的 `resources\codex-cli\bin` 与 Microsoft Store 版的 `WindowsApps\OpenAI.Codex_*`（枚举受 ACL 限制时跳过）。桌面端与独立 CLI 共用 `~/.codex` 登录态，查询仍只走官方 `app-server --stdio`，不解析桌面端内部状态文件。验证：macOS 上 ChatGPT.app 内置的 codex 0.164.0-alpha.11.1 完成 `initialize` / `account/read` / `account/rateLimits/read`，未记录邮箱、令牌或额度原文；`cargo test --locked` 与 `cargo clippy --all-targets -- -D warnings` 通过。Windows 桌面端路径与 Store 版 ACL 情况尚未在 Windows 机器实测。
 
 2026-10-26 本机 Codex 账户按客户端可用性显隐：应用启动加载状态时检查本机是否存在 Codex 客户端（独立 CLI 或桌面端内置 CLI），不存在则移除「本机 Codex」占位账户，存在但状态里缺少时补回。未安装 Codex 的用户不会再看到一张必然失败的卡片，调度器也不会反复查询；卸载后重新安装会在下次启动恢复。客户端存在但未登录时仍保留账户并展示授权错误，避免把需要登录的账户静默隐藏。验证：`cargo test --locked` 161 项通过，新增 2 项覆盖显隐与快照保留；`cargo clippy --all-targets -- -D warnings` 与 `cargo fmt --check` 通过。未在无 Codex 的全新环境做界面实测。
+
+2026-10-26 版本检查改为运行期间持续复查：此前只在启动时静默检查一次，并复用同一会话的首次结果，应用开机自启后长时间驻留时会错过之后发布的新版本。现在启动后仍先静默检查一次，之后每 6 小时复查；窗口重新获得焦点时若距上次检查超过 1 小时也会复查；检查失败（离线、限流）后 30 分钟静默重试，成功与失败都不打扰用户，设置页仍可手动重试。复查强制绕过会话缓存，设置页重复进入仍复用已有结果。验证：`pnpm build`（`tsc --noEmit` + `vite build`）通过；未在长时间驻留场景做界面实测。

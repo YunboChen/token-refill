@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -30,6 +31,13 @@ import {
   type UpdateStatus,
 } from './desktop';
 import { clearLegacyPreferences, defaultAppState, readLegacyPreferences } from './prefs';
+
+/** 自动复查间隔：新版本发布后最迟约 6 小时被发现。 */
+const UPDATE_RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+/** 静默检查失败（离线、限流）后的重试间隔。 */
+const UPDATE_RETRY_INTERVAL_MS = 30 * 60 * 1000;
+/** 窗口重新获得焦点时的最小复查间隔，避免频繁请求接口。 */
+const UPDATE_FOCUS_MIN_INTERVAL_MS = 60 * 60 * 1000;
 
 /** 发起授权的结果：失败原因随结果返回，由发起方在弹窗内展示，不进入页面级提示。 */
 export interface LoginAttempt {
@@ -82,19 +90,51 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
 
   // 启动时静默检查一次版本；失败（离线、限流）不打扰用户，设置页仍可手动重试。
+  // 应用会长时间驻留（支持开机自启），只查一次会错过启动之后发布的新版本，
+  // 因此定期复查，并在窗口重新获得焦点时按节流复查；失败后较短间隔重试。
+  const updateCheckedAt = useRef(0);
   useEffect(() => {
     if (!desktop) return;
     let disposed = false;
-    void checkForUpdate().then(
-      (status) => {
-        if (!disposed) setUpdate(status);
-      },
-      () => {
-        // 静默失败：设置页会显示具体原因。
-      },
-    );
+    let timer: number | undefined;
+
+    function schedule(delay: number) {
+      if (disposed) return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        runCheck(true);
+      }, delay);
+    }
+
+    function runCheck(force: boolean) {
+      if (disposed) return;
+      updateCheckedAt.current = Date.now();
+      void checkForUpdate(force).then(
+        (status) => {
+          if (disposed) return;
+          setUpdate(status);
+          schedule(UPDATE_RECHECK_INTERVAL_MS);
+        },
+        () => {
+          // 静默失败：设置页会显示具体原因。
+          if (!disposed) schedule(UPDATE_RETRY_INTERVAL_MS);
+        },
+      );
+    }
+
+    function onFocus() {
+      if (Date.now() - updateCheckedAt.current < UPDATE_FOCUS_MIN_INTERVAL_MS) return;
+      // 强制刷新，避免复用长时间驻留期间的旧结果。
+      runCheck(true);
+    }
+
+    runCheck(false);
+    window.addEventListener('focus', onFocus);
     return () => {
       disposed = true;
+      window.clearTimeout(timer);
+      window.removeEventListener('focus', onFocus);
     };
   }, [desktop]);
 
