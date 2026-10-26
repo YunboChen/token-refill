@@ -5,6 +5,7 @@ mod cli;
 mod codex;
 mod commandcode;
 mod discovery;
+mod notification;
 mod opencode;
 mod proxy;
 pub mod quota;
@@ -21,7 +22,6 @@ use std::sync::Arc;
 use serde::Serialize;
 use tauri::Manager;
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
-use tauri_plugin_notification::NotificationExt;
 
 use state::{LoginStartPayload, PersistedState, Preferences, StateStore};
 
@@ -183,15 +183,19 @@ fn set_auto_launch(
 }
 
 /// 设置页的显式测试入口，用于确认系统通知是否可用。
-/// 桌面端没有应用内授权弹窗；通知是否展示由系统通知设置决定。
+/// 授权在启动时申请；被拒绝或尚未决定时，这里返回可直接展示的提示。
 #[tauri::command]
-fn send_test_notification(app: tauri::AppHandle) -> Result<(), String> {
-    app.notification()
-        .builder()
-        .title("Token Refill · 测试通知")
-        .body("如果你看到这条通知，说明系统通知已经可用。")
-        .show()
-        .map_err(|err| format!("发送测试通知失败：{err}"))
+async fn send_test_notification(app: tauri::AppHandle) -> Result<(), String> {
+    // 查询授权状态会等系统回调，放到阻塞线程，避免卡住界面。
+    tauri::async_runtime::spawn_blocking(move || {
+        notification::send(
+            &app,
+            "Token Refill · 测试通知",
+            "如果你看到这条通知，说明系统通知已经可用。",
+        )
+    })
+    .await
+    .map_err(|err| format!("发送测试通知失败：{err}"))?
 }
 
 /// 仅允许打开 HTTPS 授权地址，避免把任意输入交给系统 shell。
@@ -375,6 +379,9 @@ pub fn run() {
                 Ok(actual) => store.reconcile_auto_launch(actual),
                 Err(err) => eprintln!("读取开机自启状态失败：{err}"),
             }
+
+            // macOS 在启动时申请通知授权，避免首次提醒才弹授权框。
+            notification::prepare();
 
             state::start_scheduler(Arc::clone(&store));
             state::auto_detect_local_accounts(store);
