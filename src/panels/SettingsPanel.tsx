@@ -100,6 +100,7 @@ export default function SettingsPanel() {
   const [theme, setTheme] = useState<ThemePref>(loadTheme);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [testState, setTestState] = useState<TestState>('idle');
+  const [testError, setTestError] = useState<string | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateStatus | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState>('idle');
   const [updateError, setUpdateError] = useState<string | null>(null);
@@ -179,9 +180,14 @@ export default function SettingsPanel() {
   function testNotification() {
     if (!desktop || testState === 'sending') return;
     setTestState('sending');
+    setTestError(null);
     void sendTestNotification().then(
       () => setTestState('sent'),
-      () => setTestState('error'),
+      (error) => {
+        setTestState('error');
+        // Rust 侧会返回可直接展示的原因（例如系统通知权限被拒绝）。
+        setTestError(typeof error === 'string' ? error : null);
+      },
     );
   }
 
@@ -475,17 +481,17 @@ export default function SettingsPanel() {
           <div className={styles.settingText}>
             <span className={styles.settingLabel}>系统通知</span>
             <span className={styles.settingHint}>
-              提醒通过系统通知发送，桌面端没有应用内授权弹窗。若未显示，请在“系统设置 →
-              通知”中允许 Token Refill（开发模式下来源可能显示为 Terminal）。
+              提醒通过系统通知发送。首次启动时 macOS 会请求通知权限；若未显示，请在“系统设置 →
+              通知”中允许 Token Refill。
             </span>
             {testState === 'sent' ? (
               <span className={styles.settingHint} role="status">
-                已请求发送；未出现请检查系统通知设置。
+                已发送测试通知。
               </span>
             ) : null}
             {testState === 'error' ? (
               <span className={styles.settingHint} role="status" data-danger="true">
-                发送失败，请稍后重试。
+                {testError ?? '发送失败，请稍后重试。'}
               </span>
             ) : null}
           </div>

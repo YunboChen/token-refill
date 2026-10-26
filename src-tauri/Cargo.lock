@@ -2505,7 +2505,10 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9df9128cbbfef73cda168416ccf7f837b62737d748333bfe9ab71c245d76613e"
 dependencies = [
+ "bitflags 2.13.2",
+ "block2",
  "objc2",
+ "objc2-core-location",
  "objc2-foundation",
 ]
 
@@ -4244,7 +4247,11 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 name = "token-refill"
 version = "0.2.3"
 dependencies = [
+ "block2",
  "getrandom 0.3.4",
+ "objc2",
+ "objc2-foundation",
+ "objc2-user-notifications",
  "semver",
  "serde",
  "serde_json",

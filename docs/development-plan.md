@@ -167,7 +167,7 @@
 | DEV-006 | REQ-004、REQ-008 | 统一调度、缓存、单账户/全部刷新、并发去重、限流与错误反馈 | DEV-001、至少一类适配可测、刷新参数设计 | 进行中：基础调度、缓存、去重与失败保留已实现；平台限流退避与休眠策略待定 |
 | DEV-007 | REQ-005、REQ-009 | 菜单栏弹窗、管理窗口开闭及共享状态；关闭窗口仍运行、退出停止任务 | 页面方向、DEV-001、DEV-006 | 未开始 |
 | DEV-008 | REQ-003、REQ-005、REQ-008 | 管理窗口各区域及账户管理交互；真实状态与失败恢复 | 页面方向、DEV-002、DEV-006 | 进行中：总览支持多账户卡片；账户页已启用添加、改名、重新授权与移除 |
-| DEV-009 | REQ-006 | 三类提醒、默认 20% 阈值、默认开启的低额度/失效提醒、默认关闭的重置开关、通知权限及去重；失败缓存不误报 | DEV-006、权限/周期与触发边界设计 | 进行中：三类提醒已接入系统通知；低额度按重置周期、授权失效按状态跃迁、重置按新旧快照确认新周期去重，均跨重启保持；系统通知权限状态反馈待后续 |
+| DEV-009 | REQ-006 | 三类提醒、默认 20% 阈值、默认开启的低额度/失效提醒、默认关闭的重置开关、通知权限及去重；失败缓存不误报 | DEV-006、权限/周期与触发边界设计 | 已实现：三类提醒已接入系统通知；低额度按重置周期、授权失效按状态跃迁、重置按新旧快照确认新周期去重，均跨重启保持；macOS 改用 `UNUserNotificationCenter`，启动时申请授权、前台也展示横幅，权限被拒绝时设置页提示 |
 | DEV-010 | REQ-010 | 自启选项默认关闭，系统设置失败可见且可恢复 | 系统兼容范围、管理设置入口 | 已实现：macOS 使用 LaunchAgent；写入成功并以系统实际状态确认后才回写偏好，失败返回错误；启动时按系统状态校正本地开关；真实登录项行为待用户实测 |
 | DEV-011 | 全部首版需求 | Apple Silicon、Intel 分别完成三类套餐与多账户桌面验收、凭证检查、限流离线及全新环境接入；构建通过不替代运行验证 | DEV-003 至 DEV-010、DEV-012 候选包与文档、两类验证环境 | 未开始 |
 | DEV-012 | REQ-007、REQ-011 | 正式标识与图标、双架构独立 DMG、ad-hoc 签名验证并说明未公证限制、安装/卸载/权限/接入/许可证文档及开源材料安全检查 | 已确认方案对应的 Tauri 打包验证、可运行应用与发布环境；本期不以前置 Developer ID 证书阻塞 | 未开始 |
@@ -229,3 +229,5 @@
 2026-10-26 版本检查改为运行期间持续复查：此前只在启动时静默检查一次，并复用同一会话的首次结果，应用开机自启后长时间驻留时会错过之后发布的新版本。现在启动后仍先静默检查一次，之后每 6 小时复查；窗口重新获得焦点时若距上次检查超过 1 小时也会复查；检查失败（离线、限流）后 30 分钟静默重试，成功与失败都不打扰用户，设置页仍可手动重试。复查强制绕过会话缓存，设置页重复进入仍复用已有结果。验证：`pnpm build`（`tsc --noEmit` + `vite build`）通过；未在长时间驻留场景做界面实测。
 
 2026-10-26 实现应用内更新（两段式）：Rust 侧接入 `tauri-plugin-updater`，新增 `download_update`、`downloaded_update_version`、`install_update` 三个命令；下载完成并通过 minisign 校验后暂存在内存，用户再次确认才安装。下载进度通过 `update-download-progress` 事件推送并做节流；更新器显式沿应用代理设置，直连模式下调用 `no_proxy()`。设置页“版本”区块增加进度条、“重启并安装”和免安装版说明，侧栏更新入口改为进入设置页版本区块。发布侧：`createUpdaterArtifacts` 只在 CI 用 `--config` 打开，本地构建不需要私钥；macOS 产出 `.app.tar.gz`，Windows 直接以 NSIS 安装器作为更新包并产出 `.exe.sig`，`publish` job 生成并按平台填写 `latest.json`。Windows 通过注册表 `Uninstall\Token Refill` 的 `InstallLocation` 与当前 exe 目录判断是否为 NSIS 安装版，免安装 exe 只跳转发布页。验证：`pnpm build`、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked` 通过。尚未配置 minisign 公钥与 GitHub Secrets，也未用真实 Release 验证下载、替换与重启；Windows 注册表判断和 NSIS 静默安装需在 Windows 机器实测。
+
+2026-10-26 macOS 系统通知迁移到 `UNUserNotificationCenter`：此前通知走 `tauri-plugin-notification → notify-rust → mac-notification-sys`，底层是已废弃的 `NSUserNotification`；应用位于前台时系统只把通知写入通知中心、不弹横幅，设置页的测试入口因此永远看不到横幅。现在 macOS 侧新增 `src-tauri/src/notification/macos.rs`，启动时申请通知授权，注册实现 `willPresentNotification` 的 delegate 返回 `banner`，前台也展示横幅；权限被拒绝或尚未决定时返回可直接展示的错误文案，设置页会显示具体原因。Windows 与未打包的 macOS 开发运行仍沿用插件实现。验证：`pnpm build`、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked` 通过；用替换二进制后的临时 `.app` 在 macOS 27 实机验证，日志确认前台发送时出现 `Presenting ... as banner`，随后恢复原安装并清理临时文件。ad-hoc 签名更新后是否需要重新授权，仍待在真实 Release 上验证。

@@ -17,7 +17,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use tauri_plugin_notification::NotificationExt;
 
 use crate::antigravity::{self, AntigravityUsage};
 use crate::api_key;
@@ -1629,14 +1628,7 @@ impl StateStore {
 
     /// 提醒走系统通知；发送失败只记录日志，不影响额度查询与状态落盘。
     fn show_notification(&self, title: &str, body: String) {
-        if let Err(err) = self
-            .app
-            .notification()
-            .builder()
-            .title(title)
-            .body(body)
-            .show()
-        {
+        if let Err(err) = crate::notification::send(&self.app, title, &body) {
             eprintln!("发送「{title}」失败：{err}");
         }
     }
