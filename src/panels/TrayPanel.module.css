@@ -38,6 +38,9 @@
 
 .wordmark {
   display: block;
+  /* .brand 是纵向 flex 容器，默认 stretch 会把字标拉满整行宽度并压扁比例；
+     必须靠 flex-start 让宽度按图片自身宽高比推导。 */
+  align-self: flex-start;
   width: auto;
   height: 17px;
   filter: var(--wordmark-filter);
