@@ -262,11 +262,40 @@
   transform: rotate(0deg);
 }
 
+/* 分组内容常驻，用 0fr ↔ 1fr 过渡高度；内层 min-height: 0 + overflow 才能被裁到 0。 */
+.cardsWrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  /* 间距放在外层并随过渡归零，避免收起后留下 7px 的空白。 */
+  padding-top: 0;
+  visibility: hidden;
+  opacity: 0;
+  /* 收起时等高度过渡结束再隐藏，避免动画中途看到空框；展开时立刻可见。 */
+  transition:
+    grid-template-rows 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    padding-top 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 160ms ease-out,
+    visibility 0s linear 220ms;
+}
+
+.cardsWrap[data-open] {
+  grid-template-rows: 1fr;
+  padding-top: 7px;
+  visibility: visible;
+  opacity: 1;
+  transition:
+    grid-template-rows 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    padding-top 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 160ms ease-out,
+    visibility 0s;
+}
+
 .cards {
   display: flex;
   flex-direction: column;
   gap: 7px;
-  margin-top: 7px;
+  overflow: hidden;
+  min-height: 0;
 }
 
 /* ---------- 账户卡 ---------- */

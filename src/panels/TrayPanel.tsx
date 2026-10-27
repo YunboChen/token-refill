@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { version as appVersion } from '../../package.json';
 import {
   ArrowClockwise,
@@ -388,6 +394,26 @@ function RelayCard({
   );
 }
 
+/**
+ * 分组内容始终挂载，靠 grid-template-rows 0fr ↔ 1fr 做展开/收起过渡。
+ * 收起后由 visibility: hidden 移出 Tab 顺序与读屏树，不依赖 inert 的支持情况。
+ */
+function SectionBody({
+  id,
+  open,
+  children,
+}: {
+  id: string;
+  open: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className={styles.cardsWrap} id={id} data-open={open || undefined}>
+      <div className={styles.cards}>{children}</div>
+    </div>
+  );
+}
+
 function latestUpdate(
   accounts: AccountState[],
   relays: RelayAccount[],
@@ -629,20 +655,18 @@ export default function TrayPanel() {
                       <ChevronIcon direction="down" />
                     </span>
                   </button>
-                  {open ? (
-                    <div className={styles.cards} id={bodyId}>
-                      {group.accounts.map((account) => (
-                        <AccountCard
-                          key={account.accountId}
-                          account={account}
-                          threshold={threshold}
-                          lowQuotaEnabled={lowQuotaEnabled}
-                          canRefresh={desktop}
-                          onRefresh={refreshAccount}
-                        />
-                      ))}
-                    </div>
-                  ) : null}
+                  <SectionBody id={bodyId} open={open}>
+                    {group.accounts.map((account) => (
+                      <AccountCard
+                        key={account.accountId}
+                        account={account}
+                        threshold={threshold}
+                        lowQuotaEnabled={lowQuotaEnabled}
+                        canRefresh={desktop}
+                        onRefresh={refreshAccount}
+                      />
+                    ))}
+                  </SectionBody>
                 </section>
               );
             })}
@@ -673,21 +697,22 @@ export default function TrayPanel() {
                     <ChevronIcon direction="down" />
                   </span>
                 </button>
-                {collapsed.has('relay') ? null : (
-                  <div className={styles.cards} id="tray-section-relay">
-                    {relayAccounts.map((account) => (
-                      <RelayCard
-                        key={account.id}
-                        account={account}
-                        threshold={threshold}
-                        lowQuotaEnabled={lowQuotaEnabled}
-                        refreshing={refreshingIds.has(account.id)}
-                        canRefresh={desktop}
-                        onRefresh={refreshRelayAccount}
-                      />
-                    ))}
-                  </div>
-                )}
+                <SectionBody
+                  id="tray-section-relay"
+                  open={!collapsed.has('relay')}
+                >
+                  {relayAccounts.map((account) => (
+                    <RelayCard
+                      key={account.id}
+                      account={account}
+                      threshold={threshold}
+                      lowQuotaEnabled={lowQuotaEnabled}
+                      refreshing={refreshingIds.has(account.id)}
+                      canRefresh={desktop}
+                      onRefresh={refreshRelayAccount}
+                    />
+                  ))}
+                </SectionBody>
               </section>
             ) : null}
           </>
