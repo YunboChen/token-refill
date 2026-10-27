@@ -259,9 +259,13 @@ pub fn show_main_window(app: &AppHandle) {
     if let Some(panel) = app.get_webview_window(PANEL_LABEL) {
         let _ = panel.hide();
     }
-    // macOS 下应用可能被 Cmd+H 隐藏，需要先取消应用的隐藏状态。
     #[cfg(target_os = "macos")]
-    let _ = app.show();
+    {
+        // 关闭主窗口时应用已退成附件形态；必须切回常规形态再显示窗口，否则
+        // 窗口拿不到 key 焦点，也没有应用菜单栏。应用被 Cmd+H 隐藏时一并取消。
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+        let _ = app.show();
+    }
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.unminimize();
         let _ = main.show();
@@ -286,13 +290,21 @@ fn cursor_rect(app: &AppHandle) -> Rect {
 }
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
-    // 关闭主窗口只隐藏：应用继续在菜单栏驻留并后台刷新。
+    // 关闭主窗口只隐藏：应用继续在菜单栏驻留并后台刷新。macOS 同时退成附件
+    // 形态，Dock 图标、Cmd+Tab 与应用菜单栏一并消失，只留菜单栏图标。
     if let Some(main) = app.get_webview_window("main") {
         let window = main.clone();
         main.on_window_event(move |event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                #[cfg(target_os = "macos")]
+                {
+                    // 先隐藏窗口再切形态，避免附件形态下窗口仍处于 key 状态。
+                    let _ = window
+                        .app_handle()
+                        .set_activation_policy(tauri::ActivationPolicy::Accessory);
+                }
             }
         });
     }

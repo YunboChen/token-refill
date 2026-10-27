@@ -454,7 +454,8 @@ pub fn run() {
         .expect("failed to build Token Refill");
 
     app.run(|app_handle, event| match event {
-        // 点击 Dock 图标时把被“关闭”（实际是隐藏）的管理窗口带回来。
+        // 从 Finder、Spotlight 等重新打开应用时，把被“关闭”（实际是隐藏）的
+        // 管理窗口带回来。Dock 图标在窗口隐藏期间不显示，不会触发这里。
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => tray::show_main_window(app_handle),
         // 退出时让调度器停止发起新任务；在途查询随后随进程结束。
