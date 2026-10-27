@@ -11,6 +11,7 @@ mod proxy;
 pub mod quota;
 mod relay;
 mod state;
+mod tray;
 mod update;
 mod usage_api;
 
@@ -343,6 +344,26 @@ fn relay_list(store: tauri::State<'_, Arc<relay::RelayStore>>) -> Vec<relay::Rel
     store.list()
 }
 
+/// 菜单栏面板里的“打开主窗口”：先收起面板，再把管理窗口带到前台。
+#[tauri::command]
+fn open_main_window(app: tauri::AppHandle) {
+    tray::show_main_window(&app);
+}
+
+/// 面板按 Esc 收起；隐藏而不是销毁，保持已加载的状态与订阅。
+#[tauri::command]
+fn hide_tray_panel(app: tauri::AppHandle) {
+    if let Some(panel) = app.get_webview_window(tray::PANEL_LABEL) {
+        let _ = panel.hide();
+    }
+}
+
+/// 菜单栏面板里的明确退出入口；RunEvent::Exit 负责让调度器停止。
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 #[tauri::command]
 async fn relay_remove(
     store: tauri::State<'_, Arc<relay::RelayStore>>,
@@ -360,11 +381,7 @@ pub fn run() {
         // 单实例插件必须最先注册：第二个进程在这里退出，并把已有窗口带到前台，
         // 否则两个进程共用同一份 state.json 与授权目录。
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            tray::show_main_window(app);
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
@@ -394,6 +411,9 @@ pub fn run() {
 
             // macOS 在启动时申请通知授权，避免首次提醒才弹授权框。
             notification::prepare();
+
+            // 菜单栏图标与快速查看面板；关闭主窗口只隐藏，应用继续常驻。
+            tray::setup(app.handle())?;
 
             state::start_scheduler(Arc::clone(&store));
             state::auto_detect_local_accounts(store);
@@ -425,16 +445,23 @@ pub fn run() {
             relay_import,
             relay_refresh,
             relay_list,
-            relay_remove
+            relay_remove,
+            open_main_window,
+            hide_tray_panel,
+            quit_app
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Token Refill");
 
-    app.run(|app_handle, event| {
+    app.run(|app_handle, event| match event {
+        // 点击 Dock 图标时把被“关闭”（实际是隐藏）的管理窗口带回来。
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => tray::show_main_window(app_handle),
         // 退出时让调度器停止发起新任务；在途查询随后随进程结束。
-        if let tauri::RunEvent::Exit = event {
+        tauri::RunEvent::Exit => {
             app_handle.state::<Arc<StateStore>>().shutdown();
         }
+        _ => {}
     });
 }
 

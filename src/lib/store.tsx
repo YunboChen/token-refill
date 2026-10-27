@@ -31,6 +31,7 @@ import {
   type UpdateStatus,
 } from './desktop';
 import { clearLegacyPreferences, defaultAppState, readLegacyPreferences } from './prefs';
+import { IS_TRAY_VIEW } from './view';
 
 /** 自动复查间隔：新版本发布后最迟约 6 小时被发现。 */
 const UPDATE_RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -92,9 +93,10 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // 启动时静默检查一次版本；失败（离线、限流）不打扰用户，设置页仍可手动重试。
   // 应用会长时间驻留（支持开机自启），只查一次会错过启动之后发布的新版本，
   // 因此定期复查，并在窗口重新获得焦点时按节流复查；失败后较短间隔重试。
+  // 菜单栏面板与主窗口同时存在，只由主窗口发起检查，避免重复请求 GitHub。
   const updateCheckedAt = useRef(0);
   useEffect(() => {
-    if (!desktop) return;
+    if (!desktop || IS_TRAY_VIEW) return;
     let disposed = false;
     let timer: number | undefined;
 

@@ -1,9 +1,9 @@
 # Token Refill 界面设计规范
 
-- 文档版本：0.1
-- 最近更新：2026-10-26
-- 适用范围：管理窗口前端（React + TypeScript）
-- 事实来源：`src/App.module.css`、`src/styles.css`、`src/App.tsx`、`src/panels/`、`src/components/`、`src/lib/format.ts`、`src/lib/useDialogA11y.ts`
+- 文档版本：0.2
+- 最近更新：2026-10-27
+- 适用范围：管理窗口与菜单栏快速查看面板前端（React + TypeScript）
+- 事实来源：`src/App.module.css`、`src/styles.css`、`src/App.tsx`、`src/panels/`、`src/panels/TrayPanel.module.css`、`src/components/`、`src/lib/format.ts`、`src/lib/useDialogA11y.ts`
 - 关联文档：[软件设计文档](./software-design.md)、[需求文档](./requirements.md)、[开发计划文档](./development-plan.md)
 
 本文从现有实现提炼界面结构、组件用法与改造步骤，目标是让新增页面或重做相似页面时**先复用、再新增**，避免每次重画一套卡片、状态和弹窗。产品范围与业务规则以需求文档为准，本文只描述界面层。
@@ -113,6 +113,7 @@
 | 卡片间距 | 同类卡片 10px；卡片与标题 14–16px |
 | 控件高度 | 标准按钮 34px；弹窗按钮 36px；小按钮 26–30px；输入框 34px（弹窗 38px） |
 | 图标尺寸 | 导航 17px；按钮内 13–16px；平台图形 18px（分组头 20px）；空态 24px |
+| 菜单栏面板 | 380×560 点；圆角 13px；内容区内边距 11–12px；水平居中于菜单栏图标 |
 
 ### 2.5 动效
 
@@ -498,6 +499,38 @@ section
 - 主题切换立即应用并单独持久化，不等待防抖保存。
 - 开机自启不是普通偏好：先调用系统，成功后再更新界面状态，失败给出明确说明。
 
+### 5.5 菜单栏快速查看（`TrayPanel.tsx`）
+
+菜单栏面板是独立窗口（`tray-panel`，380×560 点），不套用管理窗口的侧栏骨架，只复用颜色 token、格式化函数与 `PlatformLogo`。样式集中在 `src/panels/TrayPanel.module.css`，刻意不放进 `App.module.css`，避免主窗口与面板的布局规则互相牵连。
+
+```
+div.panel（透明窗口内的圆角面板）
+├─ header.brand
+│  ├─ img.wordmark
+│  └─ span.updated（更新时间 + 刷新中）
+│  └─ button.iconButton（刷新全部）
+├─ div.scroll
+│  ├─ p.notice（全局错误，可选）
+│  ├─ div.empty（没有任何账户时）
+│  └─ section.section × N
+│     ├─ div.sectionHead（平台徽标 + 名称 + 账户数）
+│     └─ div.account × N
+│        ├─ div.accountHead（账户名 + 档位/重新授权标签）
+│        ├─ div.quotaRow × N（窗口名 + 百分比 + 额度条 + 重置/金额）
+│        └─ p.errorLine（刷新失败，可选）
+└─ footer
+   ├─ span.version
+   └─ button.primaryButton「打开主窗口」+ button.iconButton（退出）
+```
+
+关键行为：
+
+- 订阅账户按平台分组，行内只保留当前套餐的关键窗口；多套餐账户在每类套餐第一行标注套餐名。额度条 4px，低于提醒阈值时百分比与填充转为危险色。
+- 中转站账户按主机名 + 平台标签展示，只保留密钥/账户金额摘要与一条剩余比例条；不复制管理页的两列大卡。
+- 面板打开事件由 Rust 广播（`tray-panel-shown`）；收到后先展示缓存，再按刷新间隔补查中转站。面板在应用启动时就已加载，因此中转站列表读完前不会主动发请求。
+- 面板内按 Esc 收起；点击面板外部由 Rust 的失焦监听收起。主题切换通过 `storage` 事件从主窗口同步。
+- 文案与数字遵循与主窗口相同的字号/字重级别，但整体缩小一档：面板正文 11–13px，行距更紧，避免在 380px 宽度内换行撑高。
+
 ## 6. 跨页交互约定
 
 ### 6.1 刷新
@@ -655,7 +688,7 @@ export default function FooPanel() {
 
 ## 9. 类名索引
 
-以下是 `src/App.module.css` 的现有类名分组，新增样式前先在这里找，避免重复造词。
+以下是 `src/App.module.css` 的现有类名分组，新增样式前先在这里找，避免重复造词。菜单栏面板使用独立的 `src/panels/TrayPanel.module.css`，类名以 `panel` / `section` / `account` / `quotaRow` / `relaySummary` 为主，不与管理窗口共用。
 
 | 分区 | 类名 |
 | --- | --- |
