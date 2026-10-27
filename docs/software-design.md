@@ -121,8 +121,9 @@ Rust 侧实现两类中转平台适配器，代码在 `src-tauri/src/quota/`（`
 凭证与存储：
 
 - 手动填写的服务地址、API Key、New API 访问令牌与用户 ID 保存在 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 的按用户 ACL），先写临时文件再原子替换。凭证只在 Rust 侧读取，不进入前端状态、事件、日志或错误消息。
-- 从 Claude Code / Codex 配置扫描到的密钥只在本次运行的内存中使用，不复制到应用目录；这些条目每次启动重新扫描。界面用「凭证已保存 / 凭证仅本次运行」区分两类条目。
-- 打开“中转站账户管理”页，或切到总览的「中转站账户额度」标签页时，会先加载已保存条目及上次成功快照，再扫描本地配置；应用启动但未进入这两个入口时不会额外扫描或查询中转站。随后把距上次成功查询已超过刷新间隔（沿用设置中的分钟数）的账户批量刷新一次；自动刷新失败按同一间隔退避，切换页面不会重复请求。两处共用同一份前端状态，添加、手动刷新、补充令牌或移除后立即同步。手动刷新失败保留旧快照并记录脱敏错误。移除条目会删除对应的 `relay-profiles/<relayId>/` 目录。
+- 从 cc-switch、Claude Code / Codex 配置扫描到的密钥不复制到应用目录。用户勾选导入后，`relay-profiles/<relayId>/source.json` 只保存来源引用（来源、app_type、provider id、导入时的地址、provider 类型与用户主动填写的访问令牌），同一目录的 `snapshot.json` 保存脱敏额度快照；启动时按引用重新读取源配置取出密钥，取不到就跳过该账户。界面用「凭证已保存 / 来源已保存 / 凭证仅本次运行」区分手动凭证、来源引用与仅内存条目。
+- 扫描是管理页上的手动入口：点击「扫描本地配置」后只列出候选（来源、provider 名称、地址、是否已在列表中），不发起网络请求、不自动登记；用户勾选并确认导入后，Rust 才对选中的候选识别上游并查询额度。扫描候选的密钥保留在 Rust 内存中，前端只拿到不含密钥的视图。
+- 打开“中转站账户管理”页，或切到总览的「中转站账户额度」标签页时，只加载已保存条目及上次成功快照；启动时仅在存在 `source.json` 的情况下读取对应源配置（只读、不发网络请求），没有来源账户时不扫描。随后把距上次成功查询已超过刷新间隔（沿用设置中的分钟数）的账户批量刷新一次；自动刷新失败按同一间隔退避，切换页面不会重复请求。两处共用同一份前端状态，添加、扫描导入、手动刷新、补充令牌或移除后立即同步。手动刷新失败保留旧快照并记录脱敏错误。移除条目会删除对应的 `relay-profiles/<relayId>/` 目录。
 - 访问令牌只对 New API 生效；Sub2API 账户不接受或保存访问令牌。
 
 New API 二开兼容策略（响应字段不是上游协议的一部分，按“可缺省、可别名、未知即忽略”解析）：
@@ -136,11 +137,12 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 
 本地配置读取范围（`src-tauri/src/discovery.rs`）：
 
+- cc-switch：`~/.cc-switch/cc-switch.db`（SQLite）`providers` 表中 `app_type` 为 `claude` / `codex` 的行，只读打开、不加写锁，不修改也不复制数据库。Claude 行取 `settings_config.env.ANTHROPIC_BASE_URL` 与 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY`；Codex 行取 `settings_config.auth.OPENAI_API_KEY`，地址取自 `config` TOML 中激活的 `[model_providers.<id>]`（回退顶层 `base_url` / `openai_base_url`）。数据库不存在、结构不匹配或被占用时当作本轮没有候选，不影响页面。
 - Claude Code：`$CLAUDE_CONFIG_DIR/settings.json` 或 `~/.claude/settings.json` 中 `env.ANTHROPIC_BASE_URL` 与 `env.ANTHROPIC_AUTH_TOKEN`（回退 `ANTHROPIC_API_KEY`）。
 - Codex：`$CODEX_HOME/config.toml` 或 `~/.codex/config.toml` 的 `[model_providers.<id>]`，只取 `base_url` 与 `env_key`/`experimental_bearer_token`；激活的 `model_provider` 排在最前。不读取 `auth.json` 等登录态凭证，也不执行配置中的命令。
 - 客户端 Base URL 末尾的 `/v1` 会被去掉后再拼接额度接口，避免 `/v1/v1/usage`。
 
-识别失败时在页面列出未识别的配置及原因，用户仍可手动填写地址与密钥。两类适配器都只把规范化后的金额、窗口与到期时间交给调用方；手动凭证持久化在应用数据目录，自动扫描到的密钥仅存在于 Rust 内存，均不进入前端状态、日志或错误消息；错误信息不回显响应正文。服务地址仅允许 HTTPS，本机回环地址例外。
+导入时识别失败会在管理页列出未识别的配置及原因，用户仍可手动填写地址与密钥。两类适配器都只把规范化后的金额、窗口与到期时间交给调用方；手动凭证持久化在应用数据目录，扫描候选与导入后的密钥仅存在于 Rust 内存，均不进入前端状态、日志或错误消息；错误信息不回显响应正文。服务地址仅允许 HTTPS，本机回环地址例外。
 
 ## 5. 数据设计待定项
 
@@ -337,7 +339,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 
 ## 10. IPC 与平台适配契约草案
 
-下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_discover`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`、`download_update`、`downloaded_update_version`、`install_update`。其余仍为计划名称。
+下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_scan`、`relay_import`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`、`download_update`、`downloaded_update_version`、`install_update`。其余仍为计划名称。
 
 ### 10.1 前端命令边界
 

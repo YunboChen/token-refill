@@ -275,7 +275,8 @@
 | `.accountIdentityCell` / `.accountMark` | 插头徽标 + host 身份区 |
 | `.relayTileStatus` / `.relayTileMeta` / `.relayTileNotice` | 额度同步状态、凭证与访问令牌说明、刷新失败提示（最多两行） |
 | `.accountAddTile` | 网格末尾的虚线添加入口，打开添加弹窗 |
-| `.relayScanButton` | 平台标题右侧的「重新扫描」动作 |
+| `.relayScanButton` | 平台标题右侧的「扫描本地配置」动作，打开候选勾选弹窗 |
+| `.relayCandidateList` / `.relayCandidate` | 扫描弹窗中的候选列表：复选框、来源、provider 名称与地址 |
 | `.relaySkipped` / `.relaySkippedToggle` | 未识别的本地配置：默认收起，展开后才列出来源、地址与原因 |
 
 ### 4.4 状态与提示
@@ -291,7 +292,7 @@
 | `.authStatus` + `.authDot` | 授权状态 | `data-state="ok"` 绿色，`"needs-reauth"` 红色，未知态中性 |
 | `.planRowState` | 套餐查询状态 | 状态键由 `planStateKey()` 提供（`inactive / busy / error / ok / idle`）；CSS 只为 `busy` 和 `error` 上色 |
 | `.updatedAt` | 最近刷新时间 | 卡片标题右侧，等宽数字 |
-| `.toast` | 瞬时错误 toast | 固定窗口底部居中，`--danger-soft` 底色；保存失败、授权没能启动等操作级失败用 `DangerToast` 自动消失 |
+| `.toast` / `.toastSuccess` | 瞬时提示 toast | 固定窗口底部居中，默认 `--danger-soft` 底色，成功时换 `--ok-soft`；操作级失败与导入成功都用 `Toast` 自动消失 |
 | `.overviewEmpty` / `.emptyGlyph` / `.emptyTitle` | 整页空态 | 没有数据时替代列表 |
 | `.noticeStale` 与 `.accountNote` | 行内补充说明 | 放在数据区下方，字号 12px |
 
@@ -406,7 +407,7 @@ section
 关键行为：
 
 - 标签栏沿用设置页分段控件的视觉语言：独立使用 `.overviewTabs` / `.overviewTab`，但复用 `.pillThumb` 滑块，等宽列 + `--pill-index` / `--pill-count` 驱动滑动；使用 `role="tablist"` / `role="tab"`；默认停留在「订阅账户额度」，切换不改变顶部页头。
-- 中转站账户与「中转站账户管理」页共用 `RelayProvider` 状态：进入任一页面时先展示上次成功快照，再扫描本地配置，并把超过刷新间隔的账户自动刷新一次；之后在任一页面手动刷新都会同步。
+- 中转站账户与「中转站账户管理」页共用 `RelayProvider` 状态：进入任一页面时只加载已保存条目与上次成功快照，并把超过刷新间隔的账户自动刷新一次；扫描本地配置是管理页上的手动入口，之后在任一页面手动刷新都会同步。
 - 平台顺序由 `groupAccountsByPlatform()` 固定，账户增删不会让分组跳动。
 - 同一平台的账户共用一张卡；默认展开第一个，`undefined` 表示沿用默认，`null` 表示全部收起。
 - 折叠摘要由 `accountSummary()` 生成：单套餐列各窗口余量；多套餐（如百炼的 Token Plan + Coding Plan）每个套餐只列剩余最低的窗口，避免摘要铺满整行。
@@ -439,7 +440,7 @@ section
 - 弹窗是状态联合类型 `DialogState`，授权流程还包含 `phase`：`waiting / succeeded / failed / canceled`。
 - 授权事件由 `onAccountLoginChanged` 驱动，只携带脱敏状态；离开页面或关闭弹窗要取消后台流程。
 - 添加流程的平台由入口决定，弹窗内不再切换平台。
-- 授权没能启动（例如本机没有 Codex 客户端）、API Key 校验失败等操作级错误统一用窗口底部的 `DangerToast` 提示（4 秒自动消失），不占弹窗和页面的布局；添加弹窗保持打开，方便改完重试或取消。
+- 授权没能启动（例如本机没有 Codex 客户端）、API Key 校验失败等操作级错误统一用窗口底部的 `Toast`（`tone="danger"`）提示（4 秒自动消失），不占弹窗和页面的布局；添加弹窗保持打开，方便改完重试或取消。
 
 ### 5.3 中转站账户管理（`RelayPanel.tsx`）
 
@@ -447,20 +448,20 @@ section
 section
 ├─ 页面级错误 noticeDanger（没有弹窗时）
 └─ platformGroup
-   ├─ platformSectionHead（插头徽标 + 中转站账户 + 说明 + 账户数 + 重新扫描）
+   ├─ platformSectionHead（插头徽标 + 中转站账户 + 说明 + 账户数 + 扫描本地配置）
    ├─ accountGrid
    │  ├─ accountTile × N（host、平台标签、来源/凭证/令牌、额度状态、刷新/令牌/移除）
    │  └─ accountAddTile（虚线添加入口，打开添加弹窗）
    ├─ 空列表说明 / 操作提示
    ├─ relaySkipped（默认收起：未识别的本地配置）
    └─ 浏览器预览说明
-└─ 弹窗（portal）：添加 / 补充访问令牌 / 移除
+└─ 弹窗（portal）：添加 / 扫描本地配置 / 补充访问令牌 / 移除
 ```
 
 关键行为：
 
 - 本页只负责账户与凭证管理；额度金额、比例、窗口与到期时间在总览的「中转站账户额度」展示。管理卡只保留「额度已同步 / 密钥不可用 / 尚未获取额度」与更新时间。
-- 进入页面时若尚未加载，会刷新已保存的手动条目并扫描一次本地配置；标题右侧「重新扫描」手动重试。数据与总览共用 `RelayProvider`，不会重复扫描。
+- 进入页面时若尚未加载，只读取已保存条目与上次成功快照；标题右侧「扫描本地配置」打开候选弹窗，扫描只列出来源、provider 名称、地址与「已在列表中」状态，不发起网络请求。默认勾选尚未添加的候选，用户确认「导入所选」后才查询额度并加入列表。导入的条目只保存来源引用，启动时重新读取源配置，卡片显示「来源已保存 · 启动时重新读取」。数据与总览共用 `RelayProvider`。
 - 添加、补充访问令牌与移除统一用弹窗，和账户页保持一致；添加位是网格末尾的虚线卡。
 - API Key 与访问令牌都用 ref 读取，不进入组件状态；保存动作由 Rust 完成。
 - New API 卡片提供访问令牌入口；Sub2API 不显示该入口。
@@ -511,7 +512,7 @@ section
 | 级别 | 表现 | 类名 |
 | --- | --- | --- |
 | 全局 | 状态读取等跨页面错误 | `.noticeDanger.globalNotice`（App 顶部） |
-| 瞬时 | 操作失败（保存设置、发起授权、添加账户） | `DangerToast` + `.toast`（窗口底部居中，自动消失） |
+| 瞬时 | 操作成功（导入本地配置）或失败（保存设置、发起授权、添加账户） | `Toast` + `.toast` / `.toastSuccess`（窗口底部居中，自动消失） |
 | 页面 | 本页的数据加载/扫描失败 | `.noticeDanger.accountNotice`（RelayPanel）或卡片内 `.noticeDanger` |
 | 对象 | 单个套餐/账户刷新失败 | `.noticeStale`（有旧数据）或 `.noticeDanger`（无数据） |
 | 行内 | 字段、设置项、套餐状态 | `.settingHint[data-danger]`、`.planRowState[data-state="error"]`、`.quotaLowNote` |
@@ -664,7 +665,7 @@ export default function FooPanel() {
 | 总览额度板 | `overviewTabs` `overviewTab` `overviewStack` `overviewEmpty` `emptyGlyph` `emptyTitle` `quotaBoard` `quotaAccount` `quotaAccountHead` `quotaAccountToggle` `quotaAccountInfo` `quotaAccountIdentity` `quotaAccountName` `quotaSummary` `quotaAccountTools` `chevronButton` `chevronIcon` `quotaAccountMeta` `metaDot` `quotaBody` `quotaBodyInner` `quotaNotices` `metricGrid` `metric` `metricDivider` `metricEyebrow` `metricProduct` `metricLabel` `quotaBarRow` `quotaPercent` `quotaBarTrack` `quotaBarFill` `metricMeta` `metricMetaPart` `metricDot` `quotaMeta` `quotaLowNote` `dataGaps` `skel` `skelLabel` `skelValue` `skelBar` `skelMeta` |
 | 账户管理 | `accountGrid` `accountTile` `accountIdentityCell` `accountMark` `accountIdentity` `accountNameRow` `accountName` `accountMeta` `planPanel` `planRow` `planRowMain` `planRowName` `planTier` `planRowState` `accountFoot` `accountRefresh` `accountActions` `miniButton` `accountAddTile` `accountAddIcon` `accountAddLabel` `accountEmptyNote` `accountNotice` |
 | 中转站 | `relayQuotaView` `relayScanButton` `relayTileStatus` `relayTileMeta` `relayTileNotice` `relaySectionLabel` `relayAmount` `relayQuotaGrid` `relayQuotaCell` `relayQuotaLabel` `relayQuotaCaption` `relayMeterRow` `relayMeterValue` `relayBar` `relayBarFill` `relayWindows` `relayWindow` `relayWindowHead` `relaySkipped` `relaySkippedToggle` `accountStack` `accountCard` `accountHead` `accountTitleBlock` `accountMetaLine` `accountHint` `accountTools` `updatedAt` `refreshButton` `chevronButton` `chevronIcon` |
-| 状态/提示 | `noticeDanger` `noticeStale` `noticeAside` `globalNotice` `authStatus` `authDot` `toast` `planTag` |
+| 状态/提示 | `noticeDanger` `noticeStale` `noticeAside` `globalNotice` `authStatus` `authDot` `toast` `toastSuccess` `planTag` |
 | 设置 | `settingRow` `settingRowStatic` `settingText` `settingLabel` `stackRow` `pills` `pill` `pillThumb` `pillText` `switchWrap` `switchInput` `switchTrack` `switchKnob` `range` `rangeHead` `rangeValue` `rangeScale` `testButton` `buttonRow` |
 | 表单/按钮 | `field` `fieldLabel` `textInput` `button` `buttonGhost` `dangerButton` |
 | 弹窗 | `dialogBackdrop` `dialog` `dialogClose` `dialogHeader` `dialogSubtitle` `dialogSteps` `dialogStep` `stepMarker` `stepBody` `stepTitle` `stepText` `dialogFieldGroup` `dialogNote` `authBlock` `authUrl` `loginStatus` `dialogSuccess` `dialogSuccessIcon` `dialogSuccessBody` `dialogSuccessTitle` `dialogSuccessText` `dialogActions` `dialogForm` |
