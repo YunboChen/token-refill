@@ -1,13 +1,21 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import {
   ArrowClockwiseIcon,
+  InfoIcon,
   KeyIcon,
   LockSimple,
   PlugsIcon,
   Plus,
   TrashIcon,
+  WarningIcon,
   X,
 } from '@phosphor-icons/react';
 import type { RelayAccount } from '../lib/desktop';
@@ -16,15 +24,21 @@ import { useRelay } from '../lib/relay';
 import {
   RELAY_ORIGIN_LABELS,
   RELAY_PROVIDER_LABELS,
+  relayCandidateSource,
   relayHost,
 } from '../lib/relayFormat';
 import { useAppState } from '../lib/store';
 import { useDialogA11y } from '../lib/useDialogA11y';
 import ChevronIcon from '../components/ChevronIcon';
+import Toast from '../components/Toast';
 import styles from '../App.module.css';
+
+/** 页面级瞬时提示：导入成功用 success，部分失败或操作提醒用 danger。 */
+type RelayNotice = { message: string; tone: 'success' | 'danger' };
 
 type RelayDialog =
   | { kind: 'add' }
+  | { kind: 'scan' }
   | { kind: 'token'; accountId: string; host: string; userId: string | null }
   | { kind: 'remove'; accountId: string; host: string };
 
@@ -46,13 +60,35 @@ function RelayAccountTile({
 }) {
   const host = relayHost(account.baseUrl);
   const quota = account.quota;
-  const meta = [
-    RELAY_ORIGIN_LABELS[account.origin],
-    account.persisted ? '凭证已保存' : '凭证仅本次运行',
-    account.hasAccountToken ? '访问令牌已配置' : null,
-  ]
-    .filter(Boolean)
+  // 第二行只留名称与来源；凭证保存状态收成一个图标，全文放进悬浮提示，
+  // 避免「来源已保存 · 启动时重新读取」这类说明把整行撑到截断。
+  const meta = [account.label, RELAY_ORIGIN_LABELS[account.origin]]
+    .filter(
+      (part, index, list): part is string =>
+        Boolean(part) && list.indexOf(part) === index,
+    )
     .join(' · ');
+  // 已保存的凭证重启后仍在；来源引用每次启动重新读取；两者都不是才算「仅本次运行」。
+  // 手动添加的凭证默认就保存在本机，不再挂图标说明。
+  const state: {
+    title: string;
+    detail: string;
+    icon: ReactNode;
+    attention?: boolean;
+  } | null = account.persisted
+    ? null
+    : account.referenceSaved
+      ? {
+          title: '来源引用已保存',
+          detail: `启动时按「${RELAY_ORIGIN_LABELS[account.origin]}」重新读取密钥`,
+          icon: <InfoIcon size={13} aria-hidden />,
+        }
+      : {
+          title: '凭证仅本次运行',
+          detail: '重启后需要重新添加账户',
+          icon: <WarningIcon size={13} aria-hidden />,
+          attention: true,
+        };
 
   // 管理页只说明额度是否已同步，金额与窗口留给总览，避免两页重复展示。
   const updated =
@@ -84,9 +120,38 @@ function RelayAccountTile({
               {RELAY_PROVIDER_LABELS[account.provider]}
             </span>
           </div>
-          <p className={styles.accountMeta} title={meta}>
-            {meta}
-          </p>
+          <div className={styles.accountMetaRow}>
+            <p className={styles.accountMeta} title={meta}>
+              {meta}
+            </p>
+            {state ? (
+              <>
+                <span
+                  className={styles.accountState}
+                  data-attention={state.attention || undefined}
+                  tabIndex={0}
+                  aria-describedby={`relay-state-${account.id}`}
+                >
+                  <span className={styles.accountStateIcon} aria-hidden="true">
+                    {state.icon}
+                  </span>
+                </span>
+                <span
+                  className={styles.accountHintPop}
+                  id={`relay-state-${account.id}`}
+                  role="tooltip"
+                >
+                  <span className={styles.accountHintTitle}>{state.title}</span>
+                  <span className={styles.accountHintDetail}>{state.detail}</span>
+                  {account.hasAccountToken ? (
+                    <span className={styles.accountHintDetail}>
+                      访问令牌已配置，可读取账户余额
+                    </span>
+                  ) : null}
+                </span>
+              </>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -133,10 +198,23 @@ function RelayAccountTile({
               className={styles.miniButton}
               onClick={(event) => onBeginTokenEdit(event.currentTarget)}
               disabled={!desktop}
-              aria-label={`为 ${host} 设置访问令牌`}
-              title="设置或更新访问令牌"
+              data-configured={account.hasAccountToken || undefined}
+              aria-label={
+                account.hasAccountToken
+                  ? `${host} 已配置访问令牌，点击更新`
+                  : `为 ${host} 设置访问令牌`
+              }
+              title={
+                account.hasAccountToken
+                  ? '访问令牌已配置，点击更新'
+                  : '设置访问令牌，读取账户余额'
+              }
             >
-              <KeyIcon size={14} aria-hidden />
+              <KeyIcon
+                size={14}
+                weight={account.hasAccountToken ? 'fill' : 'regular'}
+                aria-hidden
+              />
             </button>
           ) : null}
           <button
@@ -161,13 +239,16 @@ export default function RelayPanel() {
   const refreshMinutes = state.preferences.refreshMinutes;
   const {
     accounts,
+    candidates,
     skipped,
     scanning,
+    importing,
     loaded,
     error,
     refreshingIds,
     ensureLoaded,
-    rescan,
+    scanCandidates,
+    importCandidates,
     refreshDue,
     addAccount,
     refresh,
@@ -178,12 +259,26 @@ export default function RelayPanel() {
   const [dialog, setDialog] = useState<RelayDialog | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
-  const [formNotice, setFormNotice] = useState<string | null>(null);
+  const [formNotice, setFormNotice] = useState<RelayNotice | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [savingToken, setSavingToken] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [skippedOpen, setSkippedOpen] = useState(false);
+  // 扫描候选的勾选状态；只保存 id，密钥始终留在 Rust 侧。
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const reduceMotion = useReducedMotion();
+
+  // 已在列表中的候选不可重复导入，全选只作用于其余候选。
+  const selectableCandidates = candidates.filter(
+    (candidate) => !candidate.alreadyAdded,
+  );
+  const selectableSelected = selectableCandidates.filter((candidate) =>
+    selected.has(candidate.id),
+  ).length;
+  const allSelected =
+    selectableCandidates.length > 0 &&
+    selectableSelected === selectableCandidates.length;
+  const partiallySelected = selectableSelected > 0 && !allSelected;
 
   // 敏感输入一律用 ref 读取，不进入组件状态、日志或持久化数据。
   const keyInput = useRef<HTMLInputElement>(null);
@@ -191,6 +286,14 @@ export default function RelayPanel() {
   const userIdInput = useRef<HTMLInputElement>(null);
   const tokenInput = useRef<HTMLInputElement>(null);
   const tokenUserIdInput = useRef<HTMLInputElement>(null);
+  const selectAllInput = useRef<HTMLInputElement>(null);
+
+  // 部分勾选时用原生半选状态提示「再点一次才是全选」。
+  useEffect(() => {
+    if (selectAllInput.current) {
+      selectAllInput.current.indeterminate = partiallySelected;
+    }
+  }, [partiallySelected, dialog]);
 
   useEffect(() => {
     if (desktop) ensureLoaded();
@@ -230,6 +333,61 @@ export default function RelayPanel() {
     if (accountTokenInput.current) accountTokenInput.current.value = '';
     if (userIdInput.current) userIdInput.current.value = '';
     setDialog({ kind: 'add' });
+  };
+
+  const runScan = async () => {
+    setSelected(new Set());
+    const found = await scanCandidates();
+    if (!found) return;
+    // 默认勾选尚未在列表中的候选；已在列表里的保持禁用，避免重复查询。
+    setSelected(
+      new Set(found.filter((item) => !item.alreadyAdded).map((item) => item.id)),
+    );
+  };
+
+  const openScanDialog = (trigger?: HTMLElement | null) => {
+    prepareDialog(trigger);
+    setDialog({ kind: 'scan' });
+    void runScan();
+  };
+
+  const toggleCandidate = (id: string) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // 全选只在「全不选」与「全选可导入项」之间切换，已导入的候选不参与。
+  const toggleAllCandidates = () => {
+    setSelected(
+      allSelected
+        ? new Set()
+        : new Set(selectableCandidates.map((candidate) => candidate.id)),
+    );
+  };
+
+  const submitImport = async () => {
+    if (importing) return;
+    const ids = [...selected];
+    if (ids.length === 0) {
+      setFormError('请至少选择一个配置。');
+      return;
+    }
+    setFormError(null);
+    const report = await importCandidates(ids);
+    if (!report) return;
+    const failed = report.skipped.length;
+    setDialog(null);
+    setFormNotice({
+      tone: failed === 0 ? 'success' : 'danger',
+      message:
+        failed === 0
+          ? `已导入 ${ids.length} 个配置。`
+          : `已导入 ${ids.length - failed} 个配置，${failed} 个未能识别，见下方列表。`,
+    });
   };
 
   const openTokenDialog = (account: RelayAccount, trigger: HTMLElement) => {
@@ -276,9 +434,11 @@ export default function RelayPanel() {
       );
       if (!account) return;
       if (accountToken && account.provider !== 'new-api') {
-        setFormNotice(
-          '访问令牌只对 New API 生效；当前站点识别为 Sub2API，访问令牌未保存。',
-        );
+        setFormNotice({
+          tone: 'danger',
+          message:
+            '访问令牌只对 New API 生效；当前站点识别为 Sub2API，访问令牌未保存。',
+        });
       }
       if (keyInput.current) keyInput.current.value = '';
       if (accountTokenInput.current) accountTokenInput.current.value = '';
@@ -321,7 +481,7 @@ export default function RelayPanel() {
   };
 
   const dialogMessage = formError ?? error;
-  const busy = scanning || submitting;
+  const busy = scanning || importing || submitting;
 
   return (
     <section>
@@ -362,14 +522,14 @@ export default function RelayPanel() {
               <button
                 type="button"
                 className={`${styles.testButton} ${styles.relayScanButton}`}
-                onClick={() => {
+                onClick={(event) => {
                   setFormNotice(null);
-                  void rescan();
+                  openScanDialog(event.currentTarget);
                 }}
                 disabled={!desktop || busy}
                 title={
                   desktop
-                    ? '重新扫描 Claude Code 与 Codex 的本地配置'
+                    ? '扫描 cc-switch 与 Claude Code / Codex 的本地配置'
                     : '浏览器预览无法调用 Rust'
                 }
               >
@@ -378,7 +538,7 @@ export default function RelayPanel() {
                   className={scanning ? styles.spin : undefined}
                   aria-hidden
                 />
-                {scanning ? '扫描中…' : '重新扫描本地配置'}
+                {scanning ? '扫描中…' : '扫描本地配置'}
               </button>
             </div>
           </div>
@@ -405,8 +565,8 @@ export default function RelayPanel() {
             title={
               !desktop
                 ? '浏览器预览无法调用 Rust'
-                : scanning
-                  ? '正在扫描本地配置，请稍候'
+                : busy
+                  ? '正在处理本地配置，请稍候'
                   : '添加中转站账户'
             }
           >
@@ -419,16 +579,18 @@ export default function RelayPanel() {
 
         {accounts.length === 0 ? (
           <p className={styles.accountNote}>
-            {desktop && (!loaded || scanning)
-              ? '正在扫描 Claude Code 与 Codex 的本地配置…'
-              : '还没有中转站账户。可以点击虚线卡片手动添加，或重新扫描本机配置。'}
+            {desktop && !loaded
+              ? '正在加载已保存的中转站账户…'
+              : '还没有中转站账户。可以点击虚线卡片手动添加，或扫描 cc-switch / 本机配置。'}
           </p>
         ) : null}
 
         {formNotice ? (
-          <p className={styles.accountNote} role="status">
-            {formNotice}
-          </p>
+          <Toast
+            tone={formNotice.tone}
+            message={formNotice.message}
+            onDismiss={() => setFormNotice(null)}
+          />
         ) : null}
 
         {skipped.length > 0 ? (
@@ -693,6 +855,130 @@ export default function RelayPanel() {
                       </button>
                     </div>
                   </form>
+                ) : dialog.kind === 'scan' ? (
+                  <>
+                    <header className={styles.dialogHeader}>
+                      <h2 id="relay-dialog-title">扫描本地配置</h2>
+                      <p className={styles.dialogSubtitle}>
+                        cc-switch 保存的 provider 与 Claude Code / Codex 的当前配置
+                      </p>
+                    </header>
+                    {scanning ? (
+                      <p className={styles.dialogNote} role="status">
+                        <ArrowClockwiseIcon
+                          size={13}
+                          className={styles.spin}
+                          aria-hidden
+                        />
+                        正在读取本地配置…
+                      </p>
+                    ) : candidates.length === 0 ? (
+                      <p className={styles.dialogNote}>
+                        没有找到可导入的中转站配置。
+                      </p>
+                    ) : (
+                      <div className={styles.relayCandidateGroup}>
+                        {selectableCandidates.length > 0 ? (
+                          <div className={styles.relayCandidateToolbar}>
+                            <label className={styles.relayCandidateSelectAll}>
+                              <input
+                                ref={selectAllInput}
+                                type="checkbox"
+                                checked={allSelected}
+                                onChange={toggleAllCandidates}
+                                disabled={importing}
+                              />
+                              <span>{allSelected ? '取消全选' : '全选'}</span>
+                            </label>
+                            <span className={styles.relayCandidateCount}>
+                              已选 {selectableSelected} /{' '}
+                              {selectableCandidates.length}
+                            </span>
+                          </div>
+                        ) : null}
+                        <div
+                          className={styles.relayCandidateList}
+                          role="group"
+                          aria-label="扫描到的本地配置"
+                        >
+                          {candidates.map((candidate) => {
+                            const source = relayCandidateSource(
+                              candidate.origin,
+                              candidate.app,
+                            );
+                            const disabled =
+                              candidate.alreadyAdded || importing;
+                            return (
+                              <label
+                                key={candidate.id}
+                                className={styles.relayCandidate}
+                                data-disabled={disabled || undefined}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selected.has(candidate.id)}
+                                  onChange={() => toggleCandidate(candidate.id)}
+                                  disabled={disabled}
+                                />
+                                <span className={styles.relayCandidateBody}>
+                                  <span className={styles.relayCandidateName}>
+                                    {candidate.label ?? source}
+                                  </span>
+                                  <span className={styles.relayCandidateMeta}>
+                                    {[
+                                      candidate.label ? source : null,
+                                      relayHost(candidate.baseUrl),
+                                      candidate.alreadyAdded ? '已在列表中' : null,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(' · ')}
+                                  </span>
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {dialogMessage ? (
+                      <p className={styles.noticeDanger} role="alert">
+                        {dialogMessage}
+                      </p>
+                    ) : null}
+                    <p className={styles.dialogNote}>
+                      <LockSimple size={13} aria-hidden />
+                      扫描只读取 provider 地址与密钥，不发起网络请求；导入后才查询额度。
+                      密钥不会写入 relay-profiles/，界面只保存来源引用，下次启动重新读取源配置。
+                    </p>
+                    <div className={styles.dialogActions}>
+                      <button
+                        type="button"
+                        className={styles.buttonGhost}
+                        onClick={closeDialog}
+                        disabled={importing}
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.buttonGhost}
+                        onClick={() => void runScan()}
+                        disabled={scanning || importing}
+                      >
+                        重新扫描
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.button}
+                        onClick={() => void submitImport()}
+                        disabled={scanning || importing || selected.size === 0}
+                      >
+                        {importing
+                          ? '导入中…'
+                          : `导入所选（${selected.size}）`}
+                      </button>
+                    </div>
+                  </>
                 ) : (
                   <>
                     <h2 id="relay-dialog-title">移除中转站账户</h2>

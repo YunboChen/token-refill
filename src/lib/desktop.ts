@@ -326,18 +326,22 @@ export interface KeyQuota {
   checkedAtEpoch: number;
 }
 
-export type RelayOrigin = 'manual' | 'claude-code' | 'codex';
+export type RelayOrigin = 'manual' | 'cc-switch' | 'claude-code' | 'codex';
 
 export interface RelayAccount {
   id: string;
   baseUrl: string;
+  /** 扫描到的 provider 名称（cc-switch）；手动或当前配置文件条目为空。 */
+  label: string | null;
   origin: RelayOrigin;
   provider: QuotaProvider;
   quota: KeyQuota | null;
   checkedAtEpoch: number | null;
   lastError: string | null;
-  /** 凭证是否已保存到应用目录；自动扫描到的配置只在本次运行有效。 */
+  /** 密钥是否已保存到应用目录（仅手动填写的条目）。 */
   persisted: boolean;
+  /** 是否已保存来源引用；下次启动会重新读取源配置。 */
+  referenceSaved: boolean;
   /** 是否已配置 New API 访问令牌（不返回令牌本身）。 */
   hasAccountToken: boolean;
   /** 旧版 New API 单令牌鉴权使用的用户 ID（不是密钥）。 */
@@ -355,9 +359,25 @@ export interface DiscoveryReport {
   skipped: SkippedConfig[];
 }
 
-/** 扫描 Claude Code / Codex 的本地配置，并刷新已保存的手动条目。 */
-export function discoverRelayAccounts(): Promise<DiscoveryReport> {
-  return invoke<DiscoveryReport>('relay_discover');
+/** 扫描结果中的一条候选；密钥留在 Rust 侧，前端只拿到展示信息。 */
+export interface RelayCandidate {
+  id: string;
+  label: string | null;
+  /** cc-switch 的 app_type（claude / codex）；当前配置文件条目为空。 */
+  app: string | null;
+  origin: RelayOrigin;
+  baseUrl: string;
+  alreadyAdded: boolean;
+}
+
+/** 扫描 cc-switch、Claude Code / Codex 的本地配置；只列候选，不发起网络请求。 */
+export function scanRelayCandidates(): Promise<RelayCandidate[]> {
+  return invoke<RelayCandidate[]>('relay_scan');
+}
+
+/** 导入勾选的候选：识别 New API / Sub2API 并查询额度。 */
+export function importRelayCandidates(ids: string[]): Promise<DiscoveryReport> {
+  return invoke<DiscoveryReport>('relay_import', { ids });
 }
 
 /** 自动识别 New API / Sub2API 并查询；手动凭证由 Rust 保存，不进入前端状态。 */

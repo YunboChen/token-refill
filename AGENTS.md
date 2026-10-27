@@ -10,8 +10,8 @@
 - 应用标识 `dev.tokenrefill.desktop`；数据目录由 Tauri `app_data_dir()` 决定：
   - macOS `~/Library/Application Support/dev.tokenrefill.desktop/`
   - Windows `%APPDATA%\dev.tokenrefill.desktop\`
-  - 目录内：`state.json`（设置、账户、额度快照、提醒去重）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）与 `relay-profiles/<relayId>/`（手动填写的中转站凭证）。
-- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 / OpenCode Go / Command Code / Antigravity 额度查询、中转站（New API / Sub2API）密钥与账户额度查询、系统提醒、开机自启、版本检查、应用内下载与安装更新（仅 NSIS 安装版，下载与安装两段确认）。
+  - 目录内：`state.json`（设置、账户、额度快照、提醒去重）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）与 `relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）。
+- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 / OpenCode Go / Command Code / Antigravity 额度查询、中转站（New API / Sub2API）密钥与账户额度查询、从 cc-switch 与 Claude Code / Codex 当前配置手动扫描并勾选导入中转站候选、系统提醒、开机自启、版本检查、应用内下载与安装更新（仅 NSIS 安装版，下载与安装两段确认）。
 - 尚未实现：菜单栏常驻、系统级凭证存储、Windows 免安装 exe 的原地更新。
 
 ## 2. 数据与凭证边界
@@ -20,7 +20,7 @@
 - Codex 只通过官方 CLI 的 `app-server --stdio` JSON-RPC 交互；不解析、不复制、不迁移授权文件，令牌由 Codex CLI 维护在隔离目录。
 - 独立账户必须使用自己的 `CODEX_HOME`；本机账户只沿用本机登录态，不得修改或覆盖它。
 - 移除账户只清理本应用目录，不触发源工具注销，不影响其他账户。
-- 中转站手动填写的 API Key 与 New API 访问令牌写入 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 按用户 ACL），先写临时文件再原子替换；只保存用户主动填写的凭证。从 Claude Code / Codex 配置扫描到的密钥只在本次运行的内存中使用，不得复制到应用目录。New API 访问令牌只用于 `/api/user/self` 与 `/api/subscription/self`，不进入前端状态、日志或错误消息；旧版单令牌需要的 `New-Api-User` 用户 ID 与令牌一并保存，只作为请求头发送，不写入日志。
+- 中转站手动填写的 API Key 与 New API 访问令牌写入 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 按用户 ACL），先写临时文件再原子替换；只保存用户主动填写的凭证。从 cc-switch、Claude Code / Codex 配置扫描到的密钥不得复制到应用目录；勾选导入后只能在 `relay-profiles/<relayId>/source.json` 保存来源引用（来源、provider id、地址、provider 类型与用户主动填写的访问令牌），启动时按引用重新读取源配置，取不到就跳过该账户。扫描只列候选、不联网，必须由用户勾选确认后才查询额度。cc-switch 的 `~/.cc-switch/cc-switch.db` 只能只读打开，不修改、不迁移、不复制其中的数据。New API 访问令牌只用于 `/api/user/self` 与 `/api/subscription/self`，不进入前端状态、日志或错误消息；旧版单令牌需要的 `New-Api-User` 用户 ID 与令牌一并保存，只作为请求头发送，不写入日志。
 - 状态文件是脱敏数据，不是凭证；不要把它改成日志、调试导出或可分享格式。
 - 应用内更新的 minisign 私钥只保存在 GitHub Secrets 与发布者的离线备份中，不得进入仓库、日志、构建产物或应用数据目录；公钥可以公开。
 
@@ -61,7 +61,8 @@
 
 - 三处版本必须一致：`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`；改 `Cargo.toml` 后同步 `Cargo.lock`。CI 会校验，不一致直接失败。
 - 发布由 `.github/workflows/release.yml` 完成，触发条件：`main` 分支推送且版本号变化、`v*` tag 推送、手动触发。`main` 推送带 `paths` 过滤，只有 `src-tauri/tauri.conf.json` 变更才启动 workflow（提升版本号必然改这个文件），版本未变化时仍跳过全部构建；不要为「省一次 Actions 记录」移除该过滤，否则普通提交会重新产生空跑记录。
-- 发布只走 `main`：发布相关改动从 `main` 切出分支，PR 到 `main` 并合并，然后**在 `main` 上**提升版本号再推送。不要把 `dev` 整体合并或快进到 `main`——`dev` 只承载日常集成，未完成或未验证的功能不得随发版进入发布分支。发版后把 `main` 合回 `dev`，保持版本号一致。
+- 工作分支一律从 `main` 切出（`feat/*`、`fix/*`、`ci/*`、`docs/*`），PR 到 `main` 合并；**不要从 `dev` 切分支**。`dev` 只承载日常集成：定期把 `main` 合进来保持同步，不作为任何工作分支的基线。
+- 发布只走 `main`：发布相关改动同样从 `main` 切分支并 PR 到 `main`，然后**在 `main` 上**提升版本号再推送。不要把 `dev` 整体合并或快进到 `main`——`dev` 里未完成或未验证的功能不得随发版进入 `main`。发版后把 `main` 合回 `dev`，保持版本号一致。
 - 两个平台并行构建，产物上传到同一个 Release（tag `v<版本号>`）：
   - macOS：`Token.Refill_<版本>_arm64.dmg` / `Token.Refill_<版本>_x64.dmg`，以及应用内更新用的 `.app.tar.gz` 与 `.sig`
   - Windows：`Token.Refill_<版本>_x64.exe`（便携）、`Token.Refill_<版本>_x64-setup.exe`（NSIS，同时作为应用内更新包）与 `.exe.sig`

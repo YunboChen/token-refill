@@ -9,28 +9,35 @@ import {
 } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import {
-  discoverRelayAccounts,
+  importRelayCandidates,
   listRelayAccounts,
   queryRelayAccount,
   refreshRelayAccount,
   removeRelayAccount,
+  scanRelayCandidates,
   setRelayAccountToken,
+  type DiscoveryReport,
   type RelayAccount,
+  type RelayCandidate,
   type SkippedConfig,
 } from './desktop';
 import { relayErrorText } from './relayFormat';
 
 /**
  * 中转站账户的共享状态：总览的「中转站账户额度」与「中转站账户管理」使用同一份
- * 数据，避免两个页面各自扫描、刷新后互不同步。密钥与访问令牌只在 Rust 侧，
- * 这里只保存脱敏后的账户与额度视图。
+ * 数据，避免两个页面各自刷新后互不同步。密钥与访问令牌只在 Rust 侧，这里只保存
+ * 脱敏后的账户、候选与额度视图。
  */
 interface RelayContextValue {
   accounts: RelayAccount[];
+  /** 最近一次扫描出的候选；用户勾选后才导入。 */
+  candidates: RelayCandidate[];
   skipped: SkippedConfig[];
-  /** 正在扫描本地配置或刷新账号列表。 */
+  /** 正在扫描本地配置。 */
   scanning: boolean;
-  /** 首次扫描是否已经结束（成功或失败），用于区分“尚未加载”和“确实为空”。 */
+  /** 正在导入勾选的候选并查询额度。 */
+  importing: boolean;
+  /** 已保存账户列表是否已经加载（成功或失败），用于区分“尚未加载”和“确实为空”。 */
   loaded: boolean;
   /** 最近一次扫描/查询的错误；卡片自身的额度错误仍在 account.lastError 上。 */
   error: string | null;
@@ -38,9 +45,12 @@ interface RelayContextValue {
   clearError: () => void;
   /** 正在刷新的账户；批量刷新时可能同时有多个。 */
   refreshingIds: ReadonlySet<string>;
-  /** 首次进入中转站相关页面时调用；重复调用不会重复扫描。 */
+  /** 首次进入中转站相关页面时调用；只读取已保存条目，不扫描本地配置。 */
   ensureLoaded: () => void;
-  rescan: () => Promise<void>;
+  /** 扫描 cc-switch、Claude Code / Codex 的本地配置，只返回候选。 */
+  scanCandidates: () => Promise<RelayCandidate[] | null>;
+  /** 导入勾选的候选；失败的候选写入 skipped。 */
+  importCandidates: (ids: string[]) => Promise<DiscoveryReport | null>;
   /**
    * 进入中转站相关页面时调用：把距上次成功查询已超过 `refreshMinutes`
    * 的账户批量刷新一次。同一账户在间隔内不会重复自动刷新（失败也算一次）。
@@ -67,8 +77,10 @@ const RelayContext = createContext<RelayContextValue | null>(null);
 export function RelayProvider({ children }: { children: ReactNode }) {
   const desktop = isTauri();
   const [accounts, setAccounts] = useState<RelayAccount[]>([]);
+  const [candidates, setCandidates] = useState<RelayCandidate[]>([]);
   const [skipped, setSkipped] = useState<SkippedConfig[]>([]);
   const [scanning, setScanning] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshingIds, setRefreshingIds] = useState<ReadonlySet<string>>(
@@ -89,42 +101,63 @@ export function RelayProvider({ children }: { children: ReactNode }) {
     setRefreshingIds(next);
   }, []);
 
-  const discover = useCallback(async () => {
+  const load = useCallback(async () => {
     if (!desktop) return;
-    setScanning(true);
+    started.current = true;
     setError(null);
-    // 先显示已保存条目与上次成功快照，再扫描本地配置并探测上游。
-    // 扫描包含多次网络请求，先渲染缓存可以避免每次进入页面先看到空状态。
+    // 只读取已保存条目与上次成功快照；扫描本地配置由用户手动触发。
     try {
       const cached = await listRelayAccounts();
-      if (cached.length > 0) setAccounts([...cached].reverse());
-    } catch {
-      // 读取缓存失败不应阻塞扫描；扫描成功后会整体覆盖列表。
-    }
-    try {
-      const report = await discoverRelayAccounts();
       // 最近添加的条目排在最前，与管理页的添加顺序一致。
-      setAccounts([...report.accounts].reverse());
-      setSkipped(report.skipped);
+      setAccounts([...cached].reverse());
     } catch (err) {
       setError(relayErrorText(err));
     } finally {
-      setScanning(false);
       setLoaded(true);
     }
   }, [desktop]);
 
   const ensureLoaded = useCallback(() => {
     if (!desktop || started.current) return;
-    started.current = true;
-    void discover();
-  }, [desktop, discover]);
+    void load();
+  }, [desktop, load]);
 
-  const rescan = useCallback(async () => {
-    if (!desktop) return;
-    started.current = true;
-    await discover();
-  }, [desktop, discover]);
+  const scanCandidates = useCallback(async () => {
+    if (!desktop) return null;
+    setScanning(true);
+    setError(null);
+    try {
+      const found = await scanRelayCandidates();
+      setCandidates(found);
+      return found;
+    } catch (err) {
+      setError(relayErrorText(err));
+      return null;
+    } finally {
+      setScanning(false);
+    }
+  }, [desktop]);
+
+  const importCandidates = useCallback(
+    async (ids: string[]) => {
+      if (!desktop || ids.length === 0) return null;
+      setImporting(true);
+      setError(null);
+      try {
+        const report = await importRelayCandidates(ids);
+        // 导入结果已包含完整列表；沿用统一的反向排序。
+        setAccounts([...report.accounts].reverse());
+        setSkipped(report.skipped);
+        return report;
+      } catch (err) {
+        setError(relayErrorText(err));
+        return null;
+      } finally {
+        setImporting(false);
+      }
+    },
+    [desktop],
+  );
 
   const clearError = useCallback(() => setError(null), []);
 
@@ -251,14 +284,17 @@ export function RelayProvider({ children }: { children: ReactNode }) {
   const value = useMemo<RelayContextValue>(
     () => ({
       accounts,
+      candidates,
       skipped,
       scanning,
+      importing,
       loaded,
       error,
       clearError,
       refreshingIds,
       ensureLoaded,
-      rescan,
+      scanCandidates,
+      importCandidates,
       refreshDue,
       addAccount,
       refresh,
@@ -267,14 +303,17 @@ export function RelayProvider({ children }: { children: ReactNode }) {
     }),
     [
       accounts,
+      candidates,
       skipped,
       scanning,
+      importing,
       loaded,
       error,
       clearError,
       refreshingIds,
       ensureLoaded,
-      rescan,
+      scanCandidates,
+      importCandidates,
       refreshDue,
       addAccount,
       refresh,

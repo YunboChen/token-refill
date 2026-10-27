@@ -304,15 +304,27 @@ async fn relay_set_account_token(
     .map_err(|err| format!("保存访问令牌失败：{err}"))?
 }
 
-/// 扫描 Claude Code / Codex 的本地配置，自动识别并登记可查询的密钥。
+/// 扫描 cc-switch、Claude Code / Codex 的本地配置，只返回候选，不发起网络请求。
 #[tauri::command]
-async fn relay_discover(
+async fn relay_scan(
     store: tauri::State<'_, Arc<relay::RelayStore>>,
-) -> Result<relay::DiscoveryReport, String> {
+) -> Result<Vec<relay::RelayCandidate>, String> {
     let store = Arc::clone(&store);
-    tauri::async_runtime::spawn_blocking(move || store.discover())
+    tauri::async_runtime::spawn_blocking(move || store.scan())
         .await
         .map_err(|err| format!("扫描本地配置失败：{err}"))
+}
+
+/// 导入用户勾选的候选：识别上游并查询额度。
+#[tauri::command]
+async fn relay_import(
+    store: tauri::State<'_, Arc<relay::RelayStore>>,
+    ids: Vec<String>,
+) -> Result<relay::DiscoveryReport, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || store.import(&ids))
+        .await
+        .map_err(|err| format!("导入本地配置失败：{err}"))
 }
 
 #[tauri::command]
@@ -409,7 +421,8 @@ pub fn run() {
             update::install_update,
             relay_query,
             relay_set_account_token,
-            relay_discover,
+            relay_scan,
+            relay_import,
             relay_refresh,
             relay_list,
             relay_remove
