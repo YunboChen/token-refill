@@ -28,7 +28,7 @@ import { planTierLabel, sourceLabel } from '../lib/format';
 import { useDialogA11y } from '../lib/useDialogA11y';
 import { useAppState, type LoginAttempt } from '../lib/store';
 import PlatformHeading from '../components/PlatformHeading';
-import DangerToast from '../components/DangerToast';
+import Toast from '../components/Toast';
 import styles from '../App.module.css';
 
 const AUTH_LABELS: Record<AuthState, string> = {
@@ -741,7 +741,7 @@ export default function AccountsPanel() {
       </div>
 
       {toastMessage ? (
-        <DangerToast
+        <Toast
           message={toastMessage}
           onDismiss={() => setToastMessage(null)}
         />

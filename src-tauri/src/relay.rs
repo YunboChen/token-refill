@@ -5,9 +5,12 @@
 //! Windows 沿用 `%APPDATA%` 的按用户 ACL。凭证只供 Rust 侧查询使用，不进入
 //! 前端状态、事件或错误消息。
 //!
-//! 从 Claude Code / Codex 本地配置自动扫描到的密钥只在本次运行的内存中短暂
-//! 使用，不复制到应用目录；这些条目每次启动都会重新扫描。
+//! 从 cc-switch、Claude Code / Codex 本地配置扫描到的密钥不复制到应用目录：
+//! 用户勾选导入后，只在 `relay-profiles/<relayId>/source.json` 记录来源引用
+//! （来源、provider id、地址等，不含密钥），下次启动时重新读取源配置取出密钥。
+//! 扫描只列出候选，用户勾选后才查询额度并登记。
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,6 +24,7 @@ use crate::quota::{self, DetectedQuota, KeyQuota, QuotaProvider};
 /// 会话内最多保留的条目，避免误粘贴大量密钥后长期占用内存。
 const MAX_ENTRIES: usize = 20;
 const CREDENTIALS_FILE: &str = "credentials.json";
+const SOURCE_FILE: &str = "source.json";
 const SNAPSHOT_FILE: &str = "snapshot.json";
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -30,13 +34,14 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 #[serde(rename_all = "kebab-case")]
 pub enum RelayOrigin {
     Manual,
+    CcSwitch,
     ClaudeCode,
     Codex,
 }
 
 impl RelayOrigin {
-    /// 只有手动输入的条目会把凭证写入应用目录。自动扫描到的密钥属于源工具的
-    /// 配置，复制一份到应用目录既无必要，也会扩大密钥的存在范围。
+    /// 只有手动输入的条目会把密钥写入应用目录。扫描到的密钥属于源工具的配置，
+    /// 复制一份到应用目录既无必要，也会扩大密钥的存在范围；这些条目只保存引用。
     fn is_persisted(self) -> bool {
         matches!(self, RelayOrigin::Manual)
     }
@@ -47,14 +52,18 @@ impl RelayOrigin {
 pub struct RelayAccount {
     pub id: String,
     pub base_url: String,
+    /// 扫描到的 provider 名称（cc-switch）；手动或当前配置文件条目为空。
+    pub label: Option<String>,
     pub origin: RelayOrigin,
     pub provider: QuotaProvider,
     pub quota: Option<KeyQuota>,
     pub checked_at_epoch: Option<i64>,
     /// 最近一次刷新失败的原因；保留上一次成功的额度。
     pub last_error: Option<String>,
-    /// 凭证是否已写入应用目录；自动扫描到的配置只在本次运行有效。
+    /// 密钥是否已写入应用目录（仅手动填写的条目）。
     pub persisted: bool,
+    /// 是否已在应用目录保存来源引用；下次启动会重新读取源配置。
+    pub reference_saved: bool,
     /// 是否已配置 New API 访问令牌（只暴露存在性，不返回令牌本身）。
     pub has_account_token: bool,
     /// 旧版 New API 单令牌使用的 `New-Api-User` 用户 ID；不是密钥。
@@ -77,13 +86,96 @@ pub struct DiscoveryReport {
     pub skipped: Vec<SkippedConfig>,
 }
 
+/// 扫描结果中的一条候选：只含展示信息，密钥保留在 Rust 内存里。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayCandidate {
+    pub id: String,
+    pub label: Option<String>,
+    /// cc-switch 的 `app_type`（`claude` / `codex`）；当前配置文件没有这一项。
+    pub app: Option<String>,
+    pub origin: RelayOrigin,
+    pub base_url: String,
+    /// 同一地址与密钥已经在账户列表中，导入时无需重复查询。
+    pub already_added: bool,
+}
+
+/// 写入一条中转站凭证所需的全部信息；参数较多，集中成一个结构便于阅读。
+struct UpsertInput<'a> {
+    origin: RelayOrigin,
+    base_url: &'a str,
+    api_key: &'a str,
+    account_token: Option<&'a str>,
+    new_api_user_id: Option<&'a str>,
+    label: Option<&'a str>,
+    source_ref: Option<StoredSourceRef>,
+    detected: DetectedQuota,
+}
+
+/// 扫描导入的条目不保存密钥，只保存来源引用；下次启动按引用重新读取源配置。
+/// 文件里可能含用户主动填写的 New API 访问令牌，因此同样按 0600 写入。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredSourceRef {
+    origin: RelayOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    app: Option<String>,
+    /// cc-switch 的 provider 行 id，或 Codex `[model_providers.<id>]` 的表名。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_id: Option<String>,
+    /// 导入时的原始地址；没有 provider id 时用它匹配当前配置。
+    base_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
+    provider: QuotaProvider,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    account_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    new_api_user_id: Option<String>,
+}
+
+impl StoredSourceRef {
+    fn matches(&self, candidate: &discovery::ConfigCandidate) -> bool {
+        if self.origin != candidate.origin || self.app != candidate.app {
+            return false;
+        }
+        match self.provider_id.as_deref() {
+            Some(provider_id) => candidate.source_id.as_deref() == Some(provider_id),
+            // Claude Code 的当前配置没有 provider id，按地址匹配；地址换了就不再
+            // 把旧账户套到新配置上。
+            None => candidate.base_url.trim() == self.base_url.trim(),
+        }
+    }
+}
+
+/// 启动时从磁盘恢复账户的两种形态：手动凭证，或只含来源的引用。
+enum LoadedCredential {
+    Inline(StoredRelayCredential),
+    Reference(StoredSourceRef),
+}
+
+/// 扫描后暂存在内存中的候选，等待用户勾选导入。
+#[derive(Clone)]
+struct PendingCandidate {
+    id: String,
+    base_url: String,
+    api_key: String,
+    origin: RelayOrigin,
+    app: Option<String>,
+    source_id: Option<String>,
+    label: Option<String>,
+}
+
 struct RelayEntry {
     id: String,
     base_url: String,
+    label: Option<String>,
     origin: RelayOrigin,
     api_key: String,
     account_token: Option<String>,
     account_user_id: Option<String>,
+    /// 扫描导入的条目的来源引用；手动条目为空。
+    source_ref: Option<StoredSourceRef>,
     provider: QuotaProvider,
     quota: Option<KeyQuota>,
     checked_at_epoch: Option<i64>,
@@ -95,15 +187,22 @@ impl RelayEntry {
         RelayAccount {
             id: self.id.clone(),
             base_url: self.base_url.clone(),
+            label: self.label.clone(),
             origin: self.origin,
             provider: self.provider,
             quota: self.quota.clone(),
             checked_at_epoch: self.checked_at_epoch,
             last_error: self.last_error.clone(),
             persisted: self.origin.is_persisted(),
+            reference_saved: self.source_ref.is_some(),
             has_account_token: self.account_token.is_some(),
             new_api_user_id: self.account_user_id.clone(),
         }
+    }
+
+    /// 账户是否会跨重启保留：手动凭证或来源引用任一存在即可。
+    fn is_retained(&self) -> bool {
+        self.origin.is_persisted() || self.source_ref.is_some()
     }
 
     fn stored(&self) -> StoredRelayCredential {
@@ -139,17 +238,10 @@ struct StoredRelayCredential {
     new_api_user_id: Option<String>,
 }
 
-fn skipped_config(candidate: &discovery::ConfigCandidate, reason: String) -> SkippedConfig {
-    SkippedConfig {
-        origin: candidate.origin,
-        base_url: quota::normalize_base_url(&candidate.base_url)
-            .unwrap_or_else(|_| candidate.base_url.clone()),
-        reason,
-    }
-}
-
 pub struct RelayStore {
     entries: Mutex<Vec<RelayEntry>>,
+    /// 本次运行最近一次扫描的候选，等待用户勾选；密钥不离开 Rust 内存。
+    pending: Mutex<Vec<PendingCandidate>>,
     /// `None` 表示纯内存模式，供测试与未配置数据目录的场景使用。
     dir: Option<PathBuf>,
 }
@@ -158,6 +250,7 @@ impl Default for RelayStore {
     fn default() -> Self {
         Self {
             entries: Mutex::new(Vec::new()),
+            pending: Mutex::new(Vec::new()),
             dir: None,
         }
     }
@@ -168,6 +261,7 @@ impl RelayStore {
     pub fn load(dir: PathBuf) -> Self {
         let store = Self {
             entries: Mutex::new(Vec::new()),
+            pending: Mutex::new(Vec::new()),
             dir: Some(dir),
         };
         store.load_from_disk();
@@ -182,6 +276,12 @@ impl RelayStore {
 
     /// 读取每个账户目录；损坏或权限不符的条目直接跳过并记录，不影响启动。
     fn load_from_disk(&self) {
+        self.load_from_disk_with(discovery::discover_candidates);
+    }
+
+    /// 只有目录里存在来源引用时才读取外部配置，普通启动不会触发扫描。
+    /// `discover` 单独传入，便于测试注入候选。
+    fn load_from_disk_with(&self, mut discover: impl FnMut() -> Vec<discovery::ConfigCandidate>) {
         let Some(root) = &self.dir else {
             return;
         };
@@ -189,6 +289,7 @@ impl RelayStore {
             return;
         };
 
+        let mut discovered: Option<Vec<discovery::ConfigCandidate>> = None;
         let mut entries = self.lock();
         for dir_entry in read_dir.flatten() {
             let path = dir_entry.path();
@@ -201,18 +302,87 @@ impl RelayStore {
             if !is_valid_relay_id(id) || entries.iter().any(|entry| entry.id == id) {
                 continue;
             }
-            let Ok(stored) = read_credentials(&path) else {
-                eprintln!("跳过无法读取的中转站凭证目录：{id}");
-                continue;
+
+            let loaded = match read_credentials(&path) {
+                Ok(stored) => LoadedCredential::Inline(stored),
+                Err(_) if path.join(SOURCE_FILE).is_file() => match read_source_ref(&path) {
+                    Ok(reference) => LoadedCredential::Reference(reference),
+                    Err(_) => {
+                        eprintln!("跳过无法读取的中转站来源引用：{id}");
+                        continue;
+                    }
+                },
+                Err(_) => {
+                    eprintln!("跳过无法读取的中转站凭证目录：{id}");
+                    continue;
+                }
             };
-            let Ok(base_url) = quota::normalize_base_url(&stored.base_url) else {
-                eprintln!("跳过服务地址无效的中转站凭证目录：{id}");
-                continue;
+
+            let (
+                base_url,
+                api_key,
+                origin,
+                label,
+                account_token,
+                account_user_id,
+                provider,
+                source_ref,
+            ) = match loaded {
+                LoadedCredential::Inline(stored) => {
+                    let Ok(base_url) = quota::normalize_base_url(&stored.base_url) else {
+                        eprintln!("跳过服务地址无效的中转站凭证目录：{id}");
+                        continue;
+                    };
+                    let Ok(api_key) = quota::validate_api_key(&stored.api_key) else {
+                        eprintln!("跳过密钥无效的中转站凭证目录：{id}");
+                        continue;
+                    };
+                    (
+                        base_url,
+                        api_key,
+                        stored.origin,
+                        None,
+                        stored.account_token,
+                        stored.new_api_user_id,
+                        stored.provider,
+                        None,
+                    )
+                }
+                LoadedCredential::Reference(reference) => {
+                    if discovered.is_none() {
+                        discovered = Some(discover());
+                    }
+                    let Some(candidate) = discovered
+                        .as_deref()
+                        .unwrap_or_default()
+                        .iter()
+                        .find(|candidate| reference.matches(candidate))
+                    else {
+                        eprintln!("跳过来源已不可用的中转站账户：{id}");
+                        continue;
+                    };
+                    let Ok(base_url) = quota::normalize_base_url(&candidate.base_url) else {
+                        eprintln!("跳过来源地址无效的中转站账户：{id}");
+                        continue;
+                    };
+                    let Ok(api_key) = quota::validate_api_key(&candidate.api_key) else {
+                        eprintln!("跳过来源密钥无效的中转站账户：{id}");
+                        continue;
+                    };
+                    let label = candidate.label.clone().or_else(|| reference.label.clone());
+                    (
+                        base_url,
+                        api_key,
+                        reference.origin,
+                        label,
+                        reference.account_token.clone(),
+                        reference.new_api_user_id.clone(),
+                        reference.provider,
+                        Some(reference),
+                    )
+                }
             };
-            let Ok(api_key) = quota::validate_api_key(&stored.api_key) else {
-                eprintln!("跳过密钥无效的中转站凭证目录：{id}");
-                continue;
-            };
+
             let duplicate = entries
                 .iter()
                 .any(|entry| entry.base_url == base_url && entry.api_key == api_key);
@@ -229,11 +399,13 @@ impl RelayStore {
             entries.push(RelayEntry {
                 id: id.to_string(),
                 base_url,
-                origin: stored.origin,
+                label,
+                origin,
                 api_key,
-                account_token: stored.account_token,
-                account_user_id: stored.new_api_user_id,
-                provider: stored.provider,
+                account_token,
+                account_user_id,
+                source_ref,
+                provider,
                 quota,
                 checked_at_epoch,
                 last_error: None,
@@ -251,60 +423,140 @@ impl RelayStore {
         new_api_user_id: Option<&str>,
     ) -> Result<RelayAccount, String> {
         let detected = quota::detect_and_fetch(base_url, api_key, account_token, new_api_user_id)?;
-        self.upsert(
-            RelayOrigin::Manual,
+        self.upsert(UpsertInput {
+            origin: RelayOrigin::Manual,
             base_url,
             api_key,
             account_token,
             new_api_user_id,
+            label: None,
+            source_ref: None,
             detected,
-        )
+        })
     }
 
-    /// 扫描 Claude Code / Codex 配置并自动识别；失败的配置只报告来源与原因。
-    /// 已保存的条目沿用上次成功快照，避免离线时阻塞页面打开。
-    pub fn discover(&self) -> DiscoveryReport {
-        let mut skipped = Vec::new();
-        for candidate in discovery::discover_candidates() {
-            // 已在列表中的密钥（手动添加或已保存）不再重复查询，避免页面初始扫描
-            // 与用户刚提交的查询互相覆盖，尤其是带访问令牌的账户数据。
-            let already_known = quota::normalize_base_url(&candidate.base_url)
-                .map(|base_url| self.contains(&base_url, &candidate.api_key))
+    /// 扫描 cc-switch、Claude Code / Codex 的本地配置，只列出候选，不发起网络请求。
+    /// 密钥留在内存中，等用户勾选后由 [`Self::import`] 使用。
+    pub fn scan(&self) -> Vec<RelayCandidate> {
+        self.scan_candidates(discovery::discover_candidates())
+    }
+
+    fn scan_candidates(&self, candidates: Vec<discovery::ConfigCandidate>) -> Vec<RelayCandidate> {
+        let mut pending = Vec::with_capacity(candidates.len());
+        let mut views = Vec::with_capacity(candidates.len());
+
+        for (index, candidate) in candidates.into_iter().enumerate() {
+            let id = format!("candidate-{}", index + 1);
+            let normalized = quota::normalize_base_url(&candidate.base_url);
+            let already_added = normalized
+                .as_ref()
+                .map(|base_url| self.contains(base_url, &candidate.api_key))
                 .unwrap_or(false);
-            if already_known {
-                continue;
-            }
+            views.push(RelayCandidate {
+                id: id.clone(),
+                label: candidate.label.clone(),
+                app: candidate.app.clone(),
+                origin: candidate.origin,
+                base_url: normalized.unwrap_or(candidate.base_url.clone()),
+                already_added,
+            });
+            pending.push(PendingCandidate {
+                id,
+                base_url: candidate.base_url,
+                api_key: candidate.api_key,
+                origin: candidate.origin,
+                app: candidate.app,
+                source_id: candidate.source_id,
+                label: candidate.label,
+            });
+        }
+
+        let mut pending_slot = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *pending_slot = pending;
+        views
+    }
+
+    /// 导入用户勾选的候选：识别上游并查询额度。未识别的候选只报告来源与原因，
+    /// 已保存的条目继续沿用上次成功快照。
+    pub fn import(&self, ids: &[String]) -> DiscoveryReport {
+        let selected: Vec<PendingCandidate> = {
+            let pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut seen = HashSet::new();
+            ids.iter()
+                .filter(|id| seen.insert(id.as_str()))
+                .filter_map(|id| {
+                    pending
+                        .iter()
+                        .find(|candidate| &candidate.id == id)
+                        .cloned()
+                })
+                .collect()
+        };
+
+        let mut skipped = Vec::new();
+        for candidate in selected {
+            let base_url = quota::normalize_base_url(&candidate.base_url)
+                .unwrap_or_else(|_| candidate.base_url.clone());
             match quota::detect_and_fetch(&candidate.base_url, &candidate.api_key, None, None) {
                 Ok(detected) => {
-                    if let Err(reason) = self.upsert(
-                        candidate.origin,
-                        &candidate.base_url,
-                        &candidate.api_key,
-                        None,
-                        None,
+                    let source_ref = StoredSourceRef {
+                        origin: candidate.origin,
+                        app: candidate.app.clone(),
+                        provider_id: candidate.source_id.clone(),
+                        base_url: candidate.base_url.clone(),
+                        label: candidate.label.clone(),
+                        provider: detected.provider,
+                        account_token: None,
+                        new_api_user_id: None,
+                    };
+                    if let Err(reason) = self.upsert(UpsertInput {
+                        origin: candidate.origin,
+                        base_url: &candidate.base_url,
+                        api_key: &candidate.api_key,
+                        account_token: None,
+                        new_api_user_id: None,
+                        label: candidate.label.as_deref(),
+                        source_ref: Some(source_ref),
                         detected,
-                    ) {
-                        skipped.push(skipped_config(&candidate, reason));
+                    }) {
+                        skipped.push(SkippedConfig {
+                            origin: candidate.origin,
+                            base_url,
+                            reason,
+                        });
                     }
                 }
-                Err(reason) => skipped.push(skipped_config(&candidate, reason)),
+                Err(reason) => skipped.push(SkippedConfig {
+                    origin: candidate.origin,
+                    base_url,
+                    reason,
+                }),
             }
         }
+
         DiscoveryReport {
             accounts: self.list(),
             skipped,
         }
     }
 
-    fn upsert(
-        &self,
-        origin: RelayOrigin,
-        base_url: &str,
-        api_key: &str,
-        account_token: Option<&str>,
-        new_api_user_id: Option<&str>,
-        detected: DetectedQuota,
-    ) -> Result<RelayAccount, String> {
+    fn upsert(&self, input: UpsertInput<'_>) -> Result<RelayAccount, String> {
+        let UpsertInput {
+            origin,
+            base_url,
+            api_key,
+            account_token,
+            new_api_user_id,
+            label,
+            mut source_ref,
+            detected,
+        } = input;
         let base_url = quota::normalize_base_url(base_url)?;
         let api_key = quota::validate_api_key(api_key)?;
         // 访问令牌与用户 ID 只对 New API 有意义，Sub2API 不保存这两项。
@@ -329,6 +581,9 @@ impl RelayStore {
             entry.quota = Some(detected.quota);
             entry.checked_at_epoch = checked_at_epoch;
             entry.last_error = None;
+            if let Some(label) = label {
+                entry.label = Some(label.to_string());
+            }
             if account_token.is_some() {
                 entry.account_token = account_token;
             }
@@ -338,9 +593,19 @@ impl RelayStore {
             if origin.is_persisted() {
                 // 手动条目即使已被本地配置扫描到，也继续保留在应用目录里。
                 entry.origin = RelayOrigin::Manual;
+                entry.source_ref = None;
+            } else if let Some(mut reference) = source_ref.take() {
+                reference.provider = detected.provider;
+                reference.account_token = entry.account_token.clone();
+                reference.new_api_user_id = entry.account_user_id.clone();
+                entry.source_ref = Some(reference);
             }
             if entry.origin.is_persisted() {
                 self.persist_entry(entry)?;
+            } else if entry.source_ref.is_some() {
+                self.persist_source_ref(entry)?;
+            }
+            if entry.is_retained() {
                 self.persist_snapshot(entry);
             }
             return Ok(entry.view());
@@ -356,10 +621,17 @@ impl RelayStore {
         let entry = RelayEntry {
             id,
             base_url,
+            label: label.map(str::to_string),
             origin,
             api_key,
-            account_token,
-            account_user_id,
+            account_token: account_token.clone(),
+            account_user_id: account_user_id.clone(),
+            source_ref: source_ref.map(|mut reference| {
+                reference.provider = detected.provider;
+                reference.account_token = account_token;
+                reference.new_api_user_id = account_user_id;
+                reference
+            }),
             provider: detected.provider,
             quota: Some(detected.quota),
             checked_at_epoch,
@@ -367,6 +639,10 @@ impl RelayStore {
         };
         if entry.origin.is_persisted() {
             self.persist_entry(&entry)?;
+        } else if entry.source_ref.is_some() {
+            self.persist_source_ref(&entry)?;
+        }
+        if entry.is_retained() {
             self.persist_snapshot(&entry);
         }
         let view = entry.view();
@@ -404,11 +680,22 @@ impl RelayStore {
             .ok_or_else(|| "找不到这条中转站账户，请重新添加。".to_string())?;
         match result {
             Ok(detected) => {
+                let provider_changed = entry.provider != detected.provider;
                 entry.provider = detected.provider;
                 entry.checked_at_epoch = Some(detected.quota.checked_at_epoch);
                 entry.quota = Some(detected.quota);
                 entry.last_error = None;
-                if entry.origin.is_persisted() {
+                if provider_changed {
+                    if let Some(reference) = entry.source_ref.as_mut() {
+                        reference.provider = detected.provider;
+                    }
+                    if entry.source_ref.is_some() {
+                        if let Err(error) = self.persist_source_ref(entry) {
+                            eprintln!("更新中转站来源引用失败：{error}");
+                        }
+                    }
+                }
+                if entry.is_retained() {
                     self.persist_snapshot(entry);
                 }
             }
@@ -418,7 +705,8 @@ impl RelayStore {
     }
 
     /// 为已添加的 New API 账户补充或替换访问令牌，并立即重新查询。
-    /// 自动扫描到的条目只更新本次运行的内存，不会被复制到应用目录。
+    /// 访问令牌是用户主动填写的，手动条目写入 credentials.json，扫描导入的条目
+    /// 写入 source.json；两者都不含 API Key。
     pub fn set_account_token(
         &self,
         id: &str,
@@ -440,7 +728,15 @@ impl RelayStore {
             if new_api_user_id.is_some() {
                 entry.account_user_id = new_api_user_id;
             }
-            if entry.origin.is_persisted() {
+            let token = entry.account_token.clone();
+            let user_id = entry.account_user_id.clone();
+            if let Some(reference) = entry.source_ref.as_mut() {
+                reference.account_token = token;
+                reference.new_api_user_id = user_id;
+            }
+            if entry.source_ref.is_some() {
+                self.persist_source_ref(entry)?;
+            } else if entry.origin.is_persisted() {
                 self.persist_entry(entry)?;
             }
         }
@@ -485,7 +781,22 @@ impl RelayStore {
         let Some(dir) = self.entry_dir(&entry.id) else {
             return Ok(());
         };
-        write_credentials(&dir, &entry.stored())
+        write_credentials(&dir, &entry.stored())?;
+        // 同一条目改成手动凭证后，不应再残留旧的来源引用。
+        let _ = fs::remove_file(dir.join(SOURCE_FILE));
+        Ok(())
+    }
+
+    /// 保存来源引用（不含密钥）。下次启动按引用重新读取源配置。
+    fn persist_source_ref(&self, entry: &RelayEntry) -> Result<(), String> {
+        let (Some(dir), Some(reference)) = (self.entry_dir(&entry.id), entry.source_ref.as_ref())
+        else {
+            return Ok(());
+        };
+        write_json_private(&dir, SOURCE_FILE, reference, "中转站来源引用")?;
+        // 来源引用与手动凭证互斥，避免下次启动优先读到旧密钥。
+        let _ = fs::remove_file(dir.join(CREDENTIALS_FILE));
+        Ok(())
     }
 
     /// 快照写失败不影响本次查询结果，只在下次启动时缺少首屏数据。
@@ -575,6 +886,12 @@ fn read_credentials(dir: &Path) -> Result<StoredRelayCredential, String> {
     let raw = fs::read_to_string(dir.join(CREDENTIALS_FILE))
         .map_err(|_| "未找到中转站凭证文件。".to_string())?;
     serde_json::from_str(&raw).map_err(|_| "中转站凭证文件无法读取。".to_string())
+}
+
+fn read_source_ref(dir: &Path) -> Result<StoredSourceRef, String> {
+    let raw = fs::read_to_string(dir.join(SOURCE_FILE))
+        .map_err(|_| "未找到中转站来源引用。".to_string())?;
+    serde_json::from_str(&raw).map_err(|_| "中转站来源引用无法读取。".to_string())
 }
 
 fn read_snapshot(dir: &Path) -> Option<StoredSnapshot> {
@@ -761,12 +1078,257 @@ mod tests {
         let store = RelayStore::load(dir.clone());
         let detected = quota::detect_and_fetch(&base, "sk-test", None, None).unwrap();
         let account = store
-            .upsert(RelayOrigin::Codex, &base, "sk-test", None, None, detected)
+            .upsert(UpsertInput {
+                origin: RelayOrigin::Codex,
+                base_url: &base,
+                api_key: "sk-test",
+                account_token: None,
+                new_api_user_id: None,
+                label: None,
+                source_ref: None,
+                detected,
+            })
             .unwrap();
 
         assert!(!account.persisted);
+        assert!(!account.reference_saved);
         assert!(!dir.join(&account.id).exists());
         assert_eq!(RelayStore::load(dir.clone()).list().len(), 0);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn config_candidate(
+        origin: RelayOrigin,
+        label: Option<&str>,
+        base_url: &str,
+        api_key: &str,
+    ) -> discovery::ConfigCandidate {
+        discovery::ConfigCandidate {
+            origin,
+            app: matches!(origin, RelayOrigin::CcSwitch).then(|| "claude".to_string()),
+            source_id: matches!(origin, RelayOrigin::CcSwitch)
+                .then(|| format!("cc-switch-{base_url}")),
+            label: label.map(str::to_string),
+            base_url: base_url.to_string(),
+            api_key: api_key.to_string(),
+        }
+    }
+
+    #[test]
+    fn scan_lists_cc_switch_candidates_without_querying() {
+        let store = RelayStore::default();
+        let candidates = store.scan_candidates(vec![
+            config_candidate(
+                RelayOrigin::CcSwitch,
+                Some("千问AI平台"),
+                "https://relay.example.com/v1",
+                "sk-one",
+            ),
+            config_candidate(
+                RelayOrigin::Codex,
+                None,
+                "https://second.example.com",
+                "sk-two",
+            ),
+        ]);
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].id, "candidate-1");
+        assert_eq!(candidates[0].label.as_deref(), Some("千问AI平台"));
+        assert_eq!(candidates[0].app.as_deref(), Some("claude"));
+        assert_eq!(candidates[0].origin, RelayOrigin::CcSwitch);
+        assert_eq!(candidates[0].base_url, "https://relay.example.com");
+        assert!(!candidates[0].already_added);
+        assert_eq!(candidates[1].id, "candidate-2");
+        // 扫描只列出候选，不会创建账户。
+        assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn scan_marks_credentials_already_in_the_list() {
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        let base = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        let store = RelayStore::default();
+        let account = store.query(&base, "sk-test", None, None).unwrap();
+
+        let candidates = store.scan_candidates(vec![config_candidate(
+            RelayOrigin::CcSwitch,
+            Some("已有账户"),
+            &base,
+            "sk-test",
+        )]);
+
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].already_added);
+        assert_eq!(candidates[0].base_url, account.base_url);
+    }
+
+    #[test]
+    fn import_queries_only_the_selected_candidates() {
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        // 只为第一个候选准备响应；如果导入时误查第二个，连接失败会落到 skipped。
+        let base = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        let store = RelayStore::default();
+        let candidates = store.scan_candidates(vec![
+            config_candidate(RelayOrigin::CcSwitch, Some("选中的账户"), &base, "sk-one"),
+            config_candidate(RelayOrigin::ClaudeCode, None, &base, "sk-two"),
+        ]);
+
+        let report = store.import(&[candidates[0].id.clone()]);
+
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        assert_eq!(report.accounts.len(), 1);
+        assert_eq!(report.accounts[0].label.as_deref(), Some("选中的账户"));
+        assert_eq!(report.accounts[0].origin, RelayOrigin::CcSwitch);
+        assert!(!report.accounts[0].persisted);
+    }
+
+    #[test]
+    fn import_ignores_unknown_and_duplicate_ids() {
+        let store = RelayStore::default();
+        store.scan_candidates(vec![config_candidate(
+            RelayOrigin::Codex,
+            None,
+            "http://127.0.0.1:1",
+            "sk-one",
+        )]);
+
+        let report = store.import(&[
+            "missing".to_string(),
+            "candidate-1".to_string(),
+            "candidate-1".to_string(),
+        ]);
+
+        // 只读内存里的候选，不会因为未知 id 或重复 id 报错；候选指向不可达
+        // 地址时应落在 skipped 里，说明仍然只处理了一次。
+        assert_eq!(report.skipped.len(), 1);
+        assert!(report.accounts.is_empty());
+    }
+
+    fn store_loaded_with(dir: PathBuf, candidates: Vec<discovery::ConfigCandidate>) -> RelayStore {
+        let store = RelayStore {
+            entries: Mutex::new(Vec::new()),
+            pending: Mutex::new(Vec::new()),
+            dir: Some(dir),
+        };
+        store.load_from_disk_with(|| candidates.clone());
+        store
+    }
+
+    #[test]
+    fn imported_accounts_save_a_source_reference_not_the_key() {
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        let base = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        let dir = temp_dir("source-ref");
+        let store = RelayStore::load(dir.clone());
+        let candidate =
+            config_candidate(RelayOrigin::CcSwitch, Some("来源账户"), &base, "sk-source");
+        let views = store.scan_candidates(vec![candidate]);
+        let report = store.import(&[views[0].id.clone()]);
+
+        assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+        let account = &report.accounts[0];
+        assert!(account.reference_saved);
+        assert!(!account.persisted);
+        let profile = dir.join(&account.id);
+        let raw = fs::read_to_string(profile.join(SOURCE_FILE)).unwrap();
+        assert!(!raw.contains("sk-source"));
+        assert!(!profile.join(CREDENTIALS_FILE).exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn source_references_restore_the_account_on_reload() {
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        let base = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        let dir = temp_dir("source-reload");
+        let store = RelayStore::load(dir.clone());
+        let candidate =
+            config_candidate(RelayOrigin::CcSwitch, Some("来源账户"), &base, "sk-source");
+        let views = store.scan_candidates(vec![candidate.clone()]);
+        let report = store.import(&[views[0].id.clone()]);
+        let account = report.accounts[0].clone();
+
+        let reloaded = store_loaded_with(dir.clone(), vec![candidate]);
+        let list = reloaded.list();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, account.id);
+        assert_eq!(list[0].origin, RelayOrigin::CcSwitch);
+        assert_eq!(list[0].label.as_deref(), Some("来源账户"));
+        assert!(list[0].reference_saved);
+        assert!(!list[0].persisted);
+        assert_eq!(
+            list[0].quota.as_ref().unwrap().remaining_usd,
+            Some(4.0),
+            "额度快照应随来源账户恢复"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn source_reference_without_its_source_is_skipped_on_reload() {
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        let base = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        let dir = temp_dir("source-missing");
+        let store = RelayStore::load(dir.clone());
+        let candidate =
+            config_candidate(RelayOrigin::CcSwitch, Some("来源账户"), &base, "sk-source");
+        let views = store.scan_candidates(vec![candidate]);
+        store.import(&[views[0].id.clone()]);
+
+        let reloaded = store_loaded_with(dir.clone(), Vec::new());
+        assert!(reloaded.list().is_empty());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn manually_adding_a_sourced_account_switches_to_inline_credentials() {
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        let base = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        let dir = temp_dir("source-promote");
+        let store = RelayStore::load(dir.clone());
+        let candidate =
+            config_candidate(RelayOrigin::CcSwitch, Some("来源账户"), &base, "sk-source");
+        let views = store.scan_candidates(vec![candidate]);
+        let report = store.import(&[views[0].id.clone()]);
+        let id = report.accounts[0].id.clone();
+
+        let updated = store.query(&base, "sk-source", None, None).unwrap();
+        assert_eq!(updated.id, id);
+        assert!(updated.persisted);
+        assert!(!updated.reference_saved);
+        assert!(dir.join(&id).join(CREDENTIALS_FILE).is_file());
+        assert!(!dir.join(&id).join(SOURCE_FILE).exists());
+
         let _ = fs::remove_dir_all(&dir);
     }
 

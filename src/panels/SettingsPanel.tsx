@@ -24,7 +24,7 @@ import {
 } from '../lib/prefs';
 import { useAppState } from '../lib/store';
 import { applyTheme } from '../lib/theme';
-import DangerToast from '../components/DangerToast';
+import Toast from '../components/Toast';
 import styles from '../App.module.css';
 
 function Toggle({
@@ -654,7 +654,7 @@ export default function SettingsPanel() {
       </p>
 
       {saveError ? (
-        <DangerToast message={saveError} onDismiss={() => setSaveError(null)} />
+        <Toast message={saveError} onDismiss={() => setSaveError(null)} />
       ) : null}
     </section>
   );

@@ -26,6 +26,9 @@ url = "2"
 time = { version = "0.3", features = ["parsing"] }
 # 读取 Codex 的 config.toml（只取 provider 的 base_url 与密钥来源）。
 toml = "1"
+# cc-switch 把已保存的 provider 放在 ~/.cc-switch/cc-switch.db（SQLite）；
+# 只读打开，bundled 避免依赖用户机器上的 sqlite3。
+rusqlite = { version = "0.41", features = ["bundled"] }
 tauri-plugin-notification = "2.7.0"
 tauri-plugin-autostart = "2.7.0"
 tauri-plugin-single-instance = "2.5.4"
