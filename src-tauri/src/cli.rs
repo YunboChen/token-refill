@@ -8,6 +8,7 @@
 
 use std::env;
 use std::ffi::OsString;
+#[cfg(unix)]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -102,6 +103,7 @@ fn tool_dirs() -> Vec<PathBuf> {
 }
 
 /// 版本管理器的版本目录按字符串降序（v26.12.0 > v20.0.0），只收真实存在的 bin。
+#[cfg(unix)]
 fn push_version_bins(dirs: &mut Vec<PathBuf>, root: &Path, suffix: &[&str]) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
