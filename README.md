@@ -161,6 +161,8 @@ public/               浏览器标签图标、Web manifest
 
 打包由 [.github/workflows/release.yml](./.github/workflows/release.yml) 在 GitHub Actions 上完成：macOS 分别提供 Apple Silicon（arm64）与 Intel（x64）的 `.dmg`，以及 Windows x64 的免安装单文件 exe 与 NSIS 安装器（`-setup.exe`）。Windows 不产出 MSI。
 
+产物文件名带平台前缀，便于区分：`Token.Refill_<版本>_macos-arm64.dmg`、`Token.Refill_<版本>_macos-x64.dmg`、`Token.Refill_<版本>_windows-x64.exe`（免安装）与 `Token.Refill_<版本>_windows-x64-setup.exe`（NSIS）。
+
 应用内更新另需各平台的更新包与签名：macOS 的 `.app.tar.gz` 及 `.sig`，Windows 的 NSIS 安装器（同时作为更新包）及 `.exe.sig`，再加一份 `latest.json`。清单由 `publish` job 生成并和其它产物一起挂到 Release；应用从 `releases/latest/download/latest.json` 读取版本、下载地址与签名。
 
 发版步骤：

@@ -67,8 +67,9 @@
 - 工作分支一律从 `main` 切出（`feat/*`、`fix/*`、`ci/*`、`docs/*`），PR 到 `main` 合并；**不要从 `dev` 切分支**。`dev` 只承载日常集成：定期把 `main` 合进来保持同步，不作为任何工作分支的基线。
 - 发布只走 `main`：发布相关改动同样从 `main` 切分支并 PR 到 `main`，然后**在 `main` 上**提升版本号再推送。不要把 `dev` 整体合并或快进到 `main`——`dev` 里未完成或未验证的功能不得随发版进入 `main`。发版后把 `main` 合回 `dev`，保持版本号一致。
 - 两个平台并行构建，产物上传到同一个 Release（tag `v<版本号>`）：
-  - macOS：`Token.Refill_<版本>_arm64.dmg` / `Token.Refill_<版本>_x64.dmg`，以及应用内更新用的 `.app.tar.gz` 与 `.sig`
-  - Windows：`Token.Refill_<版本>_x64.exe`（便携）、`Token.Refill_<版本>_x64-setup.exe`（NSIS，同时作为应用内更新包）与 `.exe.sig`
+  - macOS：`Token.Refill_<版本>_macos-arm64.dmg` / `Token.Refill_<版本>_macos-x64.dmg`，以及应用内更新用的 `Token.Refill_<版本>_macos-<架构>.app.tar.gz` 与 `.sig`
+  - Windows：`Token.Refill_<版本>_windows-x64.exe`（便携）、`Token.Refill_<版本>_windows-x64-setup.exe`（NSIS，同时作为应用内更新包）与 `.exe.sig`
+  - 所有产物文件名必须带 `macos-` / `windows-` 前缀，避免两种平台的 `x64` 产物在下载目录里无法区分。
   - 应用内更新清单 `latest.json`：由 publish job 生成，按 `darwin-aarch64` / `darwin-x86_64` / `windows-x86_64` 写入下载地址与签名
 - 应用内更新的 minisign 私钥存放在 GitHub Secrets（`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`），不进仓库、不写日志；`createUpdaterArtifacts` 只在 CI 用 `--config` 打开，本地构建不依赖私钥。私钥丢失只能换公钥并要求用户手动重装，发布前确认已离线备份。
 - Release 构建成功后直接发布（`draft: false`），不设草稿确认环节；推送 `main` 前必须自行确认版本号、产物与签名状态，发布即对用户可见。
