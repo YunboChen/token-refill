@@ -464,7 +464,7 @@ export default function TrayPanel() {
       account.products.some((product) => product.query.refreshing),
     );
 
-  // 打开面板时才读取中转站账户；面板常驻内存，事件监听只注册一次。
+  // 打开面板时才读取中转站账户；事件监听在本次窗口生命周期内只注册一次。
   const ensureLoadedRef = useRef(ensureLoaded);
   const reloadRef = useRef(reload);
   const resyncRef = useRef(resync);
@@ -479,6 +479,12 @@ export default function TrayPanel() {
   useEffect(() => {
     if (!desktop) return;
     ensureLoadedRef.current();
+
+    // 面板只在用户点开时才创建，挂载即代表第一次打开。这样即使加载完成
+    // 早于事件监听注册、错过了首个 `tray-panel-shown`，也不会漏掉首轮同步。
+    setOpened(true);
+    void resyncRef.current();
+    void refreshDueRef.current(refreshMinutesRef.current);
 
     let disposed = false;
     let unlisten: (() => void) | undefined;
