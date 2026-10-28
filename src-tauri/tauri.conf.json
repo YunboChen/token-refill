@@ -20,8 +20,8 @@
         "minHeight": 560,
         "center": true,
         "resizable": true,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true
+        "decorations": false,
+        "shadow": true
       },
       {
         "label": "tray-panel",

@@ -1,0 +1,170 @@
+.titleBar {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  width: 100%;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  -webkit-user-select: none;
+  position: relative;
+  z-index: 100;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out;
+}
+
+/* 拖拽区域：贯穿标题栏，双击切换最大化 */
+.dragArea {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+
+/* ----------------- Windows 样式 ----------------- */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding-left: 12px;
+  padding-right: 6px;
+}
+
+.appIcon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.appTitle {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.winControls {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  margin-left: auto;
+}
+
+.winButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  outline: none;
+  transition: background-color 100ms ease-out, color 100ms ease-out;
+}
+
+.winButton:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.winButton:active {
+  background: var(--sunken);
+}
+
+.winClose:hover {
+  background: #e81123 !important;
+  color: #ffffff !important;
+}
+
+.winClose:active {
+  background: #c42b1c !important;
+  color: #ffffff !important;
+}
+
+/* ----------------- macOS 样式 ----------------- */
+.macControls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+.macButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  cursor: pointer;
+  outline: none;
+  position: relative;
+  box-sizing: border-box;
+}
+
+.macButton svg {
+  opacity: 0;
+  color: rgba(0, 0, 0, 0.65);
+  transition: opacity 120ms ease-out;
+  pointer-events: none;
+}
+
+/* 悬停整个 macOS 控制区时显示所有红绿灯符号 */
+.macControls:hover .macButton svg {
+  opacity: 1;
+}
+
+.macClose {
+  background: #ff5f56;
+}
+
+.macClose:hover {
+  background: #e0443e;
+}
+
+.macMinimize {
+  background: #ffbd2e;
+}
+
+.macMinimize:hover {
+  background: #dea123;
+}
+
+.macMaximize {
+  background: #27c93f;
+}
+
+.macMaximize:hover {
+  background: #1aab29;
+}
+
+.macCenter {
+  justify-content: center;
+}
+
+.macTitle {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+  pointer-events: none;
+  letter-spacing: 0.1px;
+}
+
+.macRightSpacer {
+  width: 76px;
+  height: 100%;
+  flex-shrink: 0;
+  pointer-events: none;
+}

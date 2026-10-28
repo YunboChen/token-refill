@@ -16,6 +16,7 @@ import OverviewPanel from './panels/OverviewPanel';
 import AccountsPanel from './panels/AccountsPanel';
 import RelayPanel from './panels/RelayPanel';
 import SettingsPanel from './panels/SettingsPanel';
+import TitleBar from './components/TitleBar';
 import styles from './App.module.css';
 
 type PanelKey = 'overview' | 'accounts' | 'relay' | 'settings';
@@ -63,6 +64,7 @@ const PANELS: PanelDef[] = [
 export default function App() {
   const [active, setActive] = useState<PanelKey>('overview');
   const [platform, setPlatform] = useState<string | null>(null);
+  const [isMaximized, setIsMaximized] = useState(false);
   const { error, update, openExternal } = useAppState();
   const desktop = isTauri();
   const current = PANELS.find((panel) => panel.key === active) ?? PANELS[0];
@@ -129,18 +131,21 @@ export default function App() {
   }, [desktop]);
 
   return (
-    <div className={styles.app} data-platform={platform ?? undefined}>
-      <aside className={styles.sidebar}>
-        {/* macOS Overlay 标题栏：顶部安全区留给红绿灯，同时作为窗口拖拽区。
-            Windows 用系统标题栏，这段只保留极小的顶部留白。 */}
-        <div className={styles.titlebarSafeArea} data-tauri-drag-region aria-hidden="true" />
-        <img
-          className={styles.wordmark}
-          src={logoWordmark}
-          alt="Token Refill"
-          width={480}
-          height={87}
-        />
+    <div
+      className={styles.app}
+      data-platform={platform ?? undefined}
+      data-maximized={isMaximized || undefined}
+    >
+      <TitleBar platform={platform} onMaximizedChange={setIsMaximized} />
+      <div className={styles.appBody}>
+        <aside className={styles.sidebar}>
+          <img
+            className={styles.wordmark}
+            src={logoWordmark}
+            alt="Token Refill"
+            width={480}
+            height={87}
+          />
 
         <nav
           className={styles.nav}
@@ -210,6 +215,7 @@ export default function App() {
           ) : null}
         </div>
       </main>
+      </div>
     </div>
   );
 }

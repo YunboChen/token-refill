@@ -1,9 +1,22 @@
-/* 壳层：左右布局。左侧品牌 + 导航，右侧固定页头 + 滚动内容。
-   macOS Overlay 标题栏不单独占行：只在侧栏顶部留红绿灯安全区，
-   页面头直接顶到窗口上沿，避免窗口顶部出现空带。 */
+/* 壳层：纵向布局，顶部为跨平台自绘标题栏，主体为左侧边栏 + 右侧主内容区。 */
 .app {
   display: flex;
+  flex-direction: column;
   height: 100dvh;
+  overflow: hidden;
+  background: var(--background);
+  box-sizing: border-box;
+}
+
+/* 非最大化时为无边框窗口补充 1px 细边框，增强在不同壁纸下的轮廓立体感 */
+.app:not([data-maximized='true']) {
+  border: 1px solid var(--border);
+}
+
+.appBody {
+  display: flex;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -17,17 +30,6 @@
   background: var(--surface);
 }
 
-/* 只留红绿灯所需高度，字标尽量上提；整段作为窗口拖拽区 */
-.titlebarSafeArea {
-  flex-shrink: 0;
-  height: 44px;
-}
-
-/* Windows 使用系统标题栏，窗口内容已在标题栏下方，
-   不需要红绿灯安全区，只留一点顶部留白。 */
-.app[data-platform='windows'] .titlebarSafeArea {
-  height: 10px;
-}
 
 /* 字标独立成行，位于红绿灯条下方；整组图标 + 文字使用同一张 lockup 图。 */
 /* 偏移 2px 让图中图标中心正对导航图标中心；
@@ -37,7 +39,7 @@
   width: calc(100% - 4px);
   max-width: 136px;
   height: auto;
-  margin: 2px 0 20px 4px;
+  margin: 14px 0 20px 4px;
   /* 深色下字标偏蓝、对比不足，整体提亮一档；滤镜值随主题变量切换 */
   filter: var(--wordmark-filter);
 }
