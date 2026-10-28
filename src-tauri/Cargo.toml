@@ -1,6 +1,6 @@
 [package]
 name = "token-refill"
-version = "0.2.5"
+version = "0.2.6"
 license = "MIT"
 description = "A local desktop companion for AI subscription usage"
 edition = "2021"
@@ -13,7 +13,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# tray-icon：菜单栏常驻图标；image-png：读取随包附带的模板图标。
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 semver = "1"
@@ -40,6 +41,8 @@ tauri-plugin-updater = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 objc2 = "0.6"
+# 菜单栏面板定位需要 NSScreen / NSEvent / NSWindow 的分数坐标。
+objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSScreen", "NSWindow"] }
 objc2-foundation = "0.3"
 objc2-user-notifications = "0.3"
 

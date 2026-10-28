@@ -5,6 +5,7 @@ import {
   checkForUpdate,
   downloadedUpdateVersion,
   downloadUpdate,
+  emitThemeChanged,
   installUpdate,
   onUpdateDownloadProgress,
   openExternalUrl,
@@ -161,6 +162,7 @@ export default function SettingsPanel() {
     setTheme(next);
     saveTheme(next);
     applyTheme(next);
+    if (desktop) void emitThemeChanged(next);
   }
 
   async function changeAutoLaunch(next: boolean) {

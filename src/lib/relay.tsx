@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -11,6 +12,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import {
   importRelayCandidates,
   listRelayAccounts,
+  onRelayAccountsChanged,
   queryRelayAccount,
   refreshRelayAccount,
   removeRelayAccount,
@@ -18,6 +20,7 @@ import {
   setRelayAccountToken,
   type DiscoveryReport,
   type RelayAccount,
+  type RelayAccountsEvent,
   type RelayCandidate,
   type SkippedConfig,
 } from './desktop';
@@ -47,6 +50,8 @@ interface RelayContextValue {
   refreshingIds: ReadonlySet<string>;
   /** 首次进入中转站相关页面时调用；只读取已保存条目，不扫描本地配置。 */
   ensureLoaded: () => void;
+  /** 重新读取条目列表；窗口重新显示时兜底同步，避免漏掉事件。 */
+  reload: () => Promise<void>;
   /** 扫描 cc-switch、Claude Code / Codex 的本地配置，只返回候选。 */
   scanCandidates: () => Promise<RelayCandidate[] | null>;
   /** 导入勾选的候选；失败的候选写入 skipped。 */
@@ -92,6 +97,16 @@ export function RelayProvider({ children }: { children: ReactNode }) {
   // 本次运行中每个账户最近一次自动刷新的时间；失败也记录，避免切页面重试。
   const lastAutoRefresh = useRef(new Map<string, number>());
   const started = useRef(false);
+  // 最近一次应用的条目修订号，用来丢弃乱序到达的旧快照。
+  const revision = useRef(0);
+
+  /** 应用来自命令或事件的完整条目列表；两端都用“最新在前”的顺序。 */
+  const applyAccounts = useCallback((payload: RelayAccountsEvent) => {
+    if (payload.revision < revision.current) return;
+    revision.current = payload.revision;
+    setAccounts([...payload.accounts].reverse());
+    setLoaded(true);
+  }, []);
 
   const markRefreshing = useCallback((id: string, active: boolean) => {
     const next = new Set(refreshingRef.current);
@@ -101,26 +116,47 @@ export function RelayProvider({ children }: { children: ReactNode }) {
     setRefreshingIds(next);
   }, []);
 
-  const load = useCallback(async () => {
+  const reload = useCallback(async () => {
     if (!desktop) return;
-    started.current = true;
     setError(null);
     // 只读取已保存条目与上次成功快照；扫描本地配置由用户手动触发。
     try {
-      const cached = await listRelayAccounts();
-      // 最近添加的条目排在最前，与管理页的添加顺序一致。
-      setAccounts([...cached].reverse());
+      applyAccounts(await listRelayAccounts());
     } catch (err) {
       setError(relayErrorText(err));
     } finally {
       setLoaded(true);
     }
-  }, [desktop]);
+  }, [desktop, applyAccounts]);
+
+  const load = useCallback(async () => {
+    if (!desktop) return;
+    started.current = true;
+    await reload();
+  }, [desktop, reload]);
 
   const ensureLoaded = useCallback(() => {
     if (!desktop || started.current) return;
     void load();
   }, [desktop, load]);
+
+  // 主窗口与菜单栏面板各自持有前端副本，真正共享的是 Rust 注册表：
+  // 任一侧添加、刷新、补充令牌或移除后都会广播完整列表，这里同步另一侧。
+  useEffect(() => {
+    if (!desktop) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void onRelayAccountsChanged((event) => {
+      if (!disposed) applyAccounts(event);
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [desktop, applyAccounts]);
 
   const scanCandidates = useCallback(async () => {
     if (!desktop) return null;
@@ -293,6 +329,7 @@ export function RelayProvider({ children }: { children: ReactNode }) {
       clearError,
       refreshingIds,
       ensureLoaded,
+      reload,
       scanCandidates,
       importCandidates,
       refreshDue,
@@ -312,6 +349,7 @@ export function RelayProvider({ children }: { children: ReactNode }) {
       clearError,
       refreshingIds,
       ensureLoaded,
+      reload,
       scanCandidates,
       importCandidates,
       refreshDue,
