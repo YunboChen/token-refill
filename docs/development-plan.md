@@ -138,7 +138,7 @@
 
 ### P5：后续 Windows 支持
 
-- 兼容层已实现：CLI 查找覆盖 `codex.exe` / `.cmd` 与常见安装目录，授权链接改用 `ShellExecuteW`，数据目录沿用 `%APPDATA%`，窗口使用系统标题栏。
+- 兼容层已实现：CLI 查找覆盖 `codex.exe` / `.cmd` 与常见安装目录，授权链接改用 `ShellExecuteW`，数据目录沿用 `%APPDATA%`，Windows 主窗口改为自绘标题栏（系统装饰在运行时关闭）。
 - 重新确认 Windows 版本、架构及使用范围。
 - 适配系统安全存储、托盘、窗口行为和打包安装；完成免安装 exe 与 NSIS 安装器构建及全新环境安装验收。
 - 验证三类查询链路在 Windows 的依赖条件与可靠性。
@@ -239,3 +239,7 @@
 2026-10-27 中转站扫描改为手动选择并接入 cc-switch：`discovery.rs` 新增只读读取 `~/.cc-switch/cc-switch.db`（SQLite，`providers` 表 `app_type=claude/codex`），Claude 行解析 `settings_config.env`，Codex 行解析 `settings_config.auth.OPENAI_API_KEY` 与 `config` TOML 中激活的 `[model_providers.<id>]`；仍保留 `~/.claude/settings.json` 与 `~/.codex/config.toml` 当前配置，按地址 + 密钥去重。后端由 `relay_discover` 拆成 `relay_scan`（只列候选、不联网）与 `relay_import`（用户勾选后查询额度），候选密钥留在 Rust 内存；`RelayOrigin` 新增 `cc-switch`，账户卡可显示 provider 名称。前端 `RelayProvider` 进入页面时只加载已保存条目，管理页新增「扫描本地配置」弹窗，默认勾选尚未添加的候选，确认后导入。依赖新增 `rusqlite`（`bundled`，只读打开，不依赖系统 sqlite3）。验证：`cargo test`（新增 cc-switch 解析、数据库读取、候选去重与只导入选中项等用例）、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`pnpm build` 通过；尚未在真实桌面窗口内走完整扫描/导入交互。
 
 2026-10-27 补充：扫描导入的账户改为跨重启保留，但仍不复制密钥。`RelayStore` 在 `relay-profiles/<relayId>/source.json` 保存来源引用（来源、app_type、provider id、导入地址、provider 类型与用户主动填写的访问令牌），启动时只有存在引用才以只读方式重新读取 cc-switch 数据库或当前配置，取不到就跳过该账户；额度快照继续写入 `snapshot.json`。`SourceRef` 按 provider id 匹配，Claude Code 当前配置没有 id 时按地址匹配。手动再次添加同地址同密钥的账户会把该条目转为 `credentials.json` 并删除 `source.json`。前端账户卡区分「凭证已保存 / 来源已保存 · 启动时重新读取 / 凭证仅本次运行」。验证：新增 4 项测试覆盖引用落盘不含密钥、重启恢复、来源消失后跳过、手动条目转存；`cargo test --locked` 177 项通过，`cargo fmt --check` 与 `cargo clippy --locked --all-targets -- -D warnings` 通过。
+
+2026-10-28 标题栏按平台分治：macOS 恢复系统 Overlay 原生标题栏（`titleBarStyle: "Overlay"` + `hiddenTitle`、侧栏 44px 红绿灯安全区），不再渲染自绘栏；Windows 保留自绘 `TitleBar`，在 Rust `setup()` 中用 `#[cfg(windows)]` 调 `set_decorations(false)` 关闭系统装饰。未使用 `tauri.windows.conf.json` 覆盖窗口，因为平台配置走 JSON Merge Patch，`app.windows` 数组会被整体替换。前端首帧用 UA 同步判断平台，避免 Windows 标题栏闪烁。验证：macOS 实机启动确认原生红绿灯与 44px 安全区恢复、自绘栏不渲染；`pnpm build`、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings` 通过。Windows 运行时关闭装饰的无闪烁表现、拖拽/边缘缩放/双击最大化/关闭常驻与贴靠布局仍需 Windows 实机验证。
+
+2026-10-28 修复 Windows 启动时露出系统标题栏：实机验收「冷启动无原生标题栏闪烁」一项不通过，逐帧录像显示启动后约 1 秒内仍是系统标题栏，React 首绘后才切成自绘栏——`setup()` 里 `set_decorations(false)` 执行时窗口已可见。主窗口改为在 `tauri.conf.json` 中以 `visible: false` 创建：macOS 在 `setup()` 中直接 `show()`（行为不变）；Windows 先关装饰，等前端 `TitleBar` 首帧 emit `main-ui-ready` 后再显示并聚焦，另起 5 秒兜底线程，避免前端异常时窗口一直隐藏只能从托盘找回。验证：`tsc` 类型检查与 `vite build`、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`（macOS 主机）、`cargo check --target x86_64-pc-windows-msvc` 通过；Windows 实机需重跑冷启动检查，并确认隐藏启动不影响托盘、单实例与最小化恢复。

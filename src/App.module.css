@@ -1,9 +1,24 @@
-/* 壳层：左右布局。左侧品牌 + 导航，右侧固定页头 + 滚动内容。
-   macOS Overlay 标题栏不单独占行：只在侧栏顶部留红绿灯安全区，
-   页面头直接顶到窗口上沿，避免窗口顶部出现空带。 */
+/* 壳层：纵向布局。Windows 顶部是自绘标题栏；macOS 没有这一行，
+   直接由侧栏的红绿灯安全区承接原生标题栏。 */
 .app {
   display: flex;
+  flex-direction: column;
   height: 100dvh;
+  overflow: hidden;
+  background: var(--background);
+  box-sizing: border-box;
+}
+
+/* Windows 无系统边框；非最大化时补 1px 细边框，增强不同壁纸下的轮廓立体感。
+   macOS 用原生窗口边框，不加内描边。 */
+.app[data-platform='windows']:not([data-maximized='true']) {
+  border: 1px solid var(--border);
+}
+
+.appBody {
+  display: flex;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -17,16 +32,11 @@
   background: var(--surface);
 }
 
-/* 只留红绿灯所需高度，字标尽量上提；整段作为窗口拖拽区 */
+/* macOS 原生 Overlay 标题栏：只留红绿灯所需高度，字标尽量上提；
+   整段作为窗口拖拽区。Windows 由 TitleBar 承担这一行，故该元素不渲染。 */
 .titlebarSafeArea {
   flex-shrink: 0;
   height: 44px;
-}
-
-/* Windows 使用系统标题栏，窗口内容已在标题栏下方，
-   不需要红绿灯安全区，只留一点顶部留白。 */
-.app[data-platform='windows'] .titlebarSafeArea {
-  height: 10px;
 }
 
 /* 字标独立成行，位于红绿灯条下方；整组图标 + 文字使用同一张 lockup 图。 */
@@ -40,6 +50,11 @@
   margin: 2px 0 20px 4px;
   /* 深色下字标偏蓝、对比不足，整体提亮一档；滤镜值随主题变量切换 */
   filter: var(--wordmark-filter);
+}
+
+/* Windows 没有红绿灯安全区，字标与自绘标题栏之间留出一档呼吸 */
+.app[data-platform='windows'] .wordmark {
+  margin-top: 14px;
 }
 
 /* 侧边导航：每项 34px，选中项用一整块轻底色，不再让滑块跨越分组。 */
