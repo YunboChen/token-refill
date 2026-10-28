@@ -74,7 +74,7 @@ pnpm dev
 - Codex CLI 查找顺序：`CODEX_BIN` → `CODEX_CLI_PATH` → `PATH` → nvm-windows / fnm 的版本目录 → npm、pnpm、Volta、Bun、Scoop、`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` 等默认安装位置 → Codex 桌面端内置 CLI（`%LOCALAPPDATA%\Programs\ChatGPT\resources\codex-cli\bin`、Microsoft Store 版 `WindowsApps\OpenAI.Codex_<版本>\` 等）。候选文件为 `codex.exe`、`codex.cmd`、`codex.bat`、`codex.com`，优先原生可执行文件；只装桌面端、没有单独安装 CLI 时也能查询本机额度（两者共用 `~/.codex` 登录态）。找不到时设置 `CODEX_BIN` 指向完整路径。
 - 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立 Codex 账户的 `CODEX_HOME`，`bailian-profiles\<accountId>\` 与 `api-profiles\<accountId>\` 分别保存百炼控制台令牌和 OpenCode / Command Code 的 API Key，`relay-profiles\<relayId>\` 保存手动填写的中转站凭证。
 - Antigravity 需要本机可运行的 `agy`，查找顺序为 `AGY_BIN` → `PATH` → `%LOCALAPPDATA%\agy\bin` 等常见目录；额度通过 `agy -p /usage --output-format json` 读取。
-- 窗口使用系统标题栏，前端按 `get_app_info().platform` 收窄侧栏顶部留白。
+- 主窗口使用自绘标题栏：Rust 侧关闭系统装饰，前端 `TitleBar` 负责拖拽、最小化、最大化与关闭；macOS 仍使用系统 Overlay 标题栏，前端按 `get_app_info().platform` 切换布局。
 - 授权链接通过 `ShellExecuteW` 交给系统浏览器，不经过 `cmd.exe`，URL 中的 `&` 不会被当作命令分隔符。
 - `src-tauri/tauri.windows.conf.json` 把 Windows 的 `bundle.targets` 收窄为 `["nsis"]`：`pnpm tauri build` 只产出 NSIS 安装器（`-setup.exe`），不再生成 MSI；免安装单文件 exe 用 `pnpm tauri build --no-bundle`。两者尚未做安装与卸载验收。详见 [Windows 兼容设计](./docs/windows-support.md)。
 

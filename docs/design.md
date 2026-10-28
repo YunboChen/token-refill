@@ -164,10 +164,10 @@
 
 ### 3.2 标题栏与平台适配
 
-- macOS 使用 Overlay 标题栏：`.titlebarSafeArea` 高 44px，承载红绿灯并作为拖拽区。
-- Windows 使用系统标题栏：`data-platform="windows"` 时安全区降为 10px。
+- macOS 使用 Overlay 原生标题栏：`.titlebarSafeArea` 高 44px，承载红绿灯并作为拖拽区；不渲染 `TitleBar` 组件。
+- Windows 关闭系统装饰（Rust `setup()` 中 `set_decorations(false)`），由 `TitleBar` 自绘标题栏，负责拖拽、最小化、最大化与关闭；`.app[data-platform='windows']` 在非最大化时补 1px 内描边。
 - 页头、标题、副标题均带 `data-tauri-drag-region`；按钮和可交互元素不要加，否则会吞掉点击。
-- 平台信息来自 `getAppInfo()`，读取失败保持 macOS 布局，不阻塞界面。
+- 平台信息来自 `getAppInfo()`；首次渲染用 UA 同步兜底（避免 Windows 标题栏首帧缺失），读取失败保持 macOS 布局，不阻塞界面。
 
 ### 3.3 新增页面的接入点
 

@@ -443,6 +443,15 @@ pub fn run() {
             // macOS 在启动时申请通知授权，避免首次提醒才弹授权框。
             notification::prepare();
 
+            // Windows 使用前端自绘标题栏，需要去掉系统边框与标题按钮；
+            // macOS 保持 Overlay 原生标题栏（红绿灯与拖拽交给系统）。
+            // 平台配置文件走 JSON Merge Patch，覆盖 windows 数组会整体替换，
+            // 因此只在运行时按平台关掉装饰。
+            #[cfg(windows)]
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.set_decorations(false);
+            }
+
             // 菜单栏图标与快速查看面板；关闭主窗口只隐藏，应用继续常驻。
             tray::setup(app.handle())?;
 
