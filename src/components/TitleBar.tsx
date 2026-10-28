@@ -1,8 +1,14 @@
 import { useEffect, useState, type MouseEvent } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import logoIcon from '../assets/logo.png';
 import styles from './TitleBar.module.css';
+
+/* 主窗口在 Rust 侧以隐藏状态创建（见 lib.rs setup），标题栏画出后由这里通知显示。
+   窗口还隐藏时 rAF 可能被节流，另留定时器兜底，保证窗口一定会出现。 */
+const UI_READY_EVENT = 'main-ui-ready';
+const UI_READY_FALLBACK_MS = 200;
 
 export interface TitleBarProps {
   title?: string;
@@ -14,6 +20,28 @@ export interface TitleBarProps {
 export default function TitleBar({ title = 'Token Refill', onMaximizedChange }: TitleBarProps) {
   const [isMaximized, setIsMaximized] = useState(false);
   const desktop = isTauri();
+
+  // 首帧渲染完成后告诉 Rust 侧可以显示窗口；只发一次，重复发送无副作用但没必要。
+  useEffect(() => {
+    if (!desktop) return;
+    let sent = false;
+    const notifyReady = () => {
+      if (sent) return;
+      sent = true;
+      void emit(UI_READY_EVENT).catch(() => {
+        // 显示窗口失败时 Rust 侧还有超时兜底，这里不打断界面。
+      });
+    };
+    const frame = window.requestAnimationFrame(() =>
+      window.requestAnimationFrame(notifyReady),
+    );
+    const timer = window.setTimeout(notifyReady, UI_READY_FALLBACK_MS);
+    // 不在卸载时补发：StrictMode 在开发模式下会挂载两次，提前显示会让窗口先空一帧。
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [desktop]);
 
   useEffect(() => {
     if (!desktop) return;

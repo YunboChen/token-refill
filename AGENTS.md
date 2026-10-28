@@ -42,7 +42,7 @@
 - Rust 目标必须是 `stable-x86_64-pc-windows-msvc`；GNU 目标缺 `dlltool.exe`，不可用。
 - Codex 可执行文件查找要覆盖 `codex.exe` / `.cmd` / `.bat` / `.com`；用户目录优先 `USERPROFILE`（`HOME` 可能被 Git Bash 设成 POSIX 路径）。新增安装位置时同时考虑 PATH、版本管理器与包管理器默认目录。
 - 所有 Windows 构建（含 debug）使用 GUI 子系统（`#![cfg_attr(windows, windows_subsystem = "windows")]`）；不要让 debug 包重新出现控制台窗口。终端启动时 stdio 仍应可继承，日志与 panic 可见。
-- 主窗口关闭系统装饰，由前端 `TitleBar` 自绘标题栏（拖拽、最小化、最大化、关闭）；关闭按钮仍走既有的「隐藏不退出」逻辑。平台差异在 Rust `setup()` 里用 `#[cfg(windows)]` 调 `set_decorations(false)`，不要在 `tauri.windows.conf.json` 覆盖 `app.windows`——平台配置走 JSON Merge Patch，数组会被整体替换。前端通过 `get_app_info().platform` 切换标题栏布局。菜单栏快速面板在 Windows 上按托盘矩形与显示器可用区域定位到任务栏上方，不使用 macOS 的 `NSScreen` 定位分支。
+- 主窗口关闭系统装饰，由前端 `TitleBar` 自绘标题栏（拖拽、最小化、最大化、关闭）；关闭按钮仍走既有的「隐藏不退出」逻辑。平台差异在 Rust `setup()` 里用 `#[cfg(windows)]` 调 `set_decorations(false)`，不要在 `tauri.windows.conf.json` 覆盖 `app.windows`——平台配置走 JSON Merge Patch，数组会被整体替换。主窗口在 `tauri.conf.json` 中以 `visible: false` 创建：Windows 等前端画出标题栏后 emit `main-ui-ready`、Rust 侧再 `show()`（另有 5 秒兜底），避免 React 首绘前露出约 1 秒的系统标题栏；macOS 在 `setup()` 中直接显示，行为与之前一致。前端通过 `get_app_info().platform` 切换标题栏布局。菜单栏快速面板在 Windows 上按托盘矩形与显示器可用区域定位到任务栏上方，不使用 macOS 的 `NSScreen` 定位分支。
 - 打包只产出：免安装单文件 exe（`--no-bundle`）与 NSIS 安装器（`tauri.windows.conf.json` 把 `bundle.targets` 固定为 `["nsis"]`）。**不产出、不发布 MSI**。
 - Codex 登录回调端口由上游固定为 1455（1457 仅在占用时回退），本应用不能改；遇到 `os error 10013` 只提示用户释放端口，不要尝试修改 CLI 行为。
 

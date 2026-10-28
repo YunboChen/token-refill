@@ -62,7 +62,7 @@ Windows 兼容层已落地，变化集中在四处，业务状态模型不变：
 - Codex CLI 查找按平台区分候选名（`codex` 与 `codex.exe` / `.cmd` / `.bat` / `.com`）、可执行判定与常见安装目录，覆盖 npm、pnpm、Volta、Bun、Scoop、nvm-windows、fnm 及官方安装包。Codex 桌面端（ChatGPT.app / Codex 桌面应用）自带的 CLI 排在查找链最后：macOS 探测 `Contents/Resources/codex-cli/bin`，Windows 探测安装目录的 `resources\codex-cli\bin` 与 Microsoft Store 的 `WindowsApps\OpenAI.Codex_*`；桌面端与独立 CLI 共用登录态，只装桌面端也能查询本机额度，但仍通过官方 `app-server --stdio` 读取，不解析桌面端内部状态文件。
 - 授权链接在 Windows 上交给 `ShellExecuteW`，避免 `cmd /C start` 把 URL 查询串里的 `&` 当作命令分隔符。
 - 数据继续写入 `app_data_dir()`（Windows 为 `%APPDATA%\<identifier>`）；Unix 权限位保持不变，Windows 依赖该目录的按用户 ACL。
-- 窗口在 macOS 保持 Overlay 原生标题栏；Windows 在 Rust `setup()` 中关闭系统装饰，由前端 `TitleBar` 自绘标题栏。前端读取 `get_app_info().platform` 切换两套布局，首帧用 UA 兜底。
+- 窗口在 macOS 保持 Overlay 原生标题栏；Windows 在 Rust `setup()` 中关闭系统装饰，由前端 `TitleBar` 自绘标题栏。前端读取 `get_app_info().platform` 切换两套布局，首帧用 UA 兜底。主窗口以 `visible: false` 创建，Windows 在前端首帧后由 `main-ui-ready` 事件触发显示（5 秒兜底），macOS 在 `setup()` 中直接显示。
 
 Windows 安装包与界面运行验收尚未完成，最低 Windows 版本待确定。macOS 仍须分架构构建并分别运行验收，不把交叉编译通过等同于 Intel 运行已验证。详见 [Windows 兼容设计](./windows-support.md)。
 

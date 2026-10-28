@@ -37,7 +37,7 @@ pnpm test:rust
 
 | # | 操作 | 预期结果 |
 | --- | --- | --- |
-| 1 | 冷启动应用，观察窗口出现过程 | 不出现原生标题栏或白色边框的一帧闪烁；窗口出现即为自绘标题栏 |
+| 1 | 冷启动应用，观察窗口出现过程 | 不出现原生标题栏或白色边框的一帧闪烁；窗口出现即为自绘标题栏（主窗口以隐藏状态创建，前端首帧后由 `main-ui-ready` 触发显示） |
 | 2 | 观察窗口边框 | 无系统标题栏、无系统最小化/最大化/关闭按钮 |
 | 3 | 非最大化状态 | 窗口四周有 1px 内描边 |
 | 4 | 最大化窗口 | 1px 内描边消失 |
@@ -89,7 +89,7 @@ pnpm test:rust
 
 ## 5. 失败时的处理建议
 
-- 第 1 项出现原生边框闪烁：把主窗口配置为 `visible: false`，在 `setup()` 中先 `set_decorations(false)` 再 `show()`；修改后必须重跑 §3.1。
+- 第 1 项出现原生边框闪烁：主窗口已在 `tauri.conf.json` 中配置为 `visible: false`，`setup()` 先 `set_decorations(false)`，等前端 `TitleBar` 首帧 emit `main-ui-ready` 后再 `show()`（Rust 侧 5 秒兜底，避免前端异常时窗口一直隐藏）。若仍有闪烁，先确认窗口没有在就绪事件之前被 `show()`（例如单实例回调或托盘菜单提前显示），修改后必须重跑 §3.1。
 - 拖拽或缩放失效：确认 `decorations` 只在 Windows 运行时关闭，未误改 macOS 分支；检查 `tauri.conf.json` 的 `resizable` 与 `minWidth` / `minHeight`。
 - 按钮无响应：检查 `src-tauri/capabilities/default.json` 中的 `core:window:allow-*` 是否被削减，以及是否在控制台出现权限错误。
 - 关闭后进程退出：检查 `src-tauri/src/tray.rs` 的 `CloseRequested` → `prevent_close` + `hide` 分支是否被改动。

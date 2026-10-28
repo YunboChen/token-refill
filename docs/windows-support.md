@@ -95,6 +95,7 @@ Windows 目标目录：
 - GUI 子系统进程没有控制台，启动 `codex.exe` 这类控制台程序（以及 `.cmd` 背后的 `cmd.exe`）时 Windows 会为子进程新建控制台窗口。`cli::apply_no_window` 给所有外置 CLI 子进程加 `CREATE_NO_WINDOW`，额度刷新与授权等待期间不再出现黑色控制台窗口；子进程的 stdin/stdout 管道不受影响。
 - 单实例由 `tauri-plugin-single-instance` 保证，标识来自应用 `identifier`：免安装 exe 与 NSIS 安装版同时启动也只会保留一个进程，第二次启动把已有窗口从最小化恢复并置顶。
 - 前端启动后调用 `get_app_info` 取 `platform`，写到根节点 `data-platform`；首次渲染先用 UA 同步判断，避免 Windows 自绘标题栏首帧缺失。Windows 渲染 `TitleBar`，macOS 使用 44px 红绿灯安全区，页面头仍作为拖拽区。
+- 主窗口在 `tauri.conf.json` 中以 `visible: false` 创建，避免 React 首绘前露出约 1 秒的系统标题栏：Windows 的 `TitleBar` 首帧 emit `main-ui-ready`，Rust 侧收到后显示并聚焦窗口（5 秒兜底，前端异常时也能出现）；macOS 在 `setup()` 中直接显示。
 - 取不到平台信息时保持 macOS 布局；浏览器预览不请求平台信息。
 
 ## 8. 打包

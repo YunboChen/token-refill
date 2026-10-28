@@ -21,7 +21,8 @@
         "center": true,
         "resizable": true,
         "titleBarStyle": "Overlay",
-        "hiddenTitle": true
+        "hiddenTitle": true,
+        "visible": false
       },
       {
         "label": "tray-panel",
