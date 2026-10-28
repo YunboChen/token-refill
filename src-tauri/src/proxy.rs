@@ -59,6 +59,11 @@ fn current() -> Settings {
         .clone()
 }
 
+/// 当前代理模式；需要区分“直连”和“跟随系统但没有代理”的调用方使用。
+pub fn mode() -> ProxyMode {
+    current().mode
+}
+
 /// 解析后的代理。`None` 表示直连。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedProxy {

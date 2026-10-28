@@ -50,6 +50,28 @@ export function clockLabel(epoch: number): string {
   });
 }
 
+/** 菜单栏面板的刷新时间：带上日期，隔天打开也能看出数据是哪天的。 */
+export function stampLabel(epoch: number): string {
+  const date = new Date(epoch * 1000);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+/**
+ * 单个账户的刷新时间：一分钟内算「刚刚」，一小时内按分钟，更早回到钟点或日期。
+ * 数值来自本机时钟与最后一次查询时间的差值，时钟回拨时按「刚刚」处理。
+ */
+export function relativeUpdateLabel(epoch: number | null): string {
+  if (epoch === null) return '尚未更新';
+  const date = new Date(epoch * 1000);
+  const minutes = Math.floor((Date.now() - epoch * 1000) / 60000);
+  if (minutes < 1) return '刚刚更新';
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (date.toDateString() === new Date().toDateString()) return time;
+  return `${date.getMonth() + 1}/${date.getDate()} ${time}`;
+}
+
 export function planTierLabel(tier: string): string {
   return tier[0].toUpperCase() + tier.slice(1);
 }

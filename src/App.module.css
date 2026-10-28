@@ -411,6 +411,97 @@
   line-height: 1.5;
 }
 
+/* 扫描候选：工具栏 + 勾选列表组合成一组，比弹窗内其他分组更紧凑。 */
+.relayCandidateGroup {
+  display: grid;
+  gap: 8px;
+}
+
+/* 全选放在列表外，列表滚动时仍可一键切换全部勾选状态。 */
+.relayCandidateToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.relayCandidateSelectAll {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.relayCandidateSelectAll input {
+  flex: none;
+  margin: 0;
+  accent-color: var(--accent-strong);
+}
+
+.relayCandidateCount {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 扫描候选：每行一个勾选项，来源与地址收在第二行。 */
+.relayCandidateList {
+  display: grid;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+}
+
+.relayCandidate {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.relayCandidate + .relayCandidate {
+  border-top: 1px solid var(--border);
+}
+
+.relayCandidate[data-disabled] {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.relayCandidate input {
+  flex: none;
+  margin: 3px 0 0;
+  accent-color: var(--accent-strong);
+}
+
+.relayCandidateBody {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.relayCandidateName {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.relayCandidateMeta {
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .spin {
   animation: spin 900ms linear infinite;
 }
@@ -1117,7 +1208,7 @@
   margin: 0 0 18px;
 }
 
-/* 保存失败提示：窗口底部居中的短暂 toast，成功时不出现 */
+/* 瞬时提示：窗口底部居中的短暂 toast，默认用于失败反馈 */
 .toast {
   position: fixed;
   left: 50%;
@@ -1136,6 +1227,12 @@
   transform: translateX(-50%);
   animation: toastIn 180ms ease-out both;
   pointer-events: none;
+}
+
+/* 成功反馈沿用同一形态，只换颜色 */
+.toastSuccess {
+  background: var(--ok-soft);
+  color: var(--ok);
 }
 
 @keyframes toastIn {
@@ -1303,6 +1400,23 @@
   display: flex;
   flex-shrink: 0;
   gap: 8px;
+}
+
+/* 更新下载进度：整行高度很薄，避免把版本区块撑高 */
+.updateProgress {
+  height: 4px;
+  margin: 0 2px 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--sunken);
+}
+
+.updateProgress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 120ms linear;
 }
 
 .testButton[data-primary] {
@@ -2058,6 +2172,87 @@
   white-space: nowrap;
 }
 
+/* 中转站卡的身份第二行：名称与来源可省略；扫描来的账户在文字后跟一个小图标，
+   说明放进悬浮卡片，不占行宽。 */
+.accountMetaRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.accountMetaRow .accountMeta {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* 状态图标紧跟文字，光标提示可以悬浮查看说明；悬浮或键盘聚焦时展开卡片 */
+.accountState {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--muted);
+  cursor: help;
+}
+
+/* 仅本次运行的凭证会在重启后消失，用危险色区分于普通保存状态 */
+.accountState[data-attention] {
+  color: var(--danger);
+}
+
+.accountStateIcon {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+
+/* 说明卡片按第二行的宽度收口，贴着行的左缘展开，不会撑出卡片或滚动条 */
+.accountHintPop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  display: grid;
+  gap: 2px;
+  width: max-content;
+  max-width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 26%);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition: opacity 120ms ease-out, transform 120ms ease-out;
+  visibility: hidden;
+}
+
+.accountState:hover ~ .accountHintPop,
+.accountState:focus-visible ~ .accountHintPop {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.accountHintTitle {
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.accountState[data-attention] .accountHintTitle {
+  color: var(--danger);
+}
+
+.accountHintDetail {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .accountEmptyNote {
   margin: 14px 0 0;
   color: var(--muted);
@@ -2089,6 +2284,16 @@
 .miniButton:hover:not(:disabled) {
   border-color: var(--border);
   color: var(--text);
+  background: var(--sunken);
+}
+
+/* 已配置访问令牌：实心钥匙 + 强调色，不再用第二行的文字说明 */
+.miniButton[data-configured] {
+  color: var(--accent);
+}
+
+.miniButton[data-configured]:hover:not(:disabled) {
+  color: var(--accent);
   background: var(--sunken);
 }
 

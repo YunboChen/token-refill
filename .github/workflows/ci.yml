@@ -1,0 +1,92 @@
+name: ci
+
+# 合并前的质量门禁：PR 与推送到 main / dev 的提交都要跑。
+# release.yml 的 check 只在发布时执行，这里把同一组检查提前到合并之前，
+# 避免问题拖到发版那一刻才发现。改动检查项时请同步 release.yml 的 check job。
+
+on:
+  pull_request:
+    branches:
+      - main
+      - dev
+  push:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+
+# 只读权限：检查 job 不需要写仓库。
+permissions:
+  contents: read
+
+concurrency:
+  # 同一分支的重复推送与 PR 可以互相取消，省 CI 时间。
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # 与 release.yml 的 check 保持一致：前端构建、fmt、clippy、Rust 测试。
+  # 需要 macOS 是因为测试里包含 Unix 专属的 codex app-server 端到端用例。
+  check:
+    name: ci / check
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ci-macos
+
+      - run: pnpm install --frozen-lockfile
+
+      # 类型检查与前端产物构建，同时为 Rust 侧准备 tauri.conf.json 指向的 frontendDist。
+      - run: pnpm build
+
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+
+      - run: pnpm test:rust
+
+  # Windows 专属分支（exe/cmd 查找、ShellExecuteW、端口错误映射）只能在 Windows 上编译执行。
+  # 不重复前端构建与 clippy：macOS job 已经覆盖，这里只跑平台相关测试。
+  check-windows:
+    name: ci / check (windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ci-windows
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm test:rust

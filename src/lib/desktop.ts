@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 export interface AppInfo {
   name: string;
@@ -119,6 +119,18 @@ export interface AppState {
 
 export const APP_STATE_EVENT = 'app-state-changed';
 export const ACCOUNT_LOGIN_EVENT = 'account-login-changed';
+export const THEME_CHANGED_EVENT = 'theme-changed';
+
+/** 主题是前端本地偏好；切换后广播给菜单栏面板。 */
+export function emitThemeChanged(theme: string): Promise<void> {
+  return emit(THEME_CHANGED_EVENT, theme);
+}
+
+export function onThemeChanged(
+  handler: (theme: string) => void,
+): Promise<UnlistenFn> {
+  return listen<string>(THEME_CHANGED_EVENT, (event) => handler(event.payload));
+}
 
 export function getAppState(): Promise<AppState> {
   return invoke<AppState>('get_app_state');
@@ -203,7 +215,7 @@ export function setAutoLaunch(enabled: boolean): Promise<AppState> {
   return invoke<AppState>('set_auto_launch', { enabled });
 }
 
-/** 设置页的显式测试入口；桌面端没有应用内通知授权弹窗。 */
+/** 设置页的显式测试入口；失败时返回可直接展示的原因（如通知权限被拒绝）。 */
 export function sendTestNotification(): Promise<void> {
   return invoke<void>('send_test_notification');
 }
@@ -219,10 +231,19 @@ export interface UpdateStatus {
   currentVersion: string;
   latestVersion: string | null;
   updateAvailable: boolean;
+  /** 当前安装形态是否支持应用内下载与替换；免安装 exe 为 false。 */
+  selfUpdateSupported: boolean;
   releaseUrl: string | null;
   releaseNotes?: string;
   publishedAt: string | null;
 }
+
+export interface UpdateDownloadProgress {
+  downloaded: number;
+  total: number | null;
+}
+
+const UPDATE_PROGRESS_EVENT = 'update-download-progress';
 
 /**
  * 查询 GitHub 最新正式版本。同一会话内复用首次结果，避免每次打开设置页
@@ -242,10 +263,59 @@ export function checkForUpdate(force = false): Promise<UpdateStatus> {
   return pendingUpdateCheck;
 }
 
+/**
+ * 下载更新包并校验签名。必须由用户点击触发；下载完成后还需要调用
+ * installUpdate 才会替换应用。返回下载到的版本号。
+ */
+export function downloadUpdate(): Promise<string> {
+  return invoke<string>('download_update');
+}
+
+/** 安装已下载的更新并重启（Windows 上由 NSIS 安装器接管）。 */
+export function installUpdate(): Promise<void> {
+  return invoke<void>('install_update');
+}
+
+/** 已下载待安装的版本号；设置页重新打开时恢复状态。 */
+export function downloadedUpdateVersion(): Promise<string | null> {
+  return invoke<string | null>('downloaded_update_version');
+}
+
+export function onUpdateDownloadProgress(
+  handler: (progress: UpdateDownloadProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<UpdateDownloadProgress>(UPDATE_PROGRESS_EVENT, (event) =>
+    handler(event.payload),
+  );
+}
+
 export function onAccountLoginChanged(
   handler: (event: AccountLoginEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<AccountLoginEvent>(ACCOUNT_LOGIN_EVENT, (event) => handler(event.payload));
+}
+
+// ---------- 菜单栏快速查看 ----------
+
+const TRAY_PANEL_SHOWN_EVENT = 'tray-panel-shown';
+
+/** 面板每次从菜单栏打开时触发；用于补查中转站额度。 */
+export function onTrayPanelShown(handler: () => void): Promise<UnlistenFn> {
+  return listen(TRAY_PANEL_SHOWN_EVENT, () => handler());
+}
+
+/** 打开管理窗口；由 Rust 收起面板并恢复被隐藏的主窗口。 */
+export function openMainWindow(): Promise<void> {
+  return invoke<void>('open_main_window');
+}
+
+export function hideTrayPanel(): Promise<void> {
+  return invoke<void>('hide_tray_panel');
+}
+
+/** 明确的退出入口：停止后台刷新并结束进程。 */
+export function quitApp(): Promise<void> {
+  return invoke<void>('quit_app');
 }
 
 // ---------- 中转站密钥额度（手动凭证由 Rust 保存在应用数据目录）----------
@@ -291,18 +361,22 @@ export interface KeyQuota {
   checkedAtEpoch: number;
 }
 
-export type RelayOrigin = 'manual' | 'claude-code' | 'codex';
+export type RelayOrigin = 'manual' | 'cc-switch' | 'claude-code' | 'codex';
 
 export interface RelayAccount {
   id: string;
   baseUrl: string;
+  /** 扫描到的 provider 名称（cc-switch）；手动或当前配置文件条目为空。 */
+  label: string | null;
   origin: RelayOrigin;
   provider: QuotaProvider;
   quota: KeyQuota | null;
   checkedAtEpoch: number | null;
   lastError: string | null;
-  /** 凭证是否已保存到应用目录；自动扫描到的配置只在本次运行有效。 */
+  /** 密钥是否已保存到应用目录（仅手动填写的条目）。 */
   persisted: boolean;
+  /** 是否已保存来源引用；下次启动会重新读取源配置。 */
+  referenceSaved: boolean;
   /** 是否已配置 New API 访问令牌（不返回令牌本身）。 */
   hasAccountToken: boolean;
   /** 旧版 New API 单令牌鉴权使用的用户 ID（不是密钥）。 */
@@ -320,9 +394,25 @@ export interface DiscoveryReport {
   skipped: SkippedConfig[];
 }
 
-/** 扫描 Claude Code / Codex 的本地配置，并刷新已保存的手动条目。 */
-export function discoverRelayAccounts(): Promise<DiscoveryReport> {
-  return invoke<DiscoveryReport>('relay_discover');
+/** 扫描结果中的一条候选；密钥留在 Rust 侧，前端只拿到展示信息。 */
+export interface RelayCandidate {
+  id: string;
+  label: string | null;
+  /** cc-switch 的 app_type（claude / codex）；当前配置文件条目为空。 */
+  app: string | null;
+  origin: RelayOrigin;
+  baseUrl: string;
+  alreadyAdded: boolean;
+}
+
+/** 扫描 cc-switch、Claude Code / Codex 的本地配置；只列候选，不发起网络请求。 */
+export function scanRelayCandidates(): Promise<RelayCandidate[]> {
+  return invoke<RelayCandidate[]>('relay_scan');
+}
+
+/** 导入勾选的候选：识别 New API / Sub2API 并查询额度。 */
+export function importRelayCandidates(ids: string[]): Promise<DiscoveryReport> {
+  return invoke<DiscoveryReport>('relay_import', { ids });
 }
 
 /** 自动识别 New API / Sub2API 并查询；手动凭证由 Rust 保存，不进入前端状态。 */
@@ -357,8 +447,25 @@ export function refreshRelayAccount(id: string): Promise<RelayAccount> {
   return invoke<RelayAccount>('relay_refresh', { id });
 }
 
-export function listRelayAccounts(): Promise<RelayAccount[]> {
-  return invoke<RelayAccount[]>('relay_list');
+/** 中转站条目列表 + 修订号；两个窗口共用同一份 Rust 注册表。 */
+export interface RelayAccountsEvent {
+  revision: number;
+  accounts: RelayAccount[];
+}
+
+const RELAY_ACCOUNTS_EVENT = 'relay-accounts-changed';
+
+/** 任意窗口变更中转站条目后广播，另一个窗口据此更新；按修订号丢弃旧快照。 */
+export function onRelayAccountsChanged(
+  handler: (event: RelayAccountsEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<RelayAccountsEvent>(RELAY_ACCOUNTS_EVENT, (event) =>
+    handler(event.payload),
+  );
+}
+
+export function listRelayAccounts(): Promise<RelayAccountsEvent> {
+  return invoke<RelayAccountsEvent>('relay_list');
 }
 
 export function removeRelayAccount(id: string): Promise<void> {

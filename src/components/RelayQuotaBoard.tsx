@@ -598,9 +598,11 @@ export default function RelayQuotaBoard({ desktop }: { desktop: boolean }) {
           </span>
           <h2 className={styles.emptyTitle}>还没有可查看的中转站额度</h2>
           <p className={styles.usageNote}>
-            {!loaded || scanning
-              ? '正在扫描 Claude Code 与 Codex 的本地配置，并查询中转站额度…'
-              : '在“中转站”页添加账户或扫描本地配置后，这里会显示额度、窗口与到期时间。'}
+            {!loaded
+              ? '正在加载已保存的中转站账户…'
+              : scanning
+                ? '正在扫描本地配置…'
+                : '在“中转站”页添加账户或扫描本地配置后，这里会显示额度、窗口与到期时间。'}
           </p>
         </div>
       ) : (

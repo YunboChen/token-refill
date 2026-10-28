@@ -1,8 +1,8 @@
 # Token Refill 软件设计文档
 
-- 文档版本：0.14
-- 状态：已实现 Codex、百炼、OpenCode Go、Command Code 与 Antigravity 额度查询、多账户接入、统一状态层与后台刷新调度
-- 最近更新：2026-10-23
+- 文档版本：0.16
+- 状态：已实现 Codex、百炼、OpenCode Go、Command Code 与 Antigravity 额度查询、多账户接入、统一状态层、后台刷新调度、菜单栏快速查看与应用内更新
+- 最近更新：2026-10-27
 - 需求来源：[需求文档](./requirements.md)
 
 ## 1. 设计边界
@@ -23,7 +23,7 @@
 
 现有调用链为：前端启动 → 订阅 `app-state-changed` → `get_app_state` 取缓存快照 → Rust 调度器按间隔或手动请求查询 Codex app-server → 状态落盘并广播。
 
-账户分两类：本机账户沿用现有登录态；独立账户在应用数据目录的 `codex-profiles/<accountId>/` 下拥有独立 `CODEX_HOME`。每次查询会在同一 app-server 会话中先读取 `account/read` 获取脱敏邮箱与套餐档位，再读取额度；即使额度请求失败（如网络异常），只要身份读取成功，账户页仍能显示当前登录账号，身份读取本身失败则保留原值，不误清空。添加或重新授权时，Rust 启动该目录下的 app-server，调用官方 `account/login/start` 取得浏览器授权 URL，等待 `account/login/completed` 后读取身份与额度。登录令牌由 Codex CLI 写入隔离目录，应用不解析、不复制、不向前端返回；`account-login-changed` 仅携带流程标识、账户标识、状态和脱敏错误。
+账户分两类：本机账户沿用现有登录态；独立账户在应用数据目录的 `codex-profiles/<accountId>/` 下拥有独立 `CODEX_HOME`。启动加载状态时按本机是否存在 Codex 客户端（独立 CLI 或桌面端内置 CLI）校正本机账户：客户端不存在则移除占位账户，存在但状态里缺少时补回。未安装 Codex 的用户因此不会看到必然失败的账户，调度器也不会反复查询；卸载后重新安装会在下次启动恢复。客户端存在但未登录时仍保留账户并展示授权错误，便于用户完成登录。每次查询会在同一 app-server 会话中先读取 `account/read` 获取脱敏邮箱与套餐档位，再读取额度；即使额度请求失败（如网络异常），只要身份读取成功，账户页仍能显示当前登录账号，身份读取本身失败则保留原值，不误清空。添加或重新授权时，Rust 启动该目录下的 app-server，调用官方 `account/login/start` 取得浏览器授权 URL，等待 `account/login/completed` 后读取身份与额度。登录令牌由 Codex CLI 写入隔离目录，应用不解析、不复制、不向前端返回；`account-login-changed` 仅携带流程标识、账户标识、状态和脱敏错误。
 
 百炼账户属于独立授权账户：Rust 在 `127.0.0.1` 随机端口启动一次性回调服务，打开官方控制台登录页；浏览器把控制台 `access_token` 回传到该地址，`state` 校验通过后才写入 `bailian-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600）。一个百炼账户下有两个产品：Token Plan 与 Coding Plan。每次刷新顺序请求两类额度接口，任一失败只影响对应产品并保留其上次成功快照；两者都判定会话失效时才把账户标为需要重新授权。令牌不进入 `PersistedState`、IPC 返回值、事件或日志；移除账户会删除该目录。
 
@@ -59,12 +59,20 @@ Antigravity 是本机账户：应用只调用 `agy -p /usage --output-format jso
 
 Windows 兼容层已落地，变化集中在四处，业务状态模型不变：
 
-- Codex CLI 查找按平台区分候选名（`codex` 与 `codex.exe` / `.cmd` / `.bat` / `.com`）、可执行判定与常见安装目录，覆盖 npm、pnpm、Volta、Bun、Scoop、nvm-windows、fnm 及官方安装包。
+- Codex CLI 查找按平台区分候选名（`codex` 与 `codex.exe` / `.cmd` / `.bat` / `.com`）、可执行判定与常见安装目录，覆盖 npm、pnpm、Volta、Bun、Scoop、nvm-windows、fnm 及官方安装包。Codex 桌面端（ChatGPT.app / Codex 桌面应用）自带的 CLI 排在查找链最后：macOS 探测 `Contents/Resources/codex-cli/bin`，Windows 探测安装目录的 `resources\codex-cli\bin` 与 Microsoft Store 的 `WindowsApps\OpenAI.Codex_*`；桌面端与独立 CLI 共用登录态，只装桌面端也能查询本机额度，但仍通过官方 `app-server --stdio` 读取，不解析桌面端内部状态文件。
 - 授权链接在 Windows 上交给 `ShellExecuteW`，避免 `cmd /C start` 把 URL 查询串里的 `&` 当作命令分隔符。
 - 数据继续写入 `app_data_dir()`（Windows 为 `%APPDATA%\<identifier>`）；Unix 权限位保持不变，Windows 依赖该目录的按用户 ACL。
 - 窗口在 Windows 使用系统标题栏；前端读取 `get_app_info().platform` 后收窄侧栏顶部留白。
 
 Windows 安装包与界面运行验收尚未完成，最低 Windows 版本待确定。macOS 仍须分架构构建并分别运行验收，不把交叉编译通过等同于 Intel 运行已验证。详见 [Windows 兼容设计](./windows-support.md)。
+
+### 3.2 菜单栏与快速查看面板（已实现）
+
+- Rust `tray` 模块用 Tauri 的 `tray-icon` 能力创建菜单栏图标：macOS 使用随包附带的单色模板图标并按系统外观自动反色；Windows 使用应用图标。右键菜单提供「打开主窗口」「查看额度」「退出 Token Refill」。
+- 快速查看面板是 `tauri.conf.json` 中预创建的隐藏窗口 `tray-panel`：380×560、无边框、透明背景、置顶、跳过任务栏，加载同一前端产物的 `index.html?view=tray`。前端按 URL 参数渲染 `TrayPanel`，与主窗口共用 `AppStateProvider` 与 `RelayProvider`。
+- 左键点击图标切换面板；macOS 用 `NSScreen` / `NSEvent` 的原生坐标把面板放在鼠标所在屏幕的菜单栏下方并水平对齐图标，避免 Retina 与普通屏混排时 Tauri 物理坐标不一致；其他平台按托盘矩形与目标显示器可用区域计算。
+- 面板失焦自动收起，并记录失焦时间避免“点击图标关闭”时又立刻重开；按 Esc 收起。关闭主窗口只隐藏，应用继续在菜单栏驻留并刷新；只有菜单或面板中的退出入口会结束进程并停止调度。macOS 关闭主窗口时把激活策略切到 `Accessory`，Dock 图标、Cmd+Tab 与应用菜单栏一并消失；显示主窗口前先切回 `Regular` 再显示并聚焦，否则窗口拿不到 key 焦点，也没有应用菜单栏。
+- 面板打开时先展示现有额度与更新时间，再按刷新间隔补查中转站账户；订阅账户继续由 Rust 调度器后台刷新。版本检查只由主窗口发起，面板不重复请求 GitHub。
 
 ## 4. 平台接入验证
 
@@ -121,8 +129,9 @@ Rust 侧实现两类中转平台适配器，代码在 `src-tauri/src/quota/`（`
 凭证与存储：
 
 - 手动填写的服务地址、API Key、New API 访问令牌与用户 ID 保存在 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 的按用户 ACL），先写临时文件再原子替换。凭证只在 Rust 侧读取，不进入前端状态、事件、日志或错误消息。
-- 从 Claude Code / Codex 配置扫描到的密钥只在本次运行的内存中使用，不复制到应用目录；这些条目每次启动重新扫描。界面用「凭证已保存 / 凭证仅本次运行」区分两类条目。
-- 打开“中转站账户管理”页，或切到总览的「中转站账户额度」标签页时，会先加载已保存条目及上次成功快照，再扫描本地配置；应用启动但未进入这两个入口时不会额外扫描或查询中转站。随后把距上次成功查询已超过刷新间隔（沿用设置中的分钟数）的账户批量刷新一次；自动刷新失败按同一间隔退避，切换页面不会重复请求。两处共用同一份前端状态，添加、手动刷新、补充令牌或移除后立即同步。手动刷新失败保留旧快照并记录脱敏错误。移除条目会删除对应的 `relay-profiles/<relayId>/` 目录。
+- 从 cc-switch、Claude Code / Codex 配置扫描到的密钥不复制到应用目录。用户勾选导入后，`relay-profiles/<relayId>/source.json` 只保存来源引用（来源、app_type、provider id、导入时的地址、provider 类型与用户主动填写的访问令牌），同一目录的 `snapshot.json` 保存脱敏额度快照；启动时按引用重新读取源配置取出密钥，取不到就跳过该账户。界面用「凭证已保存 / 来源已保存 / 凭证仅本次运行」区分手动凭证、来源引用与仅内存条目。
+- 扫描是管理页上的手动入口：点击「扫描本地配置」后只列出候选（来源、provider 名称、地址、是否已在列表中），不发起网络请求、不自动登记；用户勾选并确认导入后，Rust 才对选中的候选识别上游并查询额度。扫描候选的密钥保留在 Rust 内存中，前端只拿到不含密钥的视图。
+- 打开“中转站账户管理”页，或切到总览的「中转站账户额度」标签页时，只加载已保存条目及上次成功快照；启动时仅在存在 `source.json` 的情况下读取对应源配置（只读、不发网络请求），没有来源账户时不扫描。随后把距上次成功查询已超过刷新间隔（沿用设置中的分钟数）的账户批量刷新一次；自动刷新失败按同一间隔退避，切换页面不会重复请求。两处共用同一份前端状态，添加、扫描导入、手动刷新、补充令牌或移除后立即同步。主窗口与菜单栏面板各自持有前端副本，真正共享的是 Rust 侧注册表：条目变化后广播 `relay-accounts-changed`（带修订号与完整脱敏视图），另一侧据此更新；窗口重新显示时再读取一次列表与状态快照，兜底隐藏期间可能漏掉的事件。手动刷新失败保留旧快照并记录脱敏错误。移除条目会删除对应的 `relay-profiles/<relayId>/` 目录。
 - 访问令牌只对 New API 生效；Sub2API 账户不接受或保存访问令牌。
 
 New API 二开兼容策略（响应字段不是上游协议的一部分，按“可缺省、可别名、未知即忽略”解析）：
@@ -136,11 +145,12 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 
 本地配置读取范围（`src-tauri/src/discovery.rs`）：
 
+- cc-switch：`~/.cc-switch/cc-switch.db`（SQLite）`providers` 表中 `app_type` 为 `claude` / `codex` 的行，只读打开、不加写锁，不修改也不复制数据库。Claude 行取 `settings_config.env.ANTHROPIC_BASE_URL` 与 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY`；Codex 行取 `settings_config.auth.OPENAI_API_KEY`，地址取自 `config` TOML 中激活的 `[model_providers.<id>]`（回退顶层 `base_url` / `openai_base_url`）。数据库不存在、结构不匹配或被占用时当作本轮没有候选，不影响页面。
 - Claude Code：`$CLAUDE_CONFIG_DIR/settings.json` 或 `~/.claude/settings.json` 中 `env.ANTHROPIC_BASE_URL` 与 `env.ANTHROPIC_AUTH_TOKEN`（回退 `ANTHROPIC_API_KEY`）。
 - Codex：`$CODEX_HOME/config.toml` 或 `~/.codex/config.toml` 的 `[model_providers.<id>]`，只取 `base_url` 与 `env_key`/`experimental_bearer_token`；激活的 `model_provider` 排在最前。不读取 `auth.json` 等登录态凭证，也不执行配置中的命令。
 - 客户端 Base URL 末尾的 `/v1` 会被去掉后再拼接额度接口，避免 `/v1/v1/usage`。
 
-识别失败时在页面列出未识别的配置及原因，用户仍可手动填写地址与密钥。两类适配器都只把规范化后的金额、窗口与到期时间交给调用方；手动凭证持久化在应用数据目录，自动扫描到的密钥仅存在于 Rust 内存，均不进入前端状态、日志或错误消息；错误信息不回显响应正文。服务地址仅允许 HTTPS，本机回环地址例外。
+导入时识别失败会在管理页列出未识别的配置及原因，用户仍可手动填写地址与密钥。两类适配器都只把规范化后的金额、窗口与到期时间交给调用方；手动凭证持久化在应用数据目录，扫描候选与导入后的密钥仅存在于 Rust 内存，均不进入前端状态、日志或错误消息；错误信息不回显响应正文。服务地址仅允许 HTTPS，本机回环地址例外。
 
 ## 5. 数据设计待定项
 
@@ -226,14 +236,12 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 - 菜单栏快速查看：作为日常查看入口。
 - 独立管理窗口：作为管理入口。
 
-### 7.2 建议的职责分工
+### 7.2 职责分工（已实现）
 
-- 菜单栏弹窗：紧凑列出三类套餐的关键额度与状态，提供刷新和打开管理窗口的入口。
-- 管理窗口：展示更完整的额度周期、接入与授权状态，并承载经确认的账户及偏好设置。
-- 两个界面建议复用同一个 Rust 后端状态与刷新结果，避免各自定时查询、重复请求或展示不同快照。
-- 各套餐独立反馈状态，单项失败不应使其他已成功查询的数据不可见。
-
-以上为设计建议，具体字段、操作与失败行为待确认。
+- 菜单栏弹窗：按平台与账户紧凑列出关键额度、重置时间与更新时间，提供刷新全部、打开管理窗口和退出入口；同时展示中转站账户的密钥与账户金额摘要。
+- 管理窗口：展示更完整的额度周期、接入与授权状态，并承载账户及偏好设置。
+- 两个界面复用同一个 Rust 后端状态与刷新结果：订阅账户由后台调度器刷新，两个窗口订阅同一份变更事件；中转站额度只在面板打开或管理页进入时补查，避免各自定时查询。
+- 各套餐独立反馈状态，单项失败不影响其他已成功查询的数据；面板对失败与需要重新授权的账户给出简短标记。
 
 ### 7.3 已确认的运行行为
 
@@ -246,11 +254,11 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 
 ### 7.4 已确认的页面组织
 
-用户已接受以下入口与页面组织。菜单栏弹窗与管理窗口建议复用同一账户、套餐及状态模型，采用不同信息密度；视觉布局和字段级细节仍待设计。
+菜单栏弹窗与管理窗口复用同一账户、套餐及状态模型，采用不同信息密度。菜单栏弹窗已按下面的方向实现；其余页面保持既有结构。
 
 | 页面或区域 | 已确认内容方向 | 主要操作 |
 | --- | --- | --- |
-| 菜单栏弹窗 | 可区分账户的紧凑套餐列表、关键周期额度、重置信息、更新时间及异常提示 | 单账户刷新、全部刷新、打开管理窗口、退出 |
+| 菜单栏弹窗 | 按平台与账户分组的紧凑额度列表、重置信息、更新时间及异常提示；中转站按密钥/账户金额摘要展示 | 刷新全部、打开管理窗口、退出 |
 | 管理窗口：总览 | 顶部在「订阅账户额度」与「中转站账户额度」间切换；分别按账户与套餐展示完整额度周期，不合并不同计量口径的数据 | 刷新；中转站额度只读展示，管理入口在中转站页 |
 | 管理窗口：账户 | 已接入账户、授权状态、关联套餐 | 添加、改显示名称、重新授权、移除 |
 | 管理窗口：中转站账户管理 | 中转站服务地址、来源、平台、凭证保存状态与访问令牌配置；额度详情移至总览；账户以网格卡并排展示，添加与凭证操作在弹窗内完成 | 添加、扫描本地配置、刷新、补充访问令牌、移除 |
@@ -260,11 +268,10 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 
 ### 7.5 仍待细化
 
-- 菜单栏仅图标或附带指定数值，账户排序与关注项规则。
-- 点击、失焦、定位、键盘及通知点击的目标行为。
+- 通知点击后的目标行为。
 - 刷新间隔选项、缓存过期口径、休眠唤醒和重新联网策略。
-- 系统通知权限申请时机、拒绝及不支持字段的反馈。
-- 已确认提醒默认值：低额度阈值为剩余 20% 且可调整，仅在能可靠获得或计算比例时适用；低额度与授权失效提醒默认开启，但须获系统通知允许。具体阈值触发边界与异常流程仍待设计，本次不发起权限申请。
+- 系统通知权限在应用启动时申请一次；拒绝后在设置页提示，不阻断额度查询。
+- 已确认提醒默认值：低额度阈值为剩余 20% 且可调整，仅在能可靠获得或计算比例时适用；低额度与授权失效提醒默认开启，但须获系统通知允许。具体阈值触发边界与异常流程仍待设计；启动时申请一次通知权限。
 - 已确认首版开源、Apple Silicon 与 Intel 各自提供 DMG、ad-hoc 签名暂不公证并说明限制；最低系统版本与实际渠道仍待确认或验证。
 
 视觉风格与原生材质仍待讨论；现有 README 列出的 Liquid Glass 尚不构成首版要求。
@@ -294,7 +301,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 - 不能可靠识别周期或剩余比例时，记录限制并确定替代规则，不猜测阈值与重置事件。
 - 建议将必要去重状态持久化，避免应用重启后重复提醒；不为此引入历史统计或保存完整响应。
 - 低额度与失效提醒默认开启，低额度阈值默认剩余 20% 可调；重置或恢复提醒默认关闭。通知设置与系统权限分开表达，不能因开关已开启就宣称系统允许通知。
-- 系统通知权限申请时机与拒绝后的应用内反馈仍待设计；权限拒绝不应影响额度查询。
+- 系统通知权限在应用启动时申请一次；拒绝后在设置页提示，不阻断额度查询。macOS 使用 `UNUserNotificationCenter`，前台同样展示横幅；旧 `NSUserNotification` 在前台只写入通知中心。
 
 ### 8.3 验证重点
 
@@ -323,7 +330,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 - 初期方案已确认：Apple Silicon、Intel 分别提供 DMG，采用 ad-hoc 签名、暂不公证，如实说明安装限制。后续 Developer ID 签名与公证作为升级路径，不把现阶段没有证书视为需求设计或业务开发阻塞。
 - ad-hoc 的签名完整性验证不等于 Gatekeeper 放行、公证或身份认证。使用 Tauri 2 的构建打包能力适配，不复制 devup 手工组装脚本、宽泛 entitlements 或未经验证的公证分支，不提供关闭系统安全保护的常规安装方案。
 - 保留现有 macOS 12.0 配置作为兼容验证起点，不继承 devup 的 11.0 声明。两类架构必须分别验证安装启动与业务行为，不未经验证宣称支持。
-- 首版不自动加入应用内自动更新服务。若不另行确认，先规划可从发布渠道手动下载新版本，后续再讨论自动更新及其签名链。
+- 应用内更新已确认采用 Tauri 官方 updater：更新包用独立的 minisign 密钥签名，下载与安装分两步由用户确认；免安装 Windows exe 不参与原地替换，只跳转发布页。未配置 Developer ID 时更新后仍是 ad-hoc 签名，通知权限或开机自启是否重置需在实机验证。
 
 ### 9.3 全新安装与发布材料
 
@@ -337,7 +344,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 
 ## 10. IPC 与平台适配契约草案
 
-下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_discover`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`。其余仍为计划名称。
+下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_scan`、`relay_import`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`、`download_update`、`downloaded_update_version`、`install_update`。其余仍为计划名称。
 
 ### 10.1 前端命令边界
 
@@ -355,7 +362,10 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | update_preferences | 经校验的设置变更 | 保存常规设置并协调系统操作；系统拒绝通知或自启时如实返回实际状态 | REQ-004、REQ-006、REQ-010 |
 | get_system_permissions / request_notification_permission | 读取状态或用户明确触发的权限请求 | 区分应用设置与系统许可；不在额度查询失败时反复弹出权限申请 | REQ-006、REQ-010 |
 | open_management_window / quit_app | 用户明确操作 | 窗口复用或退出清理，不能把关闭管理窗口等同于退出 | REQ-005、REQ-009 |
-| check_for_update（已实现） | 无敏感输入 | 读取 GitHub Releases 最新正式版本的版本号与发布页地址；只比较与跳转，不下载、不安装 | REQ-012 |
+| check_for_update（已实现） | 无敏感输入 | 读取 GitHub Releases 最新正式版本的版本号与发布页地址；只比较与展示，不下载、不安装 | REQ-012 |
+| download_update（已实现） | 无敏感输入，用户点击触发 | 从 `latest.json` 取最新更新包，按应用代理设置下载并校验 minisign 签名；进度通过事件推送，包暂存在内存 | REQ-012 |
+| downloaded_update_version（已实现） | 无 | 返回已下载待安装的版本号，供设置页重建状态 | REQ-012 |
+| install_update（已实现） | 无，用户点击触发 | 安装已校验的更新包：macOS 替换 `.app` 后重启，Windows 启动 NSIS 安装器并退出；免安装 exe 直接拒绝 | REQ-012 |
 
 授权输入通道必须按平台实际能力设计；不为方便而把 Keychain 内容或原始响应回传前端。若某平台需要手动输入秘密，应先设计合适的受控输入通道，而不是在普通前端状态或日志中保存。
 
@@ -365,6 +375,8 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 - 事件不是唯一数据来源。窗口首次打开、重连或发现版本缺口时读取完整脱敏状态，避免漏事件导致永久不同步。
 - 同一会话内忽略过期修订，应用重启后按新会话重建状态，不比较不同会话的修订号。
 - 不广播秘密、完整平台响应或账户私有路径。授权流程事件仅包含流程标识与安全的状态提示。
+- 更新下载进度使用单独的 `update-download-progress` 事件，只包含已下载字节数与可选总大小；Rust 侧按 120ms 节流，收尾补发一次完整大小。
+- 中转站条目使用 `relay-accounts-changed` 事件广播完整脱敏列表与递增修订号；`relay_list` 返回同样的结构，用于窗口重新显示时对齐。
 - 接收 IPC 时由 Rust 校验产品类型、本地标识、设置范围与允许的操作；不信任前端传入的任意 URL、路径或 shell 片段。
 
 ### 10.3 平台适配器职责

@@ -1,0 +1,249 @@
+name: build-test
+
+# 测试版构建：手动触发，在任意分支上产出可安装的测试包，作为 workflow artifact 供下载。
+#
+# 与 release.yml 的区别只有一处：没有 publish job。不创建 Release、不打 tag、不改版本号，
+# 因此可以随时在 dev 或特性分支上跑，不会覆盖已发布的版本。
+# 注意：不要用 release.yml 的“手动触发”来打测试包——那条路径会直接发布 Release。
+#
+# workflow_dispatch 的入口只登记默认分支（main）上的工作流文件，所以要构建的分支由 ref 输入指定，
+# 目标分支本身不必包含这个文件。触发时用的仍是入口分支上的工作流定义。
+#
+# 构建步骤与 release.yml 保持一致，改发布流程时请同步两边：
+# macOS 的 cargo-tauri 安装步骤（tauri#15315）、Windows 的打包命令与版本三处一致的检查。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "要构建的分支、tag 或提交（不必包含本工作流文件）"
+        type: string
+        required: true
+        default: dev
+      platforms:
+        description: "构建哪些平台"
+        type: choice
+        options:
+          - all
+          - macos
+          - windows
+        default: all
+
+# 测试包只需要读仓库，不需要写权限。
+permissions:
+  contents: read
+
+# 同一目标分支重复触发的测试构建可以互相取消，省 CI 时间；正式发布不要这样做。
+concurrency:
+  group: build-test-${{ inputs.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # 汇总版本号与提交，用于产物命名，避免多个测试包下载到同一目录后互相覆盖。
+  meta:
+    name: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      label: ${{ steps.meta.outputs.label }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Read version and commit
+        id: meta
+        shell: bash
+        run: |
+          version=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json', 'utf8')).version")
+          sha=$(git rev-parse --short=7 HEAD)
+          label="${version}-${sha}"
+          {
+            echo "version=${version}"
+            echo "label=${label}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo "### 测试构建"
+            echo ""
+            echo "- 分支／提交：\`${{ inputs.ref }}\` @ \`${sha}\`"
+            echo "- 版本：\`${version}\`"
+            echo "- 产物名会带 \`${label}\` 后缀，便于与正式版区分"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  # 与 release.yml 的 check 相同：三处版本一致 + 前端构建 + fmt/clippy/测试。
+  check:
+    name: check
+    needs: meta
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Check versions are in sync
+        shell: bash
+        run: |
+          conf_version=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json', 'utf8')).version")
+          pkg_version=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
+          cargo_version=$(awk -F'"' '/^version = /{print $2; exit}' src-tauri/Cargo.toml)
+          for entry in "tauri.conf.json:$conf_version" "package.json:$pkg_version" "Cargo.toml:$cargo_version"; do
+            if [ "${entry#*:}" != "$conf_version" ]; then
+              echo "::error::${entry%%:*} 的版本是 ${entry#*:}，与 tauri.conf.json 的 ${conf_version} 不一致。请统一三处版本（改完 Cargo.toml 后重新生成 Cargo.lock）。"
+              exit 1
+            fi
+          done
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+
+      - run: pnpm test:rust
+
+  build-macos:
+    name: build macos (${{ matrix.label }})
+    needs: [meta, check]
+    if: inputs.platforms != 'windows'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            label: arm64
+          - target: x86_64-apple-darwin
+            label: x64
+    env:
+      APPLE_SIGNING_IDENTITY: "-"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: macos-${{ matrix.target }}
+
+      - run: pnpm install --frozen-lockfile
+
+      # 与 release.yml 相同：规避 tauri#15315，用官方 cargo-tauri 二进制而不是 pnpm tauri。
+      - name: Install native tauri CLI
+        shell: bash
+        run: |
+          version=$(node -p "require('./node_modules/@tauri-apps/cli/package.json').version")
+          case "$(uname -m)" in
+            arm64) host=aarch64-apple-darwin ;;
+            *) host=x86_64-apple-darwin ;;
+          esac
+          url="https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v${version}/cargo-tauri-${host}.zip"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/cargo-tauri.zip" "$url"
+          unzip -q "$RUNNER_TEMP/cargo-tauri.zip" -d "$RUNNER_TEMP/cargo-tauri"
+          bin=$(find "$RUNNER_TEMP/cargo-tauri" -type f -name cargo-tauri | head -1)
+          chmod +x "$bin"
+          dirname "$bin" >> "$GITHUB_PATH"
+
+      - name: Build dmg
+        shell: bash
+        run: |
+          label="${{ needs.meta.outputs.label }}"
+          cargo tauri build --target "${{ matrix.target }}" --bundles dmg
+          mkdir -p output
+          dmg=$(find "src-tauri/target/${{ matrix.target }}/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' 2>/dev/null | head -1) || true
+          if [ -z "$dmg" ]; then
+            echo "::error::dmg not found"
+            exit 1
+          fi
+          cp "$dmg" "output/Token.Refill_${label}_macos-${{ matrix.label }}.dmg"
+          ls -lh output
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: test-macos-${{ matrix.label }}-${{ needs.meta.outputs.label }}
+          path: output/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+  build-windows:
+    name: build windows (x64)
+    needs: [meta, check]
+    if: inputs.platforms != 'macos'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: windows
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm test:rust
+
+      # 一次构建同时得到免安装 exe 与 NSIS 安装器，与 release.yml 一致。
+      - name: Build portable exe and NSIS installer
+        shell: pwsh
+        run: |
+          $label = "${{ needs.meta.outputs.label }}"
+          pnpm tauri build --bundles nsis
+          New-Item -ItemType Directory -Force output | Out-Null
+          Copy-Item "src-tauri/target/release/token-refill.exe" "output/Token.Refill_${label}_windows-x64.exe"
+          $setup = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          if (-not $setup) { throw "NSIS installer not found" }
+          Copy-Item $setup.FullName "output/Token.Refill_${label}_windows-x64-setup.exe"
+          Get-ChildItem output | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: test-windows-${{ needs.meta.outputs.label }}
+          path: output/*.exe
+          if-no-files-found: error
+          retention-days: 14

@@ -1,9 +1,9 @@
 # Token Refill 界面设计规范
 
-- 文档版本：0.1
-- 最近更新：2026-10-25
-- 适用范围：管理窗口前端（React + TypeScript）
-- 事实来源：`src/App.module.css`、`src/styles.css`、`src/App.tsx`、`src/panels/`、`src/components/`、`src/lib/format.ts`、`src/lib/useDialogA11y.ts`
+- 文档版本：0.2
+- 最近更新：2026-10-27
+- 适用范围：管理窗口与菜单栏快速查看面板前端（React + TypeScript）
+- 事实来源：`src/App.module.css`、`src/styles.css`、`src/App.tsx`、`src/panels/`、`src/panels/TrayPanel.module.css`、`src/components/`、`src/lib/format.ts`、`src/lib/useDialogA11y.ts`
 - 关联文档：[软件设计文档](./software-design.md)、[需求文档](./requirements.md)、[开发计划文档](./development-plan.md)
 
 本文从现有实现提炼界面结构、组件用法与改造步骤，目标是让新增页面或重做相似页面时**先复用、再新增**，避免每次重画一套卡片、状态和弹窗。产品范围与业务规则以需求文档为准，本文只描述界面层。
@@ -32,7 +32,7 @@
 1. **安静的工具感**：界面服务于快速查看额度，不用大面积渐变、强投影或装饰性插画。
 2. **三层容器**：画布（`--background`）→ 面板/卡片（`--surface`）→ 凹陷块（`--sunken`）。层级靠 1px 发丝线和底色差，不靠阴影；阴影只留给浮层弹窗。
 3. **一种信息只用一个组件**：账户摘要、额度条、授权状态、错误提示都已有固定形态，新页面先找现成的，不再发明第二种表达。
-4. **主色克制**：强调色只用于选中态、主按钮、可点击的强调信息；异常色（`--danger`）只出现在失败、低额度、需要重新授权。正常状态保持中性。
+4. **主色克制**：强调色只用于选中态、主按钮、可点击的强调信息；异常色（`--danger`）只出现在失败与需要重新授权，低额度用 `--warning` 的琥珀色表示「注意」。正常状态保持中性。
 5. **密度分级**：总览偏浏览（折叠摘要 + 展开详情），账户页偏管理（等宽网格 + 操作行），设置页偏逐项阅读（列表行 + 右侧控件）。
 6. **交互可预期**：图标按钮必有 `aria-label` 和 `title`；刷新有旋转反馈；失败保留旧数据；浏览器预览下按钮禁用并说明原因。
 7. **动效可有可无**：所有动画都遵循系统「减少动态效果」，不引入阻塞式动画。
@@ -59,7 +59,8 @@
 | `--accent-text` | `#f7faff` | `#06121f` | 实色主色上的文字 |
 | `--accent-soft` | `#e7eefb` | `#18293f` | 强调底色：选中导航、徽标、成功/进行中 |
 | `--ok` / `--ok-soft` | `#167a4a` / `#e6f4ec` | `#4fbf82` / `#13281d` | 授权正常、成功 |
-| `--danger` / `--danger-soft` | `#b4233b` / `#fbeaed` | `#ff8b9c` / `#341c23` | 失败、低额度、破坏性操作 |
+| `--warning` / `--warning-soft` | `#b06f00` / `#fdf1db` | `#f0b429` / `#332912` | 需要注意但未失败：菜单栏面板的低额度提示 |
+| `--danger` / `--danger-soft` | `#b4233b` / `#fbeaed` | `#ff8b9c` / `#341c23` | 失败、破坏性操作 |
 | `--focus` | `#0b63ce` | `#79b8ff` | 键盘焦点描边 |
 | `--accent-ring` | 14% 主色 | 18% 主色 | 输入框聚焦光晕 |
 
@@ -113,6 +114,7 @@
 | 卡片间距 | 同类卡片 10px；卡片与标题 14–16px |
 | 控件高度 | 标准按钮 34px；弹窗按钮 36px；小按钮 26–30px；输入框 34px（弹窗 38px） |
 | 图标尺寸 | 导航 17px；按钮内 13–16px；平台图形 18px（分组头 20px）；空态 24px |
+| 菜单栏面板 | 380×560 点；圆角 13px；内容区内边距 11–12px；水平居中于菜单栏图标 |
 
 ### 2.5 动效
 
@@ -275,7 +277,8 @@
 | `.accountIdentityCell` / `.accountMark` | 插头徽标 + host 身份区 |
 | `.relayTileStatus` / `.relayTileMeta` / `.relayTileNotice` | 额度同步状态、凭证与访问令牌说明、刷新失败提示（最多两行） |
 | `.accountAddTile` | 网格末尾的虚线添加入口，打开添加弹窗 |
-| `.relayScanButton` | 平台标题右侧的「重新扫描」动作 |
+| `.relayScanButton` | 平台标题右侧的「扫描本地配置」动作，打开候选勾选弹窗 |
+| `.relayCandidateList` / `.relayCandidate` | 扫描弹窗中的候选列表：复选框、来源、provider 名称与地址 |
 | `.relaySkipped` / `.relaySkippedToggle` | 未识别的本地配置：默认收起，展开后才列出来源、地址与原因 |
 
 ### 4.4 状态与提示
@@ -291,7 +294,7 @@
 | `.authStatus` + `.authDot` | 授权状态 | `data-state="ok"` 绿色，`"needs-reauth"` 红色，未知态中性 |
 | `.planRowState` | 套餐查询状态 | 状态键由 `planStateKey()` 提供（`inactive / busy / error / ok / idle`）；CSS 只为 `busy` 和 `error` 上色 |
 | `.updatedAt` | 最近刷新时间 | 卡片标题右侧，等宽数字 |
-| `.toast` | 保存失败 toast | 固定窗口底部居中，`--danger-soft` 底色；成功时不出现 |
+| `.toast` / `.toastSuccess` | 瞬时提示 toast | 固定窗口底部居中，默认 `--danger-soft` 底色，成功时换 `--ok-soft`；操作级失败与导入成功都用 `Toast` 自动消失 |
 | `.overviewEmpty` / `.emptyGlyph` / `.emptyTitle` | 整页空态 | 没有数据时替代列表 |
 | `.noticeStale` 与 `.accountNote` | 行内补充说明 | 放在数据区下方，字号 12px |
 
@@ -326,7 +329,8 @@
 | `.accountRefresh` | 带文字的轻量刷新 | 26px 高、11.5px 字，账户卡底部使用 |
 | `.accountAddTile` | 添加入口 | 虚线卡片，悬浮转实线主色；与账户卡同网格 |
 | `.updateChip` | 侧栏更新提示 | 胶囊，悬浮反转为主色实底 |
-| `.buttonRow` | 按钮并排 | 设置页版本检查使用 |
+| `.buttonRow` | 按钮并排 | 设置页版本检查与更新使用 |
+| `.updateProgress` | 更新下载进度条 | 细轨道 + accent 填充，下载中/已下载时显示 |
 
 按钮状态统一：`hover` 只改底色/描边，`active` 轻微缩放，`disabled` 降透明度 + `cursor: not-allowed`。所有图标按钮都要有可读文本（`aria-label`），不能只靠图形。
 
@@ -405,7 +409,7 @@ section
 关键行为：
 
 - 标签栏沿用设置页分段控件的视觉语言：独立使用 `.overviewTabs` / `.overviewTab`，但复用 `.pillThumb` 滑块，等宽列 + `--pill-index` / `--pill-count` 驱动滑动；使用 `role="tablist"` / `role="tab"`；默认停留在「订阅账户额度」，切换不改变顶部页头。
-- 中转站账户与「中转站账户管理」页共用 `RelayProvider` 状态：进入任一页面时先展示上次成功快照，再扫描本地配置，并把超过刷新间隔的账户自动刷新一次；之后在任一页面手动刷新都会同步。
+- 中转站账户与「中转站账户管理」页共用 `RelayProvider` 状态：进入任一页面时只加载已保存条目与上次成功快照，并把超过刷新间隔的账户自动刷新一次；扫描本地配置是管理页上的手动入口，之后在任一页面手动刷新都会同步。
 - 平台顺序由 `groupAccountsByPlatform()` 固定，账户增删不会让分组跳动。
 - 同一平台的账户共用一张卡；默认展开第一个，`undefined` 表示沿用默认，`null` 表示全部收起。
 - 折叠摘要由 `accountSummary()` 生成：单套餐列各窗口余量；多套餐（如百炼的 Token Plan + Coding Plan）每个套餐只列剩余最低的窗口，避免摘要铺满整行。
@@ -421,7 +425,6 @@ section
 
 ```
 section
-├─ loginError 提示（本页专属）
 ├─ platformStack
 │  ├─ 每个已开放平台 platformGroup
 │  │  ├─ platformSectionHead → PlatformHeading（带账户数）
@@ -439,6 +442,7 @@ section
 - 弹窗是状态联合类型 `DialogState`，授权流程还包含 `phase`：`waiting / succeeded / failed / canceled`。
 - 授权事件由 `onAccountLoginChanged` 驱动，只携带脱敏状态；离开页面或关闭弹窗要取消后台流程。
 - 添加流程的平台由入口决定，弹窗内不再切换平台。
+- 授权没能启动（例如本机没有 Codex 客户端）、API Key 校验失败等操作级错误统一用窗口底部的 `Toast`（`tone="danger"`）提示（4 秒自动消失），不占弹窗和页面的布局；添加弹窗保持打开，方便改完重试或取消。
 
 ### 5.3 中转站账户管理（`RelayPanel.tsx`）
 
@@ -446,20 +450,20 @@ section
 section
 ├─ 页面级错误 noticeDanger（没有弹窗时）
 └─ platformGroup
-   ├─ platformSectionHead（插头徽标 + 中转站账户 + 说明 + 账户数 + 重新扫描）
+   ├─ platformSectionHead（插头徽标 + 中转站账户 + 说明 + 账户数 + 扫描本地配置）
    ├─ accountGrid
    │  ├─ accountTile × N（host、平台标签、来源/凭证/令牌、额度状态、刷新/令牌/移除）
    │  └─ accountAddTile（虚线添加入口，打开添加弹窗）
    ├─ 空列表说明 / 操作提示
    ├─ relaySkipped（默认收起：未识别的本地配置）
    └─ 浏览器预览说明
-└─ 弹窗（portal）：添加 / 补充访问令牌 / 移除
+└─ 弹窗（portal）：添加 / 扫描本地配置 / 补充访问令牌 / 移除
 ```
 
 关键行为：
 
 - 本页只负责账户与凭证管理；额度金额、比例、窗口与到期时间在总览的「中转站账户额度」展示。管理卡只保留「额度已同步 / 密钥不可用 / 尚未获取额度」与更新时间。
-- 进入页面时若尚未加载，会刷新已保存的手动条目并扫描一次本地配置；标题右侧「重新扫描」手动重试。数据与总览共用 `RelayProvider`，不会重复扫描。
+- 进入页面时若尚未加载，只读取已保存条目与上次成功快照；标题右侧「扫描本地配置」打开候选弹窗，扫描只列出来源、provider 名称、地址与「已在列表中」状态，不发起网络请求。默认勾选尚未添加的候选，用户确认「导入所选」后才查询额度并加入列表。导入的条目只保存来源引用，启动时重新读取源配置，卡片显示「来源已保存 · 启动时重新读取」。数据与总览共用 `RelayProvider`。
 - 添加、补充访问令牌与移除统一用弹窗，和账户页保持一致；添加位是网格末尾的虚线卡。
 - API Key 与访问令牌都用 ref 读取，不进入组件状态；保存动作由 Rust 完成。
 - New API 卡片提供访问令牌入口；Sub2API 不显示该入口。
@@ -481,17 +485,61 @@ section
 ├─ groupTitle「网络代理」+ card.listCard
 │  └─ settingRowStatic（代理方式 + 分段单选；指定代理时追加地址输入）
 ├─ groupTitle「版本」+ card.listCard
-│  └─ settingRowStatic（当前版本 + 更新状态 + 按钮）
+│  ├─ settingRowStatic（当前版本 + 更新状态 + 按钮）
+│  └─ updateProgress（下载中/已下载时显示）
 └─ 若干 groupNote（分组脚注）
 ```
 
 关键行为：
 
 - 设置页持有本地草稿 `prefs`，用 `dirty` ref 标记未保存改动；连续改动 250ms 防抖后写入 Rust，离开页面前补发一次。
+- 版本区块把下载与安装拆成两步：点击“下载更新”后才请求更新包，进度由 `update-download-progress` 事件驱动；下载并通过签名校验后按钮变为“重启并安装”。重新打开设置页时用 `downloaded_update_version` 恢复已下载状态，避免重复下载。
+- Windows 免安装 exe 没有可替换的安装目录，不显示“下载更新”，只保留“前往发布页”；macOS 更新替换 `.app` 后重启，Windows 由 NSIS 安装器接管并退出应用。
 - 后端状态变化时，只有在没有本地未保存改动时才覆盖草稿。
 - 保存成功不打扰用户；只有保存失败时在窗口底部弹一次 `.toast`（4 秒后自动消失，重复失败会重新计时）。
 - 主题切换立即应用并单独持久化，不等待防抖保存。
 - 开机自启不是普通偏好：先调用系统，成功后再更新界面状态，失败给出明确说明。
+
+### 5.5 菜单栏快速查看（`TrayPanel.tsx`）
+
+菜单栏面板是独立窗口（`tray-panel`，380×560 点），不套用管理窗口的侧栏骨架，只复用颜色 token、格式化函数与 `PlatformLogo`。样式集中在 `src/panels/TrayPanel.module.css`，刻意不放进 `App.module.css`，避免主窗口与面板的布局规则互相牵连。
+
+```
+div.panel（透明窗口内的圆角面板）
+├─ header
+│  ├─ div.brand
+│  │  ├─ img.wordmark
+│  │  └─ span.updated（账户数 + 更新于 年-月-日 时:分 + 刷新中）
+│  └─ button.refreshAll（主色文字「全部刷新」）
+├─ div.scroll
+│  ├─ p.notice（全局错误，可选）
+│  ├─ div.empty（没有任何账户时）
+│  └─ section.section × N
+│     ├─ button.sectionHead（平台徽标 + 名称 + 账户数 + 折叠箭头）
+│     └─ div.cards
+│        └─ article.account × N
+│           ├─ div.accountHead（账户名 + 重新授权标签 + 相对更新时间 + 单个账户刷新）
+│           ├─ span.accountHint（身份，如邮箱；可选）
+│           ├─ span.tier（套餐档位，主色小标题；可选）
+│           ├─ div.quotaGroup × N
+│           │  ├─ span.eyebrow（多套餐时的套餐名，主色小标题；可选）
+│           │  └─ div.quotaRow（标签 / 额度条 / 「剩余 X%」网格 + 条下重置时间）
+│           └─ p.errorLine（刷新失败，可选）
+└─ footer
+   ├─ span.version
+   └─ button.openButton「打开主窗口」+ span.divider + button.quitButton「退出」
+```
+
+关键行为：
+
+- 订阅账户按平台分组，每个账户一张卡；平台分组可折叠（默认展开），折叠状态只存在组件内存里，不写进设置。
+- 额度行是三列网格：左侧窗口名、中间额度条、右侧「剩余 X%」，重置时间（外加金额/次数）贴在额度条下方，因此同一张卡里的进度条始终对齐。多套餐账户在每类套餐第一行标注套餐名。
+- 账户头右侧显示相对更新时间（`刚刚更新` / `N 分钟前` / 钟点）与单个账户的刷新按钮；顶部「全部刷新」同时刷新订阅账户与中转站。额度条 6px，低于提醒阈值时条与百分比转为 `--warning` 琥珀色。
+- 中转站账户与订阅账户同卡式排版：账户名 + 相对更新时间 + 刷新按钮，第二行是 `平台 · 主机名`，下面是密钥/账户金额摘要与一条剩余比例条；不复制管理页的两列大卡。
+- 页脚不做实色主按钮：左侧版本号，右侧是两个纯文字动作（主色「打开主窗口」、弱化色「退出」），中间用一根竖线分隔。头部「全部刷新」与「打开主窗口」同一套文字动作样式，只换图标与位置。
+- 面板打开事件由 Rust 广播（`tray-panel-shown`）；收到后先展示缓存，再按刷新间隔补查中转站。面板在应用启动时就已加载，因此中转站列表读完前不会主动发请求。
+- 面板内按 Esc 收起；点击面板外部由 Rust 的失焦监听收起。主题切换通过 `storage` 事件从主窗口同步。
+- 文案与数字遵循与主窗口相同的字号/字重级别，但整体缩小一档：面板正文 10–13px，行距更紧，避免在 380px 宽度内换行撑高。时间文案统一走 `src/lib/format.ts` 的 `stampLabel` / `relativeUpdateLabel`。
 
 ## 6. 跨页交互约定
 
@@ -506,8 +554,9 @@ section
 
 | 级别 | 表现 | 类名 |
 | --- | --- | --- |
-| 全局 | 状态读取、授权入口等跨页面错误 | `.noticeDanger.globalNotice`（App 顶部） |
-| 页面 | 添加授权失败、表单错误 | `.noticeDanger.accountNotice` 或卡片内 `.noticeDanger` |
+| 全局 | 状态读取等跨页面错误 | `.noticeDanger.globalNotice`（App 顶部） |
+| 瞬时 | 操作成功（导入本地配置）或失败（保存设置、发起授权、添加账户） | `Toast` + `.toast` / `.toastSuccess`（窗口底部居中，自动消失） |
+| 页面 | 本页的数据加载/扫描失败 | `.noticeDanger.accountNotice`（RelayPanel）或卡片内 `.noticeDanger` |
 | 对象 | 单个套餐/账户刷新失败 | `.noticeStale`（有旧数据）或 `.noticeDanger`（无数据） |
 | 行内 | 字段、设置项、套餐状态 | `.settingHint[data-danger]`、`.planRowState[data-state="error"]`、`.quotaLowNote` |
 
@@ -649,7 +698,7 @@ export default function FooPanel() {
 
 ## 9. 类名索引
 
-以下是 `src/App.module.css` 的现有类名分组，新增样式前先在这里找，避免重复造词。
+以下是 `src/App.module.css` 的现有类名分组，新增样式前先在这里找，避免重复造词。菜单栏面板使用独立的 `src/panels/TrayPanel.module.css`，类名以 `panel` / `section` / `account` / `quotaRow` / `relaySummary` 为主，不与管理窗口共用。
 
 | 分区 | 类名 |
 | --- | --- |
@@ -659,7 +708,7 @@ export default function FooPanel() {
 | 总览额度板 | `overviewTabs` `overviewTab` `overviewStack` `overviewEmpty` `emptyGlyph` `emptyTitle` `quotaBoard` `quotaAccount` `quotaAccountHead` `quotaAccountToggle` `quotaAccountInfo` `quotaAccountIdentity` `quotaAccountName` `quotaSummary` `quotaAccountTools` `chevronButton` `chevronIcon` `quotaAccountMeta` `metaDot` `quotaBody` `quotaBodyInner` `quotaNotices` `metricGrid` `metric` `metricDivider` `metricEyebrow` `metricProduct` `metricLabel` `quotaBarRow` `quotaPercent` `quotaBarTrack` `quotaBarFill` `metricMeta` `metricMetaPart` `metricDot` `quotaMeta` `quotaLowNote` `dataGaps` `skel` `skelLabel` `skelValue` `skelBar` `skelMeta` |
 | 账户管理 | `accountGrid` `accountTile` `accountIdentityCell` `accountMark` `accountIdentity` `accountNameRow` `accountName` `accountMeta` `planPanel` `planRow` `planRowMain` `planRowName` `planTier` `planRowState` `accountFoot` `accountRefresh` `accountActions` `miniButton` `accountAddTile` `accountAddIcon` `accountAddLabel` `accountEmptyNote` `accountNotice` |
 | 中转站 | `relayQuotaView` `relayScanButton` `relayTileStatus` `relayTileMeta` `relayTileNotice` `relaySectionLabel` `relayAmount` `relayQuotaGrid` `relayQuotaCell` `relayQuotaLabel` `relayQuotaCaption` `relayMeterRow` `relayMeterValue` `relayBar` `relayBarFill` `relayWindows` `relayWindow` `relayWindowHead` `relaySkipped` `relaySkippedToggle` `accountStack` `accountCard` `accountHead` `accountTitleBlock` `accountMetaLine` `accountHint` `accountTools` `updatedAt` `refreshButton` `chevronButton` `chevronIcon` |
-| 状态/提示 | `noticeDanger` `noticeStale` `noticeAside` `globalNotice` `authStatus` `authDot` `toast` `planTag` |
+| 状态/提示 | `noticeDanger` `noticeStale` `noticeAside` `globalNotice` `authStatus` `authDot` `toast` `toastSuccess` `planTag` |
 | 设置 | `settingRow` `settingRowStatic` `settingText` `settingLabel` `stackRow` `pills` `pill` `pillThumb` `pillText` `switchWrap` `switchInput` `switchTrack` `switchKnob` `range` `rangeHead` `rangeValue` `rangeScale` `testButton` `buttonRow` |
 | 表单/按钮 | `field` `fieldLabel` `textInput` `button` `buttonGhost` `dangerButton` |
 | 弹窗 | `dialogBackdrop` `dialog` `dialogClose` `dialogHeader` `dialogSubtitle` `dialogSteps` `dialogStep` `stepMarker` `stepBody` `stepTitle` `stepText` `dialogFieldGroup` `dialogNote` `authBlock` `authUrl` `loginStatus` `dialogSuccess` `dialogSuccessIcon` `dialogSuccessBody` `dialogSuccessTitle` `dialogSuccessText` `dialogActions` `dialogForm` |

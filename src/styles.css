@@ -35,6 +35,9 @@
   --accent-soft: #e7eefb;
   --ok: #167a4a;
   --ok-soft: #e6f4ec;
+  /* 低额度是「注意」而非「失败」：用琥珀色标记，红色留给查询失败。 */
+  --warning: #b06f00;
+  --warning-soft: #fdf1db;
   --danger: #b4233b;
   --danger-soft: #fbeaed;
   --focus: #0b63ce;
@@ -61,6 +64,8 @@
   --accent-soft: #18293f;
   --ok: #4fbf82;
   --ok-soft: #13281d;
+  --warning: #f0b429;
+  --warning-soft: #332912;
   --danger: #ff8b9c;
   --danger-soft: #341c23;
   --focus: #79b8ff;
@@ -86,6 +91,8 @@
     --accent-soft: #18293f;
     --ok: #4fbf82;
     --ok-soft: #13281d;
+    --warning: #f0b429;
+    --warning-soft: #332912;
     --danger: #ff8b9c;
     --danger-soft: #341c23;
     --focus: #79b8ff;

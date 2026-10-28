@@ -1,8 +1,8 @@
 # Token Refill 开发计划文档
 
-- 文档版本：0.14
-- 状态：Codex 本机查询、官方授权多账户、百炼 Token Plan 个人版与 Coding Plan 中国站查询、统一状态层与 Windows 兼容层已实现
-- 最近更新：2026-10-23
+- 文档版本：0.16
+- 状态：Codex 本机查询、官方授权多账户、百炼 Token Plan 个人版与 Coding Plan 中国站查询、统一状态层、菜单栏快速查看、Windows 兼容层、版本检查与应用内更新已实现
+- 最近更新：2026-10-27
 - 关联文档：[需求文档](./requirements.md)、[软件设计文档](./software-design.md)
 
 ## 1. 计划原则
@@ -24,7 +24,7 @@
 | 核心问题与产品方向 | 已确认 | 减少在软件与 CLI 之间切换，集中查看三类 AI 套餐 |
 | 首发系统与形态 | 已确认 | macOS，菜单栏快速查看 + 独立管理窗口；后续 Windows |
 | Windows 兼容层 | 已实现 | CLI 查找、授权链接、数据目录、标题栏按平台适配；Windows 本机构建、单元测试、真实 CLI 握手与启动验证通过，安装包与运行验收未完成，详见 [Windows 兼容设计](./windows-support.md) |
-| 版本检查 | 已实现 | 设置页查询 GitHub Releases 最新正式版本并与当前版本比较；有新版本时跳转发布页，不自动下载或安装 |
+| 版本检查与更新 | 已实现 | 设置页查询 GitHub Releases 最新正式版本；启动时静默检查，运行期间定期复查；安装版可显式下载并重启安装（minisign 校验），免安装 exe 只跳转发布页 |
 | 展示信息与多账户 | 已确认 | 额度或比例、各周期、重置时间或倒计时、更新时间与状态都需要；支持多个账户 |
 | 接入原则 | 已确认 | 应用独立管理多账户、可选主动导入、CLI 非正式版强制依赖；不包含本机凭证读取操作授权 |
 | 刷新、后台运行与提醒 | 已确认 | 默认 5 分钟可调自动刷新 + 单账户/全部手动刷新；缓存与失败反馈；关闭窗口常驻、明确退出、自启可选默认关闭；低额度、授权失效及可选重置提醒 |
@@ -40,7 +40,8 @@
 | 统一状态层 | 已实现 | Rust 管理账户、套餐、额度快照、查询状态与偏好；JSON 版本化持久化，前端读取脱敏状态并订阅变更事件 |
 | 后台刷新调度 | 基础能力已实现 | 默认 5 分钟可调、单账户/全部手动刷新、在途去重、缓存优先、失败保留上次成功数据；平台限流参数与休眠唤醒策略待定 |
 | Codex 多账户授权 | 已实现 | 每账户独立 `CODEX_HOME`，官方 `account/login/start` 浏览器授权；支持添加、取消、改名、重新授权、移除；不复制本机默认凭证 |
-| 业务实现 | 进行中 | Codex 本机与独立账户链路已跑通；百炼控制台授权、Token Plan 与 Coding Plan 查询、多产品展示与刷新已接入；菜单栏常驻、凭证系统级存储与限流退避仍待实现 |
+| 菜单栏常驻 | 已实现 | 菜单栏图标左键打开快速查看面板，右键菜单提供打开主窗口、查看额度与退出；关闭管理窗口只隐藏，应用继续后台刷新；macOS 同时隐藏 Dock 图标与 Cmd+Tab 条目，打开主窗口时恢复；面板按屏幕与鼠标位置定位，失焦自动收起 |
+| 业务实现 | 进行中 | Codex 本机与独立账户链路已跑通；百炼控制台授权、Token Plan 与 Coding Plan 查询、多产品展示与刷新已接入；凭证系统级存储与限流退避仍待实现 |
 
 ## 3. 候选阶段
 
@@ -128,7 +129,8 @@
 - 在无作者 CLI、登录态和开发环境的全新安装场景验证三类接入、常驻、通知及卸载说明。
 - 补充安装、首次接入、权限与本地数据、已知限制和问题反馈文档；检查源码及产物不含真实账户数据或凭证。
 - 构建与准备可以先完成，实际公开源码、上传安装包及发布版本应按后续明确的发布指令执行。
-- 发布只走 `main`：发布相关改动从 `main` 切分支并 PR 到 `main`，版本号在 `main` 上提升后推送触发构建；`dev` 的未完成或未验证功能不随发版进入 `main`，发布后再把 `main` 合回 `dev`。
+- 工作分支一律从 `main` 切出并 PR 到 `main` 合并，`dev` 只承载日常集成、不作为分支基线。
+- 发布只走 `main`：发布相关改动同样从 `main` 切分支并 PR 到 `main`，版本号在 `main` 上提升后推送触发构建；`dev` 里未完成或未验证的功能不随发版进入 `main`，发布后再把 `main` 合回 `dev`。
 
 交付物：可开源的源码及文档、macOS 首版候选安装包、验收记录、版本说明与发布检查清单。
 
@@ -167,7 +169,7 @@
 | DEV-006 | REQ-004、REQ-008 | 统一调度、缓存、单账户/全部刷新、并发去重、限流与错误反馈 | DEV-001、至少一类适配可测、刷新参数设计 | 进行中：基础调度、缓存、去重与失败保留已实现；平台限流退避与休眠策略待定 |
 | DEV-007 | REQ-005、REQ-009 | 菜单栏弹窗、管理窗口开闭及共享状态；关闭窗口仍运行、退出停止任务 | 页面方向、DEV-001、DEV-006 | 未开始 |
 | DEV-008 | REQ-003、REQ-005、REQ-008 | 管理窗口各区域及账户管理交互；真实状态与失败恢复 | 页面方向、DEV-002、DEV-006 | 进行中：总览支持多账户卡片；账户页已启用添加、改名、重新授权与移除 |
-| DEV-009 | REQ-006 | 三类提醒、默认 20% 阈值、默认开启的低额度/失效提醒、默认关闭的重置开关、通知权限及去重；失败缓存不误报 | DEV-006、权限/周期与触发边界设计 | 进行中：三类提醒已接入系统通知；低额度按重置周期、授权失效按状态跃迁、重置按新旧快照确认新周期去重，均跨重启保持；系统通知权限状态反馈待后续 |
+| DEV-009 | REQ-006 | 三类提醒、默认 20% 阈值、默认开启的低额度/失效提醒、默认关闭的重置开关、通知权限及去重；失败缓存不误报 | DEV-006、权限/周期与触发边界设计 | 已实现：三类提醒已接入系统通知；低额度按重置周期、授权失效按状态跃迁、重置按新旧快照确认新周期去重，均跨重启保持；macOS 改用 `UNUserNotificationCenter`，启动时申请授权、前台也展示横幅，权限被拒绝时设置页提示 |
 | DEV-010 | REQ-010 | 自启选项默认关闭，系统设置失败可见且可恢复 | 系统兼容范围、管理设置入口 | 已实现：macOS 使用 LaunchAgent；写入成功并以系统实际状态确认后才回写偏好，失败返回错误；启动时按系统状态校正本地开关；真实登录项行为待用户实测 |
 | DEV-011 | 全部首版需求 | Apple Silicon、Intel 分别完成三类套餐与多账户桌面验收、凭证检查、限流离线及全新环境接入；构建通过不替代运行验证 | DEV-003 至 DEV-010、DEV-012 候选包与文档、两类验证环境 | 未开始 |
 | DEV-012 | REQ-007、REQ-011 | 正式标识与图标、双架构独立 DMG、ad-hoc 签名验证并说明未公证限制、安装/卸载/权限/接入/许可证文档及开源材料安全检查 | 已确认方案对应的 Tauri 打包验证、可运行应用与发布环境；本期不以前置 Developer ID 证书阻塞 | 未开始 |
@@ -221,3 +223,19 @@
 2026-10-25 拆分中转站功能：总览新增「订阅账户额度 / 中转站账户额度」标签栏，中转站额度沿用单列额度卡并支持单独刷新；原“中转站”页收敛为“中转站账户管理”，只负责添加、扫描、刷新、补充访问令牌与移除。新增 `RelayProvider` 在总览与管理页之间共享账户状态，首次进入任一入口时才扫描本地配置，避免应用启动时额外查询，也避免两个页面各自扫描导致状态不同步。验证：`pnpm typecheck` 与 `pnpm build` 通过；在运行中的桌面应用内切换两个总览标签页与管理页，确认账户、额度与凭证状态一致。
 
 2026-10-25 重做中转站账户管理页：由表单卡 + 单列账户卡改为与账户页一致的分组标题、账户网格与虚线添加入口；添加、补充访问令牌与移除统一改用弹窗，未识别的本地配置默认收起，首屏不再堆叠说明文字。管理卡只保留凭证/访问令牌状态与额度同步状态，金额、窗口与到期时间仍留在总览。`RelayProvider` 增加 `clearError`，打开弹窗前清理页面级错误。验证：`pnpm typecheck` 与 `pnpm build` 通过；在运行中的桌面应用内检查深色/浅色外观、添加/访问令牌/移除弹窗与未识别配置展开。
+
+2026-10-26 优化 Codex 本机额度获取：桌面端（ChatGPT.app / Codex 桌面应用）内置的 CLI 纳入查找链，排在用户显式安装的 CLI 之后；同时接受桌面端使用的 `CODEX_CLI_PATH`（指向不可执行文件时静默忽略，不阻断常规查找）。macOS 探测 `/Applications` 与 `~/Applications` 下 `ChatGPT.app` / `Codex.app` 的 `Contents/Resources/codex-cli/bin`，并兜底 `CodexCLI.app/Contents/MacOS`；Windows 探测安装版的 `resources\codex-cli\bin` 与 Microsoft Store 版的 `WindowsApps\OpenAI.Codex_*`（枚举受 ACL 限制时跳过）。桌面端与独立 CLI 共用 `~/.codex` 登录态，查询仍只走官方 `app-server --stdio`，不解析桌面端内部状态文件。验证：macOS 上 ChatGPT.app 内置的 codex 0.164.0-alpha.11.1 完成 `initialize` / `account/read` / `account/rateLimits/read`，未记录邮箱、令牌或额度原文；`cargo test --locked` 与 `cargo clippy --all-targets -- -D warnings` 通过。Windows 桌面端路径与 Store 版 ACL 情况尚未在 Windows 机器实测。
+
+2026-10-26 本机 Codex 账户按客户端可用性显隐：应用启动加载状态时检查本机是否存在 Codex 客户端（独立 CLI 或桌面端内置 CLI），不存在则移除「本机 Codex」占位账户，存在但状态里缺少时补回。未安装 Codex 的用户不会再看到一张必然失败的卡片，调度器也不会反复查询；卸载后重新安装会在下次启动恢复。客户端存在但未登录时仍保留账户并展示授权错误，避免把需要登录的账户静默隐藏。验证：`cargo test --locked` 161 项通过，新增 2 项覆盖显隐与快照保留；`cargo clippy --all-targets -- -D warnings` 与 `cargo fmt --check` 通过。未在无 Codex 的全新环境做界面实测。
+
+2026-10-26 版本检查改为运行期间持续复查：此前只在启动时静默检查一次，并复用同一会话的首次结果，应用开机自启后长时间驻留时会错过之后发布的新版本。现在启动后仍先静默检查一次，之后每 6 小时复查；窗口重新获得焦点时若距上次检查超过 1 小时也会复查；检查失败（离线、限流）后 30 分钟静默重试，成功与失败都不打扰用户，设置页仍可手动重试。复查强制绕过会话缓存，设置页重复进入仍复用已有结果。验证：`pnpm build`（`tsc --noEmit` + `vite build`）通过；未在长时间驻留场景做界面实测。
+
+2026-10-26 实现应用内更新（两段式）：Rust 侧接入 `tauri-plugin-updater`，新增 `download_update`、`downloaded_update_version`、`install_update` 三个命令；下载完成并通过 minisign 校验后暂存在内存，用户再次确认才安装。下载进度通过 `update-download-progress` 事件推送并做节流；更新器显式沿应用代理设置，直连模式下调用 `no_proxy()`。设置页“版本”区块增加进度条、“重启并安装”和免安装版说明，侧栏更新入口改为进入设置页版本区块。发布侧：`createUpdaterArtifacts` 只在 CI 用 `--config` 打开，本地构建不需要私钥；macOS 产出 `.app.tar.gz`，Windows 直接以 NSIS 安装器作为更新包并产出 `.exe.sig`，`publish` job 生成并按平台填写 `latest.json`。Windows 通过注册表 `Uninstall\Token Refill` 的 `InstallLocation` 与当前 exe 目录判断是否为 NSIS 安装版，免安装 exe 只跳转发布页。验证：`pnpm build`、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked` 通过。尚未配置 minisign 公钥与 GitHub Secrets，也未用真实 Release 验证下载、替换与重启；Windows 注册表判断和 NSIS 静默安装需在 Windows 机器实测。
+
+2026-10-26 macOS 系统通知迁移到 `UNUserNotificationCenter`：此前通知走 `tauri-plugin-notification → notify-rust → mac-notification-sys`，底层是已废弃的 `NSUserNotification`；应用位于前台时系统只把通知写入通知中心、不弹横幅，设置页的测试入口因此永远看不到横幅。现在 macOS 侧新增 `src-tauri/src/notification/macos.rs`，启动时申请通知授权，注册实现 `willPresentNotification` 的 delegate 返回 `banner`，前台也展示横幅；权限被拒绝或尚未决定时返回可直接展示的错误文案，设置页会显示具体原因。Windows 与未打包的 macOS 开发运行仍沿用插件实现。验证：`pnpm build`、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked` 通过；用替换二进制后的临时 `.app` 在 macOS 27 实机验证，日志确认前台发送时出现 `Presenting ... as banner`，随后恢复原安装并清理临时文件。ad-hoc 签名更新后是否需要重新授权，仍待在真实 Release 上验证。
+
+2026-10-26 发布流程加固：新增 `.github/workflows/ci.yml`，在 PR 与推送到 `main` / `dev` 时跑与 release 相同的检查（macOS 上 `pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`，Windows 上 `pnpm test:rust`），`main` 分支保护要求 `ci / check` 与 `ci / check (windows)` 通过，不强制 review；`release` 的权限收窄为顶层只读、仅 `publish` 授予 `contents: write`；手动触发限制在 `main`（其他分支直接报错，测试构建走 `build-test`）；`prepare` 增加 semver 格式校验与版本单调性检查，底线取「推送前版本」与「最新 `v*` tag」中较大者，拒绝低于已发布版本的版本号；新增 `.github/dependabot.yml`（actions / npm / cargo 每周检查，次要与补丁合并成一个 PR），并开启 secret scanning、push protection 与 Dependabot 安全更新；为 `v*` tag 建立规则集，禁止删除与移动。验证：本地 actionlint 1.7.12（含 shellcheck）通过，`prepare` 脚本在五种触发场景下按预期构建、跳过或报错；分支保护、tag 规则集与安全设置已通过 GitHub API 确认生效。新 CI 与分支保护需在下次推送后实际跑通一次才能算验证完成。
+
+2026-10-27 中转站扫描改为手动选择并接入 cc-switch：`discovery.rs` 新增只读读取 `~/.cc-switch/cc-switch.db`（SQLite，`providers` 表 `app_type=claude/codex`），Claude 行解析 `settings_config.env`，Codex 行解析 `settings_config.auth.OPENAI_API_KEY` 与 `config` TOML 中激活的 `[model_providers.<id>]`；仍保留 `~/.claude/settings.json` 与 `~/.codex/config.toml` 当前配置，按地址 + 密钥去重。后端由 `relay_discover` 拆成 `relay_scan`（只列候选、不联网）与 `relay_import`（用户勾选后查询额度），候选密钥留在 Rust 内存；`RelayOrigin` 新增 `cc-switch`，账户卡可显示 provider 名称。前端 `RelayProvider` 进入页面时只加载已保存条目，管理页新增「扫描本地配置」弹窗，默认勾选尚未添加的候选，确认后导入。依赖新增 `rusqlite`（`bundled`，只读打开，不依赖系统 sqlite3）。验证：`cargo test`（新增 cc-switch 解析、数据库读取、候选去重与只导入选中项等用例）、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`pnpm build` 通过；尚未在真实桌面窗口内走完整扫描/导入交互。
+
+2026-10-27 补充：扫描导入的账户改为跨重启保留，但仍不复制密钥。`RelayStore` 在 `relay-profiles/<relayId>/source.json` 保存来源引用（来源、app_type、provider id、导入地址、provider 类型与用户主动填写的访问令牌），启动时只有存在引用才以只读方式重新读取 cc-switch 数据库或当前配置，取不到就跳过该账户；额度快照继续写入 `snapshot.json`。`SourceRef` 按 provider id 匹配，Claude Code 当前配置没有 id 时按地址匹配。手动再次添加同地址同密钥的账户会把该条目转为 `credentials.json` 并删除 `source.json`。前端账户卡区分「凭证已保存 / 来源已保存 · 启动时重新读取 / 凭证仅本次运行」。验证：新增 4 项测试覆盖引用落盘不含密钥、重启恢复、来源消失后跳过、手动条目转存；`cargo test --locked` 177 项通过，`cargo fmt --check` 与 `cargo clippy --locked --all-targets -- -D warnings` 通过。

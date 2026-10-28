@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core permissions for the local main window. No filesystem, shell, or remote access plugins.",
-  "windows": ["main"],
+  "description": "Core permissions for the local main window and the menu bar quick panel. No filesystem, shell, or remote access plugins.",
+  "windows": ["main", "tray-panel"],
   "permissions": [
     "core:default",
     "core:event:default",

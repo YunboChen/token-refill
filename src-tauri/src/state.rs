@@ -17,7 +17,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
-use tauri_plugin_notification::NotificationExt;
 
 use crate::antigravity::{self, AntigravityUsage};
 use crate::api_key;
@@ -287,26 +286,51 @@ pub fn default_state() -> PersistedState {
     PersistedState {
         schema_version: SCHEMA_VERSION,
         revision: 0,
-        accounts: vec![AccountState {
-            account_id: DEFAULT_ACCOUNT_ID.to_string(),
-            platform: "codex".to_string(),
-            display_name: "本机 Codex".to_string(),
-            auth_state: AuthState::Unknown,
-            source: AccountSource::Local,
-            identity_hint: None,
-            products: vec![ProductState {
-                product_id: DEFAULT_PRODUCT_ID.to_string(),
-                kind: "codex-subscription".to_string(),
-                display_name: "Codex 订阅".to_string(),
-                plan_tier: None,
-                active: None,
-                snapshot: None,
-                query: QueryState::default(),
-            }],
-        }],
+        accounts: vec![local_codex_account()],
         preferences: Preferences::default(),
         reminders: ReminderMarks::default(),
     }
+}
+
+fn local_codex_account() -> AccountState {
+    AccountState {
+        account_id: DEFAULT_ACCOUNT_ID.to_string(),
+        platform: "codex".to_string(),
+        display_name: "本机 Codex".to_string(),
+        auth_state: AuthState::Unknown,
+        source: AccountSource::Local,
+        identity_hint: None,
+        products: vec![ProductState {
+            product_id: DEFAULT_PRODUCT_ID.to_string(),
+            kind: "codex-subscription".to_string(),
+            display_name: "Codex 订阅".to_string(),
+            plan_tier: None,
+            active: None,
+            snapshot: None,
+            query: QueryState::default(),
+        }],
+    }
+}
+
+/// 本机 Codex 账户跟随本机是否存在可用的 Codex 客户端（独立 CLI 或桌面端
+/// 内置 CLI）：有客户端时补齐占位账户，没有时移除。没有安装 Codex 的用户
+/// 不应看到一张必然失败的卡片，也不应让调度器反复查询它。
+///
+/// 已有账户（可能带历史快照）在客户端仍可用时保持不变；卸载客户端后移除，
+/// 重新安装后下次启动会补回一个空账户并重新查询。
+fn reconcile_local_codex(mut state: PersistedState, available: bool) -> PersistedState {
+    let index = state
+        .accounts
+        .iter()
+        .position(|account| account.platform == "codex" && account.source == AccountSource::Local);
+    match (available, index) {
+        (true, None) => state.accounts.insert(0, local_codex_account()),
+        (false, Some(index)) => {
+            state.accounts.remove(index);
+        }
+        _ => {}
+    }
+    state
 }
 
 // ---------- 纯状态变换 ----------
@@ -1564,7 +1588,9 @@ pub struct StateStore {
 
 impl StateStore {
     pub fn load(app: AppHandle, path: PathBuf) -> Self {
-        let state = load_state(&path);
+        // 本机没有 Codex 客户端时，不保留必然失败的“本机 Codex”占位账户；
+        // 有客户端但状态里缺少该账户时补回，避免卸载/重装后账户消失。
+        let state = reconcile_local_codex(load_state(&path), codex::local_available());
         proxy::configure(
             state.preferences.proxy_mode,
             state.preferences.proxy_url.clone(),
@@ -1602,14 +1628,7 @@ impl StateStore {
 
     /// 提醒走系统通知；发送失败只记录日志，不影响额度查询与状态落盘。
     fn show_notification(&self, title: &str, body: String) {
-        if let Err(err) = self
-            .app
-            .notification()
-            .builder()
-            .title(title)
-            .body(body)
-            .show()
-        {
+        if let Err(err) = crate::notification::send(&self.app, title, &body) {
             eprintln!("发送「{title}」失败：{err}");
         }
     }
@@ -2850,6 +2869,39 @@ mod tests {
         assert_eq!(state.accounts[0].account_id, DEFAULT_ACCOUNT_ID);
         assert_eq!(state.accounts[0].products[0].product_id, DEFAULT_PRODUCT_ID);
         assert!(state.accounts[0].products[0].snapshot.is_none());
+    }
+
+    /// 没有 Codex 客户端时不显示“本机 Codex”，也不影响其他账户。
+    #[test]
+    fn local_codex_account_is_hidden_when_client_is_missing() {
+        let mut state = default_state();
+        apply_success(&mut state, DEFAULT_ACCOUNT_ID, synthetic_usage(), None);
+        state.accounts.push(bailian_account("bailian-1"));
+
+        let reconciled = reconcile_local_codex(state, false);
+
+        assert_eq!(reconciled.accounts.len(), 1);
+        assert_eq!(reconciled.accounts[0].account_id, "bailian-1");
+    }
+
+    /// 客户端可用时补回本机账户；已有账户与历史快照保持不变。
+    #[test]
+    fn local_codex_account_is_restored_or_kept_when_client_is_available() {
+        let restored = reconcile_local_codex(reconcile_local_codex(default_state(), false), true);
+        assert_eq!(restored.accounts.len(), 1);
+        assert_eq!(restored.accounts[0].account_id, DEFAULT_ACCOUNT_ID);
+        assert_eq!(restored.accounts[0].source, AccountSource::Local);
+        assert!(restored.accounts[0].products[0].snapshot.is_none());
+
+        let mut with_snapshot = default_state();
+        apply_success(
+            &mut with_snapshot,
+            DEFAULT_ACCOUNT_ID,
+            synthetic_usage(),
+            None,
+        );
+        let kept = reconcile_local_codex(with_snapshot, true);
+        assert!(kept.accounts[0].products[0].snapshot.is_some());
     }
 
     #[test]

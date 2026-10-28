@@ -19,6 +19,7 @@
 | 用户目录 | `HOME` | `USERPROFILE`（Git Bash 等可能把 `HOME` 设为 POSIX 形式） | `home_dir()`：Windows 先取 `USERPROFILE`，Unix 先取 `HOME` |
 | 版本管理器 | nvm：`~/.nvm/versions/node/*/bin` | nvm-windows：`NVM_HOME\v*`；fnm：`%APPDATA%\fnm\node-versions\*\installation` | `version_dirs()` 返回版本根目录与相对子路径 |
 | 包管理器默认目录 | Homebrew、`~/.local/bin` | `%APPDATA%\npm`、`%LOCALAPPDATA%\pnpm`、Volta、`.bun\bin`、Scoop shims、OpenAI 官方安装目录、WindowsApps | `extra_search_dirs()` |
+| 桌面端内置 CLI | `ChatGPT.app/Contents/Resources/codex-cli/bin`（含 `~/Applications`） | `<安装目录>\resources\codex-cli\bin`；Store 版扫描 `WindowsApps\OpenAI.Codex_*` | `desktop_cli_dirs()` / `find_in_msix_desktop_app()`；排在显式安装的 CLI 之后 |
 | 打开授权链接 | `open` | `ShellExecuteW` | 不走 `cmd /C start`，URL 不经 shell 解析 |
 | 数据目录 | `~/Library/Application Support/<identifier>` | `%APPDATA%\<identifier>` | `app.path().app_data_dir()`，应用代码不拼平台路径 |
 | 目录/文件权限 | 0700 / 0600 | 继承 `%APPDATA%` 的按用户 ACL | Unix 显式设权限位，Windows 不设 |
@@ -27,9 +28,11 @@
 ## 3. Codex CLI 查找顺序
 
 1. `CODEX_BIN`：显式指定；文件不可执行时直接报 `codex-not-found`，不静默回退。
-2. `PATH`：按目录顺序探测候选文件名（Windows 优先 `codex.exe`，其次 `.cmd`、`.bat`、`.com`）。
-3. 版本管理器：目录名按字符串降序，跳过没有安装 CLI 的版本目录。
-4. 包管理器默认目录：从资源管理器启动的 GUI 进程拿不到终端里临时追加的 `PATH`，因此再按默认安装位置找一遍。
+2. `CODEX_CLI_PATH`：Codex 桌面端使用该变量指定自带 CLI；文件不可执行时忽略并继续查找，避免桌面端留下的失效值阻断本应用。
+3. `PATH`：按目录顺序探测候选文件名（Windows 优先 `codex.exe`，其次 `.cmd`、`.bat`、`.com`）。
+4. 版本管理器：目录名按字符串降序，跳过没有安装 CLI 的版本目录。
+5. 包管理器默认目录：从资源管理器启动的 GUI 进程拿不到终端里临时追加的 `PATH`，因此再按默认安装位置找一遍。
+6. Codex 桌面端内置 CLI：只装桌面端、没有单独安装 CLI 时由这些位置兜底；排在最后，用户自己安装的 CLI 仍然优先。
 
 Windows 目标目录：
 
@@ -42,10 +45,12 @@ Windows 目标目录：
 | Scoop | `%USERPROFILE%\scoop\shims\codex.cmd` |
 | 官方安装包 | `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe` |
 | winget / 应用别名 | `%LOCALAPPDATA%\Microsoft\WindowsApps\codex.exe` |
+| 桌面端（安装版） | `%LOCALAPPDATA%\Programs\ChatGPT\resources\codex-cli\bin\codex.exe`；同时探测 `Codex`、`OpenAI\Codex` 目录名 |
+| 桌面端（Microsoft Store） | `%ProgramFiles%\WindowsApps\OpenAI.Codex_<版本>_x64__<hash>\app\resources\...`；目录受 ACL 保护，枚举失败时跳过 |
 | nvm-windows | `%NVM_HOME%\v*\codex.cmd`，以及 `%NVM_SYMLINK%` |
 | fnm | `%APPDATA%\fnm\node-versions\v*\installation\codex.cmd` |
 
-未找到时返回同一个结构化错误，界面提示安装 CLI 或设置 `CODEX_BIN`。
+桌面端与独立 CLI 共用 `%USERPROFILE%\.codex` 登录态，因此不需要额外登录；查询仍通过官方 `app-server --stdio` 进行，不读取桌面端的内部状态文件。未找到时返回同一个结构化错误，界面提示安装 CLI 或桌面端、或设置 `CODEX_BIN`。
 
 ## 4. 子进程启动
 
@@ -87,15 +92,18 @@ Windows 目标目录：
 
 - `tauri.conf.json` 里的 `titleBarStyle: "Overlay"` 与 `hiddenTitle` 只在 macOS 生效（Tauri 在 macOS 分支才应用这两个字段），Windows 保留系统标题栏与关闭/最小化按钮。
 - 所有 Windows 构建（含 debug）都使用 GUI 子系统（`#![cfg_attr(windows, windows_subsystem = "windows")]`）。此前 debug 构建是控制台子系统，从资源管理器双击会额外拉起一个控制台窗口（默认由 Windows Terminal 承载）；改为 GUI 后不再出现。从终端运行 `cargo run` / `tauri dev` 时 stdio 仍被继承，日志与 panic 照常输出。
+- GUI 子系统进程没有控制台，启动 `codex.exe` 这类控制台程序（以及 `.cmd` 背后的 `cmd.exe`）时 Windows 会为子进程新建控制台窗口。`cli::apply_no_window` 给所有外置 CLI 子进程加 `CREATE_NO_WINDOW`，额度刷新与授权等待期间不再出现黑色控制台窗口；子进程的 stdin/stdout 管道不受影响。
+- 单实例由 `tauri-plugin-single-instance` 保证，标识来自应用 `identifier`：免安装 exe 与 NSIS 安装版同时启动也只会保留一个进程，第二次启动把已有窗口从最小化恢复并置顶。
 - 前端启动后调用 `get_app_info` 取 `platform`，写到根节点 `data-platform`。Windows 下侧栏顶部的红绿灯安全区从 44px 收窄到 10px，页面头仍作为拖拽区。
 - 取不到平台信息时保持 macOS 布局；浏览器预览不请求平台信息。
 
 ## 8. 打包
 
 - Windows 产物只有两种：免安装单文件 exe（`pnpm tauri build --no-bundle`）与 NSIS 安装器（`pnpm tauri build` 或 `--bundles nsis`）。`src-tauri/tauri.windows.conf.json` 把 `bundle.targets` 收窄为 `["nsis"]`，所以本地构建与 CI 都不再生成 MSI。
-- 免安装 exe 约 12 MiB（含版本检查的 TLS 依赖），前端资源已内嵌，运行依赖系统 WebView2（Win10/11 通常已预装），数据仍写入 `%APPDATA%\dev.tokenrefill.desktop\`。
-- Windows 构建由 `.github/workflows/release.yml` 的 `build-windows` job（`windows-latest`、MSVC、Node 24）完成，只在版本号变化、tag 推送或手动触发时运行：先 `pnpm test:rust`，再 `--no-bundle` 生成便携 exe，随后 `tauri-action` 用 `--bundles nsis` 生成安装器，最后用 `softprops/action-gh-release@v3` 把便携 exe 追加到同一个 Release 并直接发布（`draft: false`）。该 job 已在 GitHub Actions 实际运行通过（v0.2.0）；安装、卸载与升级验收仍未完成。
-- 代码签名与发布渠道未定：当前未配置 Authenticode 证书，两种产物都未签名，首次运行会有 SmartScreen 提示，需要在发布说明中写明。
+- 免安装 exe 约 12 MiB（含版本检查与更新器的 TLS 依赖），前端资源已内嵌，运行依赖系统 WebView2（Win10/11 通常已预装），数据仍写入 `%APPDATA%\dev.tokenrefill.desktop\`。
+- 应用内更新只面向 NSIS 安装版：CI 用 `pnpm tauri build --bundles nsis --config <临时配置文件>` 构建（PowerShell 会吞掉内联 JSON 的双引号，因此把 `{"bundle":{"createUpdaterArtifacts":true}}` 写入临时文件），v2 updater 直接把 NSIS 安装器作为更新包，并在旁边产出 `.exe.sig`；免安装 exe 没有安装目录可交换，只保留发布页跳转。客户端通过注册表 `Software\Microsoft\Windows\CurrentVersion\Uninstall\Token Refill` 的 `InstallLocation` 与当前 exe 所在目录比对，判断是否为安装版；两处不一致或读不到时按免安装版处理。
+- Windows 构建由 `.github/workflows/release.yml` 的 `build-windows` job（`windows-latest`、MSVC、Node 24）完成，只在版本号变化、tag 推送或手动触发时运行（`main` 推送另有 `paths` 过滤，仅 `src-tauri/tauri.conf.json` 变更才启动 workflow）：先 `pnpm test:rust`，再用 `pnpm tauri build --bundles nsis` 生成便携 exe、NSIS 安装器与 updater 包，最后由 `softprops/action-gh-release@v3` 统一发布。该 job 已在 GitHub Actions 实际运行通过；安装、卸载与升级验收仍未完成，尤其是 NSIS 静默安装（`/P /UPDATE`）与注册表判断需在 Windows 机器上实测。
+- 代码签名与发布渠道未定：当前未配置 Authenticode 证书，两种产物都未签名，首次运行会有 SmartScreen 提示，需要在发布说明中写明。更新包的完整性由独立的 minisign 签名保护，不依赖 Authenticode。
 - 最低 Windows 版本、架构（x64 / arm64）与实际安装验收仍待确认；当前 CI 只构建 x64。
 
 ## 9. 验证记录
@@ -121,4 +129,5 @@ Windows 目标目录：
 - NSIS 安装器的安装、卸载与升级流程（构建已在本机通过）。
 - 已完成授权的账户在 Windows 上查询额度（本机 CLI 未登录，只验证到授权失效路径）。
 - 应用窗口的实际渲染与视觉细节（仅确认进程启动与状态写入，未截图窗口）。
+- 菜单栏/托盘图标、快速查看面板的显示、定位（任务栏上方）、失焦收起与关闭主窗口后常驻尚未在 Windows 实机验证。
 - Windows 10 具体小版本、arm64、长时间运行与休眠恢复。

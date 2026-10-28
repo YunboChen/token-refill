@@ -5,11 +5,13 @@ mod cli;
 mod codex;
 mod commandcode;
 mod discovery;
+mod notification;
 mod opencode;
 mod proxy;
 pub mod quota;
 mod relay;
 mod state;
+mod tray;
 mod update;
 mod usage_api;
 
@@ -19,9 +21,8 @@ use std::process::Command;
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
-use tauri_plugin_notification::NotificationExt;
 
 use state::{LoginStartPayload, PersistedState, Preferences, StateStore};
 
@@ -183,15 +184,19 @@ fn set_auto_launch(
 }
 
 /// 设置页的显式测试入口，用于确认系统通知是否可用。
-/// 桌面端没有应用内授权弹窗；通知是否展示由系统通知设置决定。
+/// 授权在启动时申请；被拒绝或尚未决定时，这里返回可直接展示的提示。
 #[tauri::command]
-fn send_test_notification(app: tauri::AppHandle) -> Result<(), String> {
-    app.notification()
-        .builder()
-        .title("Token Refill · 测试通知")
-        .body("如果你看到这条通知，说明系统通知已经可用。")
-        .show()
-        .map_err(|err| format!("发送测试通知失败：{err}"))
+async fn send_test_notification(app: tauri::AppHandle) -> Result<(), String> {
+    // 查询授权状态会等系统回调，放到阻塞线程，避免卡住界面。
+    tauri::async_runtime::spawn_blocking(move || {
+        notification::send(
+            &app,
+            "Token Refill · 测试通知",
+            "如果你看到这条通知，说明系统通知已经可用。",
+        )
+    })
+    .await
+    .map_err(|err| format!("发送测试通知失败：{err}"))?
 }
 
 /// 仅允许打开 HTTPS 授权地址，避免把任意输入交给系统 shell。
@@ -261,10 +266,18 @@ async fn check_for_update() -> Result<update::UpdateStatus, String> {
         .map_err(|err| format!("检查更新失败：{err}"))?
 }
 
+/// 中转站条目变更后广播完整列表：主窗口与菜单栏面板各自持有前端副本，
+/// 没有事件时只有发起操作的窗口会更新，另一个窗口会停留在旧的失败/成功状态。
+fn broadcast_relay_accounts(app: &tauri::AppHandle) {
+    let store = app.state::<Arc<relay::RelayStore>>();
+    let _ = app.emit(relay::RELAY_ACCOUNTS_EVENT, store.view_with_revision());
+}
+
 /// 自动识别上游（New API / Sub2API）并查询密钥额度。
 /// 手动输入的凭证由 Rust 保存到 `relay-profiles/`，不经过前端。
 #[tauri::command]
 async fn relay_query(
+    app: tauri::AppHandle,
     store: tauri::State<'_, Arc<relay::RelayStore>>,
     base_url: String,
     api_key: String,
@@ -272,7 +285,7 @@ async fn relay_query(
     new_api_user_id: Option<String>,
 ) -> Result<relay::RelayAccount, String> {
     let store = Arc::clone(&store);
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         store.query(
             &base_url,
             &api_key,
@@ -281,71 +294,133 @@ async fn relay_query(
         )
     })
     .await
-    .map_err(|err| format!("查询中转站额度失败：{err}"))?
+    .map_err(|err| format!("查询中转站额度失败：{err}"))?;
+    if result.is_ok() {
+        broadcast_relay_accounts(&app);
+    }
+    result
 }
 
 /// 为已有的 New API 账户补充个人访问令牌，并立即刷新账户额度。
 #[tauri::command]
 async fn relay_set_account_token(
+    app: tauri::AppHandle,
     store: tauri::State<'_, Arc<relay::RelayStore>>,
     id: String,
     account_token: String,
     new_api_user_id: Option<String>,
 ) -> Result<relay::RelayAccount, String> {
     let store = Arc::clone(&store);
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         store.set_account_token(&id, &account_token, new_api_user_id.as_deref())
     })
     .await
-    .map_err(|err| format!("保存访问令牌失败：{err}"))?
+    .map_err(|err| format!("保存访问令牌失败：{err}"))?;
+    if result.is_ok() {
+        broadcast_relay_accounts(&app);
+    }
+    result
 }
 
-/// 扫描 Claude Code / Codex 的本地配置，自动识别并登记可查询的密钥。
+/// 扫描 cc-switch、Claude Code / Codex 的本地配置，只返回候选，不发起网络请求。
 #[tauri::command]
-async fn relay_discover(
+async fn relay_scan(
     store: tauri::State<'_, Arc<relay::RelayStore>>,
-) -> Result<relay::DiscoveryReport, String> {
+) -> Result<Vec<relay::RelayCandidate>, String> {
     let store = Arc::clone(&store);
-    tauri::async_runtime::spawn_blocking(move || store.discover())
+    tauri::async_runtime::spawn_blocking(move || store.scan())
         .await
         .map_err(|err| format!("扫描本地配置失败：{err}"))
 }
 
+/// 导入用户勾选的候选：识别上游并查询额度。
+#[tauri::command]
+async fn relay_import(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, Arc<relay::RelayStore>>,
+    ids: Vec<String>,
+) -> Result<relay::DiscoveryReport, String> {
+    let store = Arc::clone(&store);
+    let result = tauri::async_runtime::spawn_blocking(move || store.import(&ids))
+        .await
+        .map_err(|err| format!("导入本地配置失败：{err}"))?;
+    broadcast_relay_accounts(&app);
+    Ok(result)
+}
+
 #[tauri::command]
 async fn relay_refresh(
+    app: tauri::AppHandle,
     store: tauri::State<'_, Arc<relay::RelayStore>>,
     id: String,
 ) -> Result<relay::RelayAccount, String> {
     let store = Arc::clone(&store);
-    tauri::async_runtime::spawn_blocking(move || store.refresh(&id))
+    let result = tauri::async_runtime::spawn_blocking(move || store.refresh(&id))
         .await
-        .map_err(|err| format!("刷新中转站额度失败：{err}"))?
+        .map_err(|err| format!("刷新中转站额度失败：{err}"))?;
+    if result.is_ok() {
+        broadcast_relay_accounts(&app);
+    }
+    result
 }
 
+/// 返回条目列表与修订号；窗口首次加载或重新显示时据此对齐，再靠事件增量同步。
 #[tauri::command]
-fn relay_list(store: tauri::State<'_, Arc<relay::RelayStore>>) -> Vec<relay::RelayAccount> {
-    store.list()
+fn relay_list(store: tauri::State<'_, Arc<relay::RelayStore>>) -> relay::RelayAccountsEvent {
+    store.view_with_revision()
+}
+
+/// 菜单栏面板里的“打开主窗口”：先收起面板，再把管理窗口带到前台。
+#[tauri::command]
+fn open_main_window(app: tauri::AppHandle) {
+    tray::show_main_window(&app);
+}
+
+/// 面板按 Esc 收起；隐藏而不是销毁，保持已加载的状态与订阅。
+#[tauri::command]
+fn hide_tray_panel(app: tauri::AppHandle) {
+    if let Some(panel) = app.get_webview_window(tray::PANEL_LABEL) {
+        let _ = panel.hide();
+    }
+}
+
+/// 菜单栏面板里的明确退出入口；RunEvent::Exit 负责让调度器停止。
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
 }
 
 #[tauri::command]
 async fn relay_remove(
+    app: tauri::AppHandle,
     store: tauri::State<'_, Arc<relay::RelayStore>>,
     id: String,
 ) -> Result<(), String> {
     let store = Arc::clone(&store);
-    tauri::async_runtime::spawn_blocking(move || store.remove(&id))
+    let result = tauri::async_runtime::spawn_blocking(move || store.remove(&id))
         .await
-        .map_err(|err| format!("移除中转站账户失败：{err}"))?
+        .map_err(|err| format!("移除中转站账户失败：{err}"))?;
+    if result.is_ok() {
+        broadcast_relay_accounts(&app);
+    }
+    result
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
+        // 单实例插件必须最先注册：第二个进程在这里退出，并把已有窗口带到前台，
+        // 否则两个进程共用同一份 state.json 与授权目录。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tray::show_main_window(app);
+        }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,
         ))
+        // 更新器只从 Rust 侧调用；前端没有 updater 权限，下载与安装均需显式命令。
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             fs::create_dir_all(&data_dir)?;
@@ -357,12 +432,19 @@ pub fn run() {
             app.manage(Arc::new(relay::RelayStore::load(
                 data_dir.join("relay-profiles"),
             )));
+            app.manage(update::UpdateStore::default());
 
             // 自启以系统登录项为准：启动时回写实际状态，避免本地开关与系统不一致。
             match app.autolaunch().is_enabled() {
                 Ok(actual) => store.reconcile_auto_launch(actual),
                 Err(err) => eprintln!("读取开机自启状态失败：{err}"),
             }
+
+            // macOS 在启动时申请通知授权，避免首次提醒才弹授权框。
+            notification::prepare();
+
+            // 菜单栏图标与快速查看面板；关闭主窗口只隐藏，应用继续常驻。
+            tray::setup(app.handle())?;
 
             state::start_scheduler(Arc::clone(&store));
             state::auto_detect_local_accounts(store);
@@ -385,21 +467,33 @@ pub fn run() {
             send_test_notification,
             set_auto_launch,
             check_for_update,
+            update::download_update,
+            update::downloaded_update_version,
+            update::install_update,
             relay_query,
             relay_set_account_token,
-            relay_discover,
+            relay_scan,
+            relay_import,
             relay_refresh,
             relay_list,
-            relay_remove
+            relay_remove,
+            open_main_window,
+            hide_tray_panel,
+            quit_app
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Token Refill");
 
-    app.run(|app_handle, event| {
+    app.run(|app_handle, event| match event {
+        // 从 Finder、Spotlight 等重新打开应用时，把被“关闭”（实际是隐藏）的
+        // 管理窗口带回来。Dock 图标在窗口隐藏期间不显示，不会触发这里。
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => tray::show_main_window(app_handle),
         // 退出时让调度器停止发起新任务；在途查询随后随进程结束。
-        if let tauri::RunEvent::Exit = event {
+        tauri::RunEvent::Exit => {
             app_handle.state::<Arc<StateStore>>().shutdown();
         }
+        _ => {}
     });
 }
 

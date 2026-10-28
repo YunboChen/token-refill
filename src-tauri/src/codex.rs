@@ -8,6 +8,10 @@
 //! 查询只启动官方 app-server 子进程发起只读请求，完成后立即退出；CLI 缺失或
 //! 未登录时返回结构化错误，由界面提示。协议结构来自
 //! `codex app-server generate-json-schema`（CLI 0.160.1）。
+//!
+//! 桌面端（ChatGPT.app / Codex 桌面应用）会把一份 Codex CLI 打包在应用资源里，
+//! 并与独立 CLI 共用 `~/.codex` 登录态。只装桌面端、没装 CLI 的用户同样可以
+//! 查询本机额度：查找链末尾会探测这些内置位置，但不会优先于用户自己安装的 CLI。
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -232,7 +236,9 @@ fn parse_identity(value: &serde_json::Value) -> Option<CodexIdentity> {
 
 // ---------- Codex CLI 查找 ----------
 //
-// 查找顺序：CODEX_BIN → PATH → 版本管理器（nvm/fnm/nvm-windows）→ 各包管理器默认目录。
+// 查找顺序：CODEX_BIN → CODEX_CLI_PATH → PATH → 版本管理器（nvm/fnm/nvm-windows）
+// → 各包管理器默认目录 → Codex 桌面端内置 CLI。桌面端排在最后：用户自己安装的
+// CLI 版本通常更新，也更符合「显式安装优先」的预期。
 // Windows 上 CLI 常以 `codex.exe`（官方安装包）或 `codex.cmd`（npm/pnpm/scoop
 // 包装脚本）存在，没有 Unix 的执行位，因此可执行判定与候选文件名都按平台区分。
 
@@ -384,6 +390,12 @@ pub fn find_codex_binary() -> Result<PathBuf, UsageError> {
         ));
     }
 
+    // 桌面端用 CODEX_CLI_PATH 指定自带的 CLI，用户排查桌面端启动问题时也可能
+    // 手动设过。它不是本应用的约定，指向不存在的文件时继续按常规查找，不阻断。
+    if let Some(path) = codex_cli_path_hint() {
+        return Ok(path);
+    }
+
     if let Some(path_env) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path_env) {
             if let Some(candidate) = find_in_dir(&dir) {
@@ -404,10 +416,153 @@ pub fn find_codex_binary() -> Result<PathBuf, UsageError> {
         }
     }
 
+    for dir in desktop_cli_dirs() {
+        if let Some(candidate) = find_in_dir(&dir) {
+            return Ok(candidate);
+        }
+    }
+
+    if let Some(candidate) = find_in_msix_desktop_app() {
+        return Ok(candidate);
+    }
+
     Err(UsageError::new(
         "codex-not-found",
-        "未找到 codex 可执行文件。请安装 Codex CLI，或设置 CODEX_BIN 指向其路径。",
+        "未找到 codex 可执行文件。请安装 Codex CLI 或 Codex 桌面端，\
+         或设置 CODEX_BIN 指向其路径。",
     ))
+}
+
+/// 本机是否存在可用的 Codex 客户端（独立 CLI 或桌面端内置 CLI）。
+///
+/// `CODEX_BIN` 显式配置错误时仍返回 true：那属于用户可修正的配置问题，
+/// 界面应展示具体错误，而不是把账户静默隐藏。
+pub fn local_available() -> bool {
+    find_codex_binary().is_ok() || std::env::var_os("CODEX_BIN").is_some()
+}
+
+/// 桌面端使用的 CLI 路径变量；只接受真实可执行的文件。
+fn codex_cli_path_hint() -> Option<PathBuf> {
+    std::env::var_os("CODEX_CLI_PATH")
+        .map(PathBuf::from)
+        .filter(|path| is_executable(path))
+}
+
+/// 桌面端内置 CLI 的候选目录。
+///
+/// macOS 的桌面端是 Electron 应用，CLI 放在 `Contents/Resources/codex-cli/`
+/// 下；优先用 `bin/codex` 包装脚本，同时兜底直接执行 `CodexCLI.app`。
+/// Windows 的安装版布局是 `<安装目录>\resources\codex-cli\bin`；Microsoft Store
+/// 的 MSIX 版路径带版本号且受 ACL 保护，单独用 `find_in_msix_desktop_app` 探测。
+#[cfg(target_os = "macos")]
+fn desktop_cli_dirs() -> Vec<PathBuf> {
+    let mut roots = vec![PathBuf::from("/Applications")];
+    if let Some(home) = home_dir() {
+        roots.push(home.join("Applications"));
+    }
+    macos_desktop_cli_dirs(&roots)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_desktop_cli_dirs(app_roots: &[PathBuf]) -> Vec<PathBuf> {
+    const APPS: [&str; 2] = ["ChatGPT.app", "Codex.app"];
+    let mut dirs = Vec::new();
+    for root in app_roots {
+        for app in APPS {
+            let resources = root.join(app).join("Contents").join("Resources");
+            dirs.push(resources.join("codex-cli").join("bin"));
+            dirs.push(
+                resources
+                    .join("codex-cli")
+                    .join("CodexCLI.app")
+                    .join("Contents")
+                    .join("MacOS"),
+            );
+        }
+    }
+    dirs
+}
+
+#[cfg(windows)]
+fn desktop_cli_dirs() -> Vec<PathBuf> {
+    let local_appdata = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let program_files = std::env::var_os("ProgramFiles").map(PathBuf::from);
+    windows_desktop_cli_dirs(local_appdata.as_deref(), program_files.as_deref())
+}
+
+#[cfg(windows)]
+fn windows_desktop_cli_dirs(
+    local_appdata: Option<&Path>,
+    program_files: Option<&Path>,
+) -> Vec<PathBuf> {
+    // 安装版桌面端可能落在用户目录或全局 Program Files；应用目录名随版本在
+    // ChatGPT / Codex / OpenAI\Codex 之间变化过，三种都探测。
+    const APP_DIRS: [&[&str]; 3] = [&["ChatGPT"], &["Codex"], &["OpenAI", "Codex"]];
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(base) = local_appdata {
+        roots.push(base.join("Programs"));
+    }
+    if let Some(base) = program_files {
+        roots.push(base.to_path_buf());
+    }
+
+    let mut dirs = Vec::new();
+    for root in roots {
+        for app in APP_DIRS {
+            let mut install = root.clone();
+            for part in app {
+                install.push(part);
+            }
+            dirs.push(install.join("resources").join("codex-cli").join("bin"));
+        }
+    }
+    dirs
+}
+
+/// Microsoft Store（MSIX）版的桌面端：`WindowsApps\OpenAI.Codex_<版本>_...`。
+/// 普通用户通常无权枚举 `WindowsApps`，读不到时静默跳过，不影响其他查找位置。
+#[cfg(windows)]
+fn find_in_msix_desktop_app() -> Option<PathBuf> {
+    let root = std::env::var_os("ProgramFiles")
+        .map(PathBuf::from)?
+        .join("WindowsApps");
+    let mut packages: Vec<PathBuf> = fs::read_dir(&root)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("OpenAI.Codex_"))
+        })
+        .collect();
+    packages.sort_by(|a, b| b.cmp(a));
+
+    packages.iter().find_map(|package| {
+        [
+            &["app", "resources", "codex-cli", "bin"][..],
+            &["app", "resources"][..],
+            &["resources", "codex-cli", "bin"][..],
+            &["resources"][..],
+        ]
+        .iter()
+        .find_map(|suffix| {
+            let dir = suffix
+                .iter()
+                .fold(package.clone(), |path, part| path.join(part));
+            find_in_dir(&dir)
+        })
+    })
+}
+
+#[cfg(not(windows))]
+fn find_in_msix_desktop_app() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn desktop_cli_dirs() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 // ---------- app-server 子进程与 JSON-RPC ----------
@@ -442,6 +597,7 @@ impl AppServer {
             command.env("CODEX_HOME", codex_home);
         }
         crate::cli::apply_child_path(&mut command, binary);
+        crate::cli::apply_no_window(&mut command);
         crate::proxy::apply_to_command(&mut command);
         let mut child = command.spawn().map_err(io_error)?;
 
@@ -1072,12 +1228,20 @@ for line in sys.stdin:
     }
 
     fn with_codex_bin<T>(value: &Path, run: impl FnOnce() -> T) -> T {
-        let previous = std::env::var_os("CODEX_BIN");
-        std::env::set_var("CODEX_BIN", value);
+        with_env_path("CODEX_BIN", Some(value), run)
+    }
+
+    /// 临时设置进程级环境变量并在结束后还原；调用方必须持有 `codex_bin_lock`。
+    fn with_env_path<T>(key: &str, value: Option<&Path>, run: impl FnOnce() -> T) -> T {
+        let previous = std::env::var_os(key);
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
         let result = run();
         match previous {
-            Some(value) => std::env::set_var("CODEX_BIN", value),
-            None => std::env::remove_var("CODEX_BIN"),
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
         }
         result
     }
@@ -1140,6 +1304,63 @@ for line in sys.stdin:
         }
         #[cfg(not(windows))]
         assert_eq!(BINARY_NAMES, &["codex"]);
+    }
+
+    /// 桌面端把 CLI 打包在应用资源里；只装桌面端时由这些位置兜底。
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_desktop_app_cli_locations_are_probed() {
+        let dirs = macos_desktop_cli_dirs(&[PathBuf::from("/Applications")]);
+
+        assert!(dirs.contains(&PathBuf::from(
+            "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin"
+        )));
+        assert!(dirs.contains(&PathBuf::from(
+            "/Applications/Codex.app/Contents/Resources/codex-cli/bin"
+        )));
+        assert!(dirs.iter().any(|dir| dir
+            .ends_with("ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS")));
+    }
+
+    /// Windows 安装版桌面端的资源目录布局。
+    #[test]
+    #[cfg(windows)]
+    fn windows_desktop_app_cli_locations_are_probed() {
+        let dirs = windows_desktop_cli_dirs(
+            Some(Path::new(r"C:\Users\synth\AppData\Local")),
+            Some(Path::new(r"C:\Program Files")),
+        );
+
+        assert!(dirs.contains(&PathBuf::from(
+            r"C:\Users\synth\AppData\Local\Programs\ChatGPT\resources\codex-cli\bin"
+        )));
+        assert!(dirs.contains(&PathBuf::from(
+            r"C:\Program Files\Codex\resources\codex-cli\bin"
+        )));
+        assert!(dirs.contains(&PathBuf::from(
+            r"C:\Program Files\OpenAI\Codex\resources\codex-cli\bin"
+        )));
+    }
+
+    /// CODEX_CLI_PATH 属于桌面端，指向不存在的文件时只忽略，不报错。
+    #[test]
+    fn codex_cli_path_hint_accepts_only_executable_files() {
+        let _guard = codex_bin_lock();
+        let dir = temp_dir("codex-cli-path");
+        let stub = write_stub(&dir);
+
+        let accepted = with_env_path("CODEX_CLI_PATH", Some(&stub), codex_cli_path_hint);
+        let missing = with_env_path(
+            "CODEX_CLI_PATH",
+            Some(Path::new("/nonexistent/codex-for-test")),
+            codex_cli_path_hint,
+        );
+        let unset = with_env_path("CODEX_CLI_PATH", None, codex_cli_path_hint);
+        fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(accepted, Some(stub));
+        assert_eq!(missing, None);
+        assert_eq!(unset, None);
     }
 
     #[test]

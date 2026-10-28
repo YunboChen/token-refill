@@ -1,12 +1,18 @@
 import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
-import { createPortal } from 'react-dom';
+import type { UnlistenFn } from '@tauri-apps/api/event';
 import { version as appVersion } from '../../package.json';
 import {
   checkForUpdate,
+  downloadedUpdateVersion,
+  downloadUpdate,
+  emitThemeChanged,
+  installUpdate,
+  onUpdateDownloadProgress,
   openExternalUrl,
   sendTestNotification,
   type Preferences,
   type ProxyMode,
+  type UpdateDownloadProgress,
   type UpdateStatus,
 } from '../lib/desktop';
 import {
@@ -19,6 +25,7 @@ import {
 } from '../lib/prefs';
 import { useAppState } from '../lib/store';
 import { applyTheme } from '../lib/theme';
+import Toast from '../components/Toast';
 import styles from '../App.module.css';
 
 function Toggle({
@@ -66,7 +73,10 @@ function Toggle({
 }
 
 const SAVE_ERROR_MESSAGE = '设置保存失败，请重试。';
-const SAVE_ERROR_DURATION = 4000;
+
+function formatMegabytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 const PROXY_OPTIONS: { value: ProxyMode; label: string }[] = [
   { value: 'system', label: '跟随系统' },
@@ -76,7 +86,14 @@ const PROXY_OPTIONS: { value: ProxyMode; label: string }[] = [
 
 type TestState = 'idle' | 'sending' | 'sent' | 'error';
 
-type UpdateState = 'idle' | 'checking' | 'done' | 'error';
+type UpdateState =
+  | 'idle'
+  | 'checking'
+  | 'done'
+  | 'downloading'
+  | 'downloaded'
+  | 'installing'
+  | 'error';
 
 export default function SettingsPanel() {
   const { state, savePreferences, setAutoLaunch, desktop } = useAppState();
@@ -84,15 +101,17 @@ export default function SettingsPanel() {
   const [theme, setTheme] = useState<ThemePref>(loadTheme);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [testState, setTestState] = useState<TestState>('idle');
+  const [testError, setTestError] = useState<string | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateStatus | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState>('idle');
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] =
+    useState<UpdateDownloadProgress | null>(null);
   const [openingRelease, setOpeningRelease] = useState(false);
   const [autoLaunchBusy, setAutoLaunchBusy] = useState(false);
   const [autoLaunchError, setAutoLaunchError] = useState<string | null>(null);
   const dirty = useRef(false);
   const latestPrefs = useRef(prefs);
-  const saveErrorTimer = useRef<number | null>(null);
   latestPrefs.current = prefs;
 
   const refreshLabelId = useId();
@@ -121,25 +140,15 @@ export default function SettingsPanel() {
         if (ok) return;
         dirty.current = true;
         setSaveError(SAVE_ERROR_MESSAGE);
-        if (saveErrorTimer.current !== null) {
-          window.clearTimeout(saveErrorTimer.current);
-        }
-        saveErrorTimer.current = window.setTimeout(() => {
-          saveErrorTimer.current = null;
-          setSaveError(null);
-        }, SAVE_ERROR_DURATION);
       });
     }, 250);
     return () => window.clearTimeout(timer);
   }, [prefs, savePreferences]);
 
-  // 切换页面前把尚未写入的改动补发一次，并清掉待触发的 toast 计时。
+  // 切换页面前把尚未写入的改动补发一次；toast 的计时由组件自己清理。
   useEffect(
     () => () => {
       if (dirty.current) void savePreferences(latestPrefs.current);
-      if (saveErrorTimer.current !== null) {
-        window.clearTimeout(saveErrorTimer.current);
-      }
     },
     [savePreferences],
   );
@@ -153,6 +162,7 @@ export default function SettingsPanel() {
     setTheme(next);
     saveTheme(next);
     applyTheme(next);
+    if (desktop) void emitThemeChanged(next);
   }
 
   async function changeAutoLaunch(next: boolean) {
@@ -172,9 +182,14 @@ export default function SettingsPanel() {
   function testNotification() {
     if (!desktop || testState === 'sending') return;
     setTestState('sending');
+    setTestError(null);
     void sendTestNotification().then(
       () => setTestState('sent'),
-      () => setTestState('error'),
+      (error) => {
+        setTestState('error');
+        // Rust 侧会返回可直接展示的原因（例如系统通知权限被拒绝）。
+        setTestError(typeof error === 'string' ? error : null);
+      },
     );
   }
 
@@ -185,16 +200,70 @@ export default function SettingsPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desktop]);
 
+  // 下载进度由 Rust 推送；组件卸载时取消订阅。
+  useEffect(() => {
+    if (!desktop) return;
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    void onUpdateDownloadProgress((progress) =>
+      setDownloadProgress(progress),
+    ).then((stop) => {
+      if (cancelled) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [desktop]);
+
   async function runUpdateCheck(force: boolean) {
     if (!desktop || updateState === 'checking') return;
     setUpdateState('checking');
     setUpdateError(null);
     try {
-      setUpdateInfo(await checkForUpdate(force));
-      setUpdateState('done');
+      const info = await checkForUpdate(force);
+      setUpdateInfo(info);
+      // 之前下载过的更新在重新打开设置页后仍可安装；版本不一致时不再展示。
+      const pending = await downloadedUpdateVersion().catch(() => null);
+      if (pending && info.updateAvailable && info.latestVersion === pending) {
+        setUpdateState('downloaded');
+      } else {
+        setDownloadProgress(null);
+        setUpdateState('done');
+      }
     } catch (err) {
       setUpdateError(
         typeof err === 'string' ? err : '检查更新失败，请稍后重试。',
+      );
+      setUpdateState('error');
+    }
+  }
+
+  async function startDownload() {
+    if (!desktop || updateState === 'downloading') return;
+    setUpdateError(null);
+    setDownloadProgress(null);
+    setUpdateState('downloading');
+    try {
+      await downloadUpdate();
+      setUpdateState('downloaded');
+    } catch (err) {
+      setUpdateError(typeof err === 'string' ? err : '下载更新失败，请重试。');
+      setUpdateState('error');
+    }
+  }
+
+  async function installDownloaded() {
+    if (!desktop || updateState === 'installing') return;
+    setUpdateError(null);
+    setUpdateState('installing');
+    try {
+      await installUpdate();
+      // 正常情况下应用会退出并重启，不会走到这里。
+    } catch (err) {
+      setUpdateError(
+        typeof err === 'string' ? err : '安装更新失败，请前往发布页手动下载。',
       );
       setUpdateState('error');
     }
@@ -213,18 +282,51 @@ export default function SettingsPanel() {
     }
   }
 
+  const progressPercent =
+    downloadProgress?.total && downloadProgress.total > 0
+      ? Math.min(
+          100,
+          Math.round(
+            (downloadProgress.downloaded / downloadProgress.total) * 100,
+          ),
+        )
+      : null;
+  const progressDetail = downloadProgress
+    ? progressPercent !== null
+      ? `${progressPercent}%`
+      : formatMegabytes(downloadProgress.downloaded)
+    : null;
+  const busyWithUpdate =
+    updateState === 'downloading' ||
+    updateState === 'downloaded' ||
+    updateState === 'installing';
+  const barPercent =
+    updateState === 'downloaded' || updateState === 'installing'
+      ? 100
+      : (progressPercent ?? 0);
+
   const updateStatusText =
     updateState === 'checking'
       ? '正在检查 GitHub Releases…'
-      : updateState === 'error'
-        ? (updateError ?? '检查更新失败，请稍后重试。')
-        : updateInfo?.updateAvailable
-          ? `发现新版本 v${updateInfo.latestVersion}${
-              updateInfo.publishedAt ? `（${updateInfo.publishedAt.slice(0, 10)} 发布）` : ''
-            }。只跳转下载页，不会自动安装。`
-          : updateInfo
-            ? `已是最新版本（v${updateInfo.currentVersion}）。`
-            : '检查最新正式版本；只跳转下载页，不自动下载或安装。';
+      : updateState === 'downloading'
+        ? `正在下载新版本${progressDetail ? `（${progressDetail}）` : '…'}`
+        : updateState === 'downloaded'
+          ? `新版本 v${updateInfo?.latestVersion ?? ''} 已下载，重启应用后完成安装。`
+          : updateState === 'installing'
+            ? '正在安装更新，应用即将重启…'
+            : updateState === 'error'
+              ? (updateError ?? '检查更新失败，请稍后重试。')
+              : updateInfo?.updateAvailable
+                ? updateInfo.selfUpdateSupported
+                  ? `发现新版本 v${updateInfo.latestVersion}${
+                      updateInfo.publishedAt
+                        ? `（${updateInfo.publishedAt.slice(0, 10)} 发布）`
+                        : ''
+                    }，可下载后重启完成替换。`
+                  : `发现新版本 v${updateInfo.latestVersion}。当前是免安装版本，请前往发布页下载后手动替换。`
+                : updateInfo
+                  ? `已是最新版本（v${updateInfo.currentVersion}）。`
+                  : '检查最新正式版本；下载与安装都需要你确认后才会开始。';
 
   return (
     <section>
@@ -381,17 +483,17 @@ export default function SettingsPanel() {
           <div className={styles.settingText}>
             <span className={styles.settingLabel}>系统通知</span>
             <span className={styles.settingHint}>
-              提醒通过系统通知发送，桌面端没有应用内授权弹窗。若未显示，请在“系统设置 →
-              通知”中允许 Token Refill（开发模式下来源可能显示为 Terminal）。
+              提醒通过系统通知发送。首次启动时 macOS 会请求通知权限；若未显示，请在“系统设置 →
+              通知”中允许 Token Refill。
             </span>
             {testState === 'sent' ? (
               <span className={styles.settingHint} role="status">
-                已请求发送；未出现请检查系统通知设置。
+                已发送测试通知。
               </span>
             ) : null}
             {testState === 'error' ? (
               <span className={styles.settingHint} role="status" data-danger="true">
-                发送失败，请稍后重试。
+                {testError ?? '发送失败，请稍后重试。'}
               </span>
             ) : null}
           </div>
@@ -478,41 +580,84 @@ export default function SettingsPanel() {
             </span>
           </div>
           <div className={styles.buttonRow}>
+            {updateInfo?.updateAvailable && updateInfo.selfUpdateSupported ? (
+              updateState === 'downloaded' || updateState === 'installing' ? (
+                <button
+                  type="button"
+                  className={styles.testButton}
+                  data-primary
+                  onClick={() => void installDownloaded()}
+                  disabled={updateState === 'installing'}
+                >
+                  {updateState === 'installing' ? '安装中…' : '重启并安装'}
+                </button>
+              ) : updateState === 'downloading' ? (
+                <button
+                  type="button"
+                  className={styles.testButton}
+                  data-primary
+                  disabled
+                >
+                  {progressDetail ? `下载中 ${progressDetail}` : '下载中…'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className={styles.testButton}
+                  data-primary
+                  onClick={() => void startDownload()}
+                  disabled={!desktop || updateState === 'checking'}
+                >
+                  下载更新
+                </button>
+              )
+            ) : null}
             {updateInfo?.updateAvailable && updateInfo.releaseUrl ? (
               <button
                 type="button"
                 className={styles.testButton}
-                data-primary
                 onClick={() => void openReleasePage()}
                 disabled={openingRelease}
               >
-                {openingRelease ? '打开中…' : '前往下载'}
+                {openingRelease ? '打开中…' : '前往发布页'}
               </button>
             ) : null}
             <button
               type="button"
               className={styles.testButton}
               onClick={() => void runUpdateCheck(true)}
-              disabled={!desktop || updateState === 'checking'}
+              disabled={
+                !desktop || updateState === 'checking' || busyWithUpdate
+              }
               title={desktop ? '向 GitHub Releases 查询最新正式版本' : '浏览器预览无法调用 Rust'}
             >
               {updateState === 'checking' ? '检查中…' : '检查更新'}
             </button>
           </div>
         </div>
+        {updateState === 'downloading' ||
+        updateState === 'downloaded' ||
+        updateState === 'installing' ? (
+          <div
+            className={styles.updateProgress}
+            role="progressbar"
+            aria-label="更新下载进度"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progressPercent ?? undefined}
+          >
+            <span style={{ width: `${barPercent}%` }} />
+          </div>
+        ) : null}
       </section>
       <p className={`${styles.settingHint} ${styles.groupNote}`}>
-        检查只读取版本号与发布页地址，不下载文件、不修改本地数据。
+        下载与安装都需要手动确认；更新包通过签名校验后才会安装，安装期间应用会退出并重启。
+        免安装版 Windows exe 无法原地替换，请从发布页手动下载。
       </p>
 
-      {saveError
-        ? createPortal(
-            <p className={styles.toast} role="alert">
-              {saveError}
-            </p>,
-            document.body,
-          )
-        : null}
+      {saveError ? (
+        <Toast message={saveError} onDismiss={() => setSaveError(null)} />
+      ) : null}
     </section>
   );
 }

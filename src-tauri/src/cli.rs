@@ -20,6 +20,22 @@ pub fn apply_child_path(command: &mut Command, binary: &Path) {
     }
 }
 
+/// 打包后的应用是 GUI 子系统进程，自己没有控制台；此时再启动控制台程序
+/// （`codex.exe`，或 `.cmd` 包装脚本背后的 `cmd.exe`），Windows 会为子进程
+/// 新建一个控制台窗口，额度刷新与授权等待期间一直挂在桌面上。
+/// `CREATE_NO_WINDOW` 让子进程在没有窗口的控制台里运行，stdin/stdout 管道照常可用。
+#[cfg(windows)]
+pub fn apply_no_window(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    /// Win32 `CREATE_NO_WINDOW`，仅在新建控制台时有效。
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+pub fn apply_no_window(_command: &mut Command) {}
+
 fn child_path(binary: &Path, inherited: Option<OsString>) -> Option<OsString> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     if let Some(parent) = binary.parent() {

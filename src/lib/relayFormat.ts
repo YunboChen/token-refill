@@ -22,9 +22,21 @@ export const RELAY_MODE_LABELS: Record<QuotaMode, string> = {
 
 export const RELAY_ORIGIN_LABELS: Record<RelayOrigin, string> = {
   manual: '手动输入',
+  'cc-switch': 'cc-switch 配置',
   'claude-code': 'Claude Code 配置',
   codex: 'Codex 配置',
 };
+
+/** 扫描候选的来源：cc-switch 还要区分 Claude Code / Codex 两套 provider。 */
+export function relayCandidateSource(
+  origin: RelayOrigin,
+  app: string | null,
+): string {
+  if (origin === 'cc-switch') {
+    return app === 'codex' ? 'cc-switch · Codex' : 'cc-switch · Claude Code';
+  }
+  return RELAY_ORIGIN_LABELS[origin];
+}
 
 export function relayErrorText(error: unknown): string {
   if (typeof error === 'string') return error;
