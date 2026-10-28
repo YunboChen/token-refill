@@ -432,13 +432,14 @@ function latestUpdate(
 }
 
 export default function TrayPanel() {
-  const { state, ready, desktop, error, refresh } = useAppState();
+  const { state, ready, desktop, error, refresh, resync } = useAppState();
   const {
     accounts: relayAccounts,
     loaded: relayLoaded,
     error: relayError,
     refreshingIds,
     ensureLoaded,
+    reload,
     refreshDue,
     refresh: refreshRelay,
   } = useRelay();
@@ -465,9 +466,13 @@ export default function TrayPanel() {
 
   // 打开面板时才读取中转站账户；面板常驻内存，事件监听只注册一次。
   const ensureLoadedRef = useRef(ensureLoaded);
+  const reloadRef = useRef(reload);
+  const resyncRef = useRef(resync);
   const refreshDueRef = useRef(refreshDue);
   const refreshMinutesRef = useRef(refreshMinutes);
   ensureLoadedRef.current = ensureLoaded;
+  reloadRef.current = reload;
+  resyncRef.current = resync;
   refreshDueRef.current = refreshDue;
   refreshMinutesRef.current = refreshMinutes;
 
@@ -479,7 +484,9 @@ export default function TrayPanel() {
     let unlisten: (() => void) | undefined;
     void onTrayPanelShown(() => {
       setOpened(true);
-      ensureLoadedRef.current();
+      // 事件通常已经同步；这里再用完整快照对齐一次，兜底隐藏期间漏掉的更新。
+      void resyncRef.current();
+      void reloadRef.current();
       // 先展示缓存，再按刷新间隔补查；不等待网络完成。
       void refreshDueRef.current(refreshMinutesRef.current);
     }).then((stop) => {

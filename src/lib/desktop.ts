@@ -447,8 +447,25 @@ export function refreshRelayAccount(id: string): Promise<RelayAccount> {
   return invoke<RelayAccount>('relay_refresh', { id });
 }
 
-export function listRelayAccounts(): Promise<RelayAccount[]> {
-  return invoke<RelayAccount[]>('relay_list');
+/** 中转站条目列表 + 修订号；两个窗口共用同一份 Rust 注册表。 */
+export interface RelayAccountsEvent {
+  revision: number;
+  accounts: RelayAccount[];
+}
+
+const RELAY_ACCOUNTS_EVENT = 'relay-accounts-changed';
+
+/** 任意窗口变更中转站条目后广播，另一个窗口据此更新；按修订号丢弃旧快照。 */
+export function onRelayAccountsChanged(
+  handler: (event: RelayAccountsEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<RelayAccountsEvent>(RELAY_ACCOUNTS_EVENT, (event) =>
+    handler(event.payload),
+  );
+}
+
+export function listRelayAccounts(): Promise<RelayAccountsEvent> {
+  return invoke<RelayAccountsEvent>('relay_list');
 }
 
 export function removeRelayAccount(id: string): Promise<void> {

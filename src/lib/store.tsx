@@ -53,6 +53,8 @@ interface AppStateContextValue {
   error: string | null;
   update: UpdateStatus | null;
   refresh: (accountId?: string) => Promise<void>;
+  /** 用完整快照对齐一次；窗口重新显示时兜底隐藏期间漏掉的事件。 */
+  resync: () => Promise<void>;
   savePreferences: (preferences: Preferences) => Promise<boolean>;
   beginLogin: (accountId?: string, displayName?: string) => Promise<LoginAttempt>;
   beginBailianLogin: (
@@ -195,6 +197,17 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       disposed = true;
       unlisten?.();
     };
+  }, [desktop, applyState]);
+
+  // 事件是主要同步通道；窗口重新显示时再读一次完整状态，
+  // 避免隐藏期间（WebView 被节流或事件丢失）停留在旧额度或旧错误上。
+  const resync = useCallback(async () => {
+    if (!desktop) return;
+    try {
+      applyState(await getAppState());
+    } catch (err) {
+      setError(errorMessage(err));
+    }
   }, [desktop, applyState]);
 
   const refresh = useCallback(
@@ -392,6 +405,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       error,
       update,
       refresh,
+      resync,
       savePreferences,
       beginLogin,
       beginBailianLogin,
@@ -411,6 +425,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       error,
       update,
       refresh,
+      resync,
       savePreferences,
       beginLogin,
       beginBailianLogin,
