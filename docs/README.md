@@ -12,7 +12,6 @@
 | [开发计划文档](./development-plan.md) | 跟踪阶段、任务、依赖、验证方式与交付条件 |
 | [macOS 发布参考](./macos-release-reference.md) | devup 双架构打包、ad-hoc 签名及公证预留的核实结果 |
 | [Windows 兼容设计](./windows-support.md) | CLI 查找、子进程、数据目录、权限、标题栏与打包的 Windows 适配及验证记录 |
-| [Windows 自绘标题栏验证清单](./windows-titlebar-verification.md) | 需要在 Windows 实机执行的标题栏、拖拽、按钮与窗口行为验收步骤及记录模板 |
 | [平台接入可行性记录](./platform-integration-validation.md) | 三类套餐的资料证据、计量差异、授权未决项及验证清单 |
 
 ## 协作规则
