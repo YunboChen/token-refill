@@ -322,9 +322,11 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         });
     }
 
+    let app_name = app.package_info().name.clone();
     let open_main = MenuItem::with_id(app, "open-main", "打开主窗口", true, None::<&str>)?;
     let view_quota = MenuItem::with_id(app, "view-quota", "查看额度", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 Token Refill", true, None::<&str>)?;
+    let quit_label = format!("退出 {app_name}");
+    let quit = MenuItem::with_id(app, "quit", &quit_label, true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -336,7 +338,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     )?;
 
     let mut builder = TrayIconBuilder::with_id("token-refill-tray")
-        .tooltip("Token Refill")
+        .tooltip(app_name)
         .menu(&menu)
         // 左键用于快速查看，右键才展开菜单。
         .show_menu_on_left_click(false)
@@ -364,10 +366,14 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
     {
         // 模板图标只保留 alpha 轮廓，菜单栏会按浅色/深色自动反色。
+        // 测试版用带右下圆点的变体，两个版本同时常驻时可以一眼区分。
+        let icon = if crate::channel::is_test(app) {
+            include_bytes!("../icons/tray-test-template.png").as_slice()
+        } else {
+            include_bytes!("../icons/tray-template.png").as_slice()
+        };
         builder = builder
-            .icon(tauri::image::Image::from_bytes(include_bytes!(
-                "../icons/tray-template.png"
-            ))?)
+            .icon(tauri::image::Image::from_bytes(icon)?)
             .icon_as_template(true);
     }
     #[cfg(not(target_os = "macos"))]

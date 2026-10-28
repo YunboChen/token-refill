@@ -38,13 +38,21 @@ pnpm install --frozen-lockfile
 pnpm tauri dev
 ```
 
+如果本机已经装着正式版并常驻菜单栏，可以用测试渠道开发，避免两者争用同一个单实例锁与数据目录：
+
+```sh
+pnpm tauri:dev:test
+```
+
+它使用 `Token Refill Test` 的独立标识与数据目录，可以与正式版同时运行；界面会显示“测试版”标记。不要同时启动两个 dev 脚本——Vite 的 5173/5174 端口是固定的；在两个脚本之间切换会改变 `TAURI_CONFIG`，应用 crate 可能重新编译一次。
+
 工作分支一律从 `main` 切出并 PR 到 `main` 合并；`dev` 只承载日常集成（定期合入 `main` 保持同步），不作为工作分支的基线。
 
 桌面应用启动后进入总览页：先展示 Rust 侧缓存（首次为空时显示查询中），随后按设置自动刷新。总览顶部可在「订阅账户额度」与「中转站账户额度」之间切换；后者在切换时先展示上次成功快照，并把超过刷新间隔的账户自动刷新一次；扫描本地配置改为管理页上的手动入口，两处与「中转站账户管理」页共享同一份结果。Codex 需要本机已安装官方 CLI 或 Codex 桌面端；本机账户沿用已有登录态，未安装或未登录时界面会显示对应错误，其他界面仍可用。
 
 应用同时常驻菜单栏：左键点击菜单栏图标会在图标下方打开快速查看面板，先展示现有额度与更新时间，有中转站账户时再按刷新间隔补查；点击面板外部或按 Esc 收起。右键菜单提供打开主窗口、查看额度与退出。关闭管理窗口只隐藏窗口，应用继续在菜单栏驻留并后台刷新；macOS 上同时隐藏 Dock 图标与 Cmd+Tab 条目，只保留菜单栏图标，从菜单栏菜单、面板中的打开入口、Finder / Spotlight 或再次启动应用都能恢复管理窗口，恢复时 Dock 图标重新出现。退出必须通过菜单栏菜单或面板右下角的电源按钮，退出后停止调度。
 
-重复启动只保留一个实例：第二次启动会直接退出，并把已运行的窗口恢复、置顶，避免两个进程同时写 `state.json` 和授权目录。
+重复启动只保留一个实例：第二次启动会直接退出，并把已运行的窗口恢复、置顶，避免两个进程同时写 `state.json` 和授权目录。单实例锁按应用标识区分，因此正式版与测试版可以各自保留一个实例。
 
 在“账户”页可以添加独立账户：
 
@@ -72,7 +80,7 @@ pnpm dev
 ### Windows 说明
 
 - Codex CLI 查找顺序：`CODEX_BIN` → `CODEX_CLI_PATH` → `PATH` → nvm-windows / fnm 的版本目录 → npm、pnpm、Volta、Bun、Scoop、`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` 等默认安装位置 → Codex 桌面端内置 CLI（`%LOCALAPPDATA%\Programs\ChatGPT\resources\codex-cli\bin`、Microsoft Store 版 `WindowsApps\OpenAI.Codex_<版本>\` 等）。候选文件为 `codex.exe`、`codex.cmd`、`codex.bat`、`codex.com`，优先原生可执行文件；只装桌面端、没有单独安装 CLI 时也能查询本机额度（两者共用 `~/.codex` 登录态）。找不到时设置 `CODEX_BIN` 指向完整路径。
-- 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`，其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立 Codex 账户的 `CODEX_HOME`，`bailian-profiles\<accountId>\` 与 `api-profiles\<accountId>\` 分别保存百炼控制台令牌和 OpenCode / Command Code 的 API Key，`relay-profiles\<relayId>\` 保存手动填写的中转站凭证。
+- 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`（测试版为 `%APPDATA%\dev.tokenrefill.desktop.test\`），其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立 Codex 账户的 `CODEX_HOME`，`bailian-profiles\<accountId>\` 与 `api-profiles\<accountId>\` 分别保存百炼控制台令牌和 OpenCode / Command Code 的 API Key，`relay-profiles\<relayId>\` 保存手动填写的中转站凭证。
 - Antigravity 需要本机可运行的 `agy`，查找顺序为 `AGY_BIN` → `PATH` → `%LOCALAPPDATA%\agy\bin` 等常见目录；额度通过 `agy -p /usage --output-format json` 读取。
 - 窗口使用系统标题栏，前端按 `get_app_info().platform` 收窄侧栏顶部留白。
 - 授权链接通过 `ShellExecuteW` 交给系统浏览器，不经过 `cmd.exe`，URL 中的 `&` 不会被当作命令分隔符。
@@ -117,6 +125,8 @@ pnpm tauri build
 ### 应用图标
 
 平图图标源图是 `src-tauri/icons/source.png`（1024 × 1024，带透明底板外轮廓）。替换源图后运行 `pnpm tauri icon src-tauri/icons/source.png` 重新生成整套图标；页头标志是 `src/assets/logo.png`，浏览器标签图标位于 `public/`。
+
+菜单栏模板图标是 `src-tauri/icons/tray-template.png`；测试版使用 `src-tauri/icons/tray-test-template.png`（同一字形缩小后加右下圆点），两者都通过 `include_bytes!` 随包编译，不加入 `bundle.icon`。
 
 macOS 26+ 的自适应分层图标（浅色 / 深色 / 有色 / 降低透明度跟随系统）源文件在 `src-tauri/icons/macos/TokenRefill.icon`，由 `src-tauri/tauri.macos.conf.json` 追加进 `bundle.icon`，只影响 macOS 打包：
 
@@ -191,6 +201,18 @@ public/               浏览器标签图标、Web manifest
 改 workflow 文件时由独立的 `lint-workflows` workflow 用 [actionlint](https://github.com/rhysd/actionlint) 做静态检查（只监听 `.github/workflows/**` 的推送与 PR，不构建、不发版）：表达式、`needs` 引用、action 输入这类只在运行时才暴露的问题能在提交阶段被发现。本地也可以直接跑 `actionlint`。
 
 构建流程：先在 macOS runner 上跑检查（`pnpm build`、`cargo fmt --check`、`clippy -D warnings`、`cargo test`），随后并行构建 macOS arm64 / x64 与 Windows x64 产物：macOS 用 `cargo tauri` + ad-hoc 签名，并额外生成 `.app.tar.gz` 更新包；Windows 用 MSVC 工具链，先跑 `pnpm test:rust`，再执行一次 `pnpm tauri build --bundles nsis --config <临时配置文件>`（Windows 的 PowerShell 会吞掉内联 JSON 的双引号，CI 把 `{"bundle":{"createUpdaterArtifacts":true}}` 写到临时文件后传入），同时得到免安装 exe、NSIS 安装器与安装器的 `.exe.sig` 更新签名。所有产物都挂到同一个 **Release**（tag 为 `v<版本号>`）并直接发布，没有草稿确认环节；推送到 `main` 前请自行确认版本号与产物。`tauri.conf.json` / `package.json` / `Cargo.toml` 三处版本不一致时构建直接失败；tag 推送还会校验 tag 与版本号一致。
+
+### 测试版与正式版共存
+
+测试包由 `build-test` workflow 手动触发，产物只作为 Actions artifact 提供，不创建 Release、也不参与应用内更新。它在构建时叠加 `src-tauri/tauri.test.conf.json`：
+
+- `productName` → `Token Refill Test`：macOS 安装为 `Token Refill Test.app`；Windows NSIS 安装到 `%LOCALAPPDATA%\Token Refill Test`，并使用独立的卸载键。
+- `identifier` → `dev.tokenrefill.desktop.test`：数据目录、单实例锁、WebView2 用户数据、通知权限与开机自启都与正式版隔离。
+- 版本号 → `<正式版本>-test.g<7位提交>`（如 `0.2.6-test.g0dd074f`）：由 `meta` job 注入，不写回源文件；`CFBundleShortVersionString` 带测试后缀，`CFBundleVersion` 保持纯数字的基础版本。
+
+测试版不检查更新、不提供下载或安装更新；新测试包需要重新触发 `build-test` 并从 Actions artifact 下载。`meta` job 会校验测试配置的 identifier / productName，防止 `--config` 失效时把正式版身份带进测试包；`release.yml` 也会拒绝测试 identifier 与带 prerelease 的正式版本号。
+
+首次运行测试版是独立数据目录：本机 Codex 账户会自动识别，但独立 Codex 账户、API Key 账户与中转站凭证需要在测试版内重新添加。两个版本不要同时发起 Codex 浏览器授权（上游固定回调端口 1455/1457）；Dock 与 Applications 中两个应用图标相同，菜单栏图标靠测试版右下角的圆点区分。
 
 ### 更新签名密钥
 

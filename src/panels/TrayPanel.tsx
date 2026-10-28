@@ -5,7 +5,6 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { version as appVersion } from '../../package.json';
 import {
   ArrowClockwise,
   ArrowSquareOut,
@@ -432,7 +431,7 @@ function latestUpdate(
 }
 
 export default function TrayPanel() {
-  const { state, ready, desktop, error, refresh, resync } = useAppState();
+  const { state, appInfo, ready, desktop, error, refresh, resync } = useAppState();
   const {
     accounts: relayAccounts,
     loaded: relayLoaded,
@@ -575,7 +574,7 @@ export default function TrayPanel() {
     <div className={styles.panel}>
       <header className={styles.header}>
         <div className={styles.brand}>
-          <img className={styles.wordmark} src={wordmark} alt="Token Refill" />
+          <img className={styles.wordmark} src={wordmark} alt={appInfo?.name ?? 'Token Refill'} />
           <span className={styles.updated}>
             {accountCount > 0 ? `${accountCount} 个账户 · ` : ''}
             {updated !== null
@@ -727,7 +726,9 @@ export default function TrayPanel() {
       </div>
 
       <footer className={styles.footer}>
-        <span className={styles.version}>v{appVersion}</span>
+        <span className={styles.version}>
+          {appInfo ? `v${appInfo.version}` : 'v—'}
+        </span>
         <div className={styles.footerActions}>
           <button
             type="button"
@@ -742,8 +743,8 @@ export default function TrayPanel() {
             type="button"
             className={styles.quitButton}
             onClick={() => void quitApp()}
-            aria-label="退出 Token Refill"
-            title="退出 Token Refill"
+            aria-label={`退出 ${appInfo?.name ?? 'Token Refill'}`}
+            title={`退出 ${appInfo?.name ?? 'Token Refill'}`}
           >
             <Power size={14} aria-hidden />
             退出

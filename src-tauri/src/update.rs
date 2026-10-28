@@ -120,12 +120,30 @@ fn map_request_error(error: ureq::Error) -> String {
     }
 }
 
-/// 读取最新正式 Release 并与当前版本比较。
-pub fn check_for_update() -> Result<UpdateStatus, String> {
+/// 测试渠道的本地状态：不请求 GitHub，也不提供任何下载/安装入口。
+fn test_channel_status(current: &str) -> UpdateStatus {
+    UpdateStatus {
+        current_version: current.to_string(),
+        latest_version: None,
+        update_available: false,
+        self_update_supported: false,
+        release_url: None,
+        release_notes: None,
+        published_at: None,
+    }
+}
+
+/// 读取最新正式 Release 并与当前版本比较；测试渠道直接返回本地状态。
+pub fn check_for_update(app: &AppHandle) -> Result<UpdateStatus, String> {
+    if crate::channel::is_test(app) {
+        return Ok(test_channel_status(&app.package_info().version.to_string()));
+    }
+
+    let current = app.package_info().version.to_string();
     let url = format!("https://api.github.com/repos/{RELEASES_REPO}/releases/latest");
     let mut config = ureq::Agent::config_builder()
         .timeout_global(Some(REQUEST_TIMEOUT))
-        .user_agent(concat!("TokenRefill/", env!("CARGO_PKG_VERSION")));
+        .user_agent(format!("TokenRefill/{current}"));
     if let Some(proxy) = crate::proxy::ureq_proxy_for(&url) {
         config = config.proxy(Some(proxy));
     }
@@ -145,17 +163,21 @@ pub fn check_for_update() -> Result<UpdateStatus, String> {
 
     Ok(status_from_release(
         payload,
-        env!("CARGO_PKG_VERSION"),
-        self_update_supported(),
+        &current,
+        self_update_supported(app),
     ))
 }
 
 /// Windows 的免安装单文件 exe 没有安装目录，NSIS 更新器无法原地替换；
 /// 只有通过 NSIS 安装、且当前 exe 位于注册表记录的安装目录时才启用应用内更新。
-pub fn self_update_supported() -> bool {
+/// 测试渠道永远不支持应用内更新，避免被正式版更新包替换。
+pub fn self_update_supported(app: &AppHandle) -> bool {
+    if crate::channel::is_test(app) {
+        return false;
+    }
     #[cfg(windows)]
     {
-        windows_install::is_installed_copy()
+        windows_install::is_installed_copy(&app.package_info().name)
     }
     #[cfg(not(windows))]
     {
@@ -197,7 +219,10 @@ fn updater_for(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String>
 /// 或远端响应带进界面。
 #[tauri::command]
 pub async fn download_update(app: AppHandle) -> Result<String, String> {
-    if !self_update_supported() {
+    if crate::channel::is_test(&app) {
+        return Err("测试版不支持应用内更新，请下载新的测试包后手动安装。".to_string());
+    }
+    if !self_update_supported(&app) {
         return Err("当前是免安装版本，请在发布页下载新版本后手动替换。".to_string());
     }
 
@@ -293,6 +318,9 @@ pub fn downloaded_update_version(store: tauri::State<'_, UpdateStore>) -> Option
 /// 安装已下载的更新。macOS 替换应用包后重启；Windows 启动 NSIS 安装器并退出。
 #[tauri::command]
 pub async fn install_update(app: AppHandle) -> Result<(), String> {
+    if crate::channel::is_test(&app) {
+        return Err("测试版不支持应用内更新，请下载新的测试包后手动安装。".to_string());
+    }
     let downloaded = {
         let store = app.state::<UpdateStore>();
         let mut slot = store
@@ -325,15 +353,18 @@ mod windows_install {
         RegGetValueW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ,
     };
 
-    const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Token Refill";
+    // NSIS 把卸载键命名为 `${PRODUCTNAME}`；正式版与测试版的 productName 不同。
+    fn uninstall_key(app_name: &str) -> String {
+        format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{app_name}")
+    }
     const INSTALL_LOCATION: &str = "InstallLocation";
 
     fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
-    fn read_install_location(root: HKEY) -> Option<String> {
-        let key = wide(UNINSTALL_KEY);
+    fn read_install_location(root: HKEY, key_path: &str) -> Option<String> {
+        let key = wide(key_path);
         let value = wide(INSTALL_LOCATION);
         let mut kind = 0u32;
         let mut size = 0u32;
@@ -387,10 +418,11 @@ mod windows_install {
             .to_ascii_lowercase()
     }
 
-    pub fn is_installed_copy() -> bool {
+    pub fn is_installed_copy(app_name: &str) -> bool {
         // 默认按用户安装写 HKCU；允许提权安装时也可能在 HKLM。
-        let Some(location) = read_install_location(HKEY_CURRENT_USER)
-            .or_else(|| read_install_location(HKEY_LOCAL_MACHINE))
+        let key = uninstall_key(app_name);
+        let Some(location) = read_install_location(HKEY_CURRENT_USER, &key)
+            .or_else(|| read_install_location(HKEY_LOCAL_MACHINE, &key))
         else {
             return false;
         };
@@ -407,6 +439,17 @@ mod windows_install {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_channel_never_offers_update_or_self_update() {
+        let status = test_channel_status("0.2.6-test.a1b2c3d");
+
+        assert_eq!(status.current_version, "0.2.6-test.a1b2c3d");
+        assert!(status.latest_version.is_none());
+        assert!(!status.update_available);
+        assert!(!status.self_update_supported);
+        assert!(status.release_url.is_none());
+    }
 
     fn payload(tag: &str) -> ReleasePayload {
         ReleasePayload {

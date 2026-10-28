@@ -1,6 +1,7 @@
 mod antigravity;
 mod api_key;
 mod bailian;
+mod channel;
 mod cli;
 mod codex;
 mod commandcode;
@@ -29,20 +30,33 @@ use state::{LoginStartPayload, PersistedState, Preferences, StateStore};
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppInfo {
-    name: &'static str,
-    version: &'static str,
+    name: String,
+    version: String,
     platform: &'static str,
     arch: &'static str,
+    channel: &'static str,
+}
+
+/// 应用名与版本来自合并后的 `tauri.conf.json`（测试渠道由 `--config` 覆盖），
+/// 渠道由 identifier 后缀判定，前端不再按 package.json 展示版本。
+fn compose_app_info(name: String, version: String, channel: channel::Channel) -> AppInfo {
+    AppInfo {
+        name,
+        version,
+        platform: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        channel: channel.as_str(),
+    }
 }
 
 #[tauri::command]
-fn get_app_info() -> AppInfo {
-    AppInfo {
-        name: "Token Refill",
-        version: env!("CARGO_PKG_VERSION"),
-        platform: std::env::consts::OS,
-        arch: std::env::consts::ARCH,
-    }
+fn get_app_info(app: tauri::AppHandle) -> AppInfo {
+    let info = app.package_info();
+    compose_app_info(
+        info.name.clone(),
+        info.version.to_string(),
+        channel::of(&app),
+    )
 }
 
 /// 返回脱敏的完整状态；前端首次打开窗口或重连时以此为准。
@@ -189,11 +203,8 @@ fn set_auto_launch(
 async fn send_test_notification(app: tauri::AppHandle) -> Result<(), String> {
     // 查询授权状态会等系统回调，放到阻塞线程，避免卡住界面。
     tauri::async_runtime::spawn_blocking(move || {
-        notification::send(
-            &app,
-            "Token Refill · 测试通知",
-            "如果你看到这条通知，说明系统通知已经可用。",
-        )
+        let title = format!("{} · 测试通知", app.package_info().name);
+        notification::send(&app, &title, "如果你看到这条通知，说明系统通知已经可用。")
     })
     .await
     .map_err(|err| format!("发送测试通知失败：{err}"))?
@@ -260,8 +271,8 @@ fn open_in_browser(url: &str) -> Result<(), String> {
 /// 查询 GitHub Releases 的最新正式版本；只比较版本与返回下载页，不下载文件。
 /// 网络请求是阻塞的，放到专用线程，避免占用 IPC 处理线程。
 #[tauri::command]
-async fn check_for_update() -> Result<update::UpdateStatus, String> {
-    tauri::async_runtime::spawn_blocking(update::check_for_update)
+async fn check_for_update(app: tauri::AppHandle) -> Result<update::UpdateStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || update::check_for_update(&app))
         .await
         .map_err(|err| format!("检查更新失败：{err}"))?
 }
@@ -424,6 +435,15 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             fs::create_dir_all(&data_dir)?;
+
+            // 窗口标题来自合并后的 productName：正式版与测试版各自显示自己的名称。
+            let app_name = app.package_info().name.clone();
+            for label in ["main", tray::PANEL_LABEL] {
+                if let Some(window) = app.get_webview_window(label) {
+                    let _ = window.set_title(&app_name);
+                }
+            }
+
             let store = Arc::new(StateStore::load(
                 app.handle().clone(),
                 data_dir.join("state.json"),
@@ -482,7 +502,7 @@ pub fn run() {
             quit_app
         ])
         .build(tauri::generate_context!())
-        .expect("failed to build Token Refill");
+        .expect("failed to build the application");
 
     app.run(|app_handle, event| match event {
         // 从 Finder、Spotlight 等重新打开应用时，把被“关闭”（实际是隐藏）的
@@ -499,15 +519,29 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::get_app_info;
+    use super::compose_app_info;
+    use crate::channel::Channel;
 
     #[test]
-    fn app_info_reports_the_current_build_and_target() {
-        let info = get_app_info();
+    fn app_info_reports_the_merged_config_and_channel() {
+        let pro = compose_app_info(
+            "Token Refill".to_string(),
+            "0.2.6".to_string(),
+            Channel::Pro,
+        );
+        assert_eq!(pro.name, "Token Refill");
+        assert_eq!(pro.version, "0.2.6");
+        assert_eq!(pro.channel, "pro");
+        assert_eq!(pro.platform, std::env::consts::OS);
+        assert_eq!(pro.arch, std::env::consts::ARCH);
 
-        assert_eq!(info.name, "Token Refill");
-        assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(info.platform, std::env::consts::OS);
-        assert_eq!(info.arch, std::env::consts::ARCH);
+        let test = compose_app_info(
+            "Token Refill Test".to_string(),
+            "0.2.6-test.g1b2c3d".to_string(),
+            Channel::Test,
+        );
+        assert_eq!(test.name, "Token Refill Test");
+        assert_eq!(test.version, "0.2.6-test.g1b2c3d");
+        assert_eq!(test.channel, "test");
     }
 }
