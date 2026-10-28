@@ -80,14 +80,14 @@ pub fn prepare() {
     }
 }
 
-pub fn send(title: &str, body: &str) -> Result<(), String> {
+pub fn send(app_name: &str, title: &str, body: &str) -> Result<(), String> {
     let center = UNUserNotificationCenter::currentNotificationCenter();
     install_delegate(&center);
 
     match authorization_status(&center) {
-        Some(status) if status == UNAuthorizationStatus::Denied => {
-            Err("系统通知权限已被拒绝，请在“系统设置 → 通知 → Token Refill”中允许。".to_string())
-        }
+        Some(status) if status == UNAuthorizationStatus::Denied => Err(format!(
+            "系统通知权限已被拒绝，请在“系统设置 → 通知 → {app_name}”中允许。"
+        )),
         Some(status) if status == UNAuthorizationStatus::NotDetermined => {
             // 授权框需要用户点击；本次不发，避免提醒被授权流程吞掉。
             let _ = std::thread::Builder::new()

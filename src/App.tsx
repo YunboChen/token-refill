@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import {
   ArrowUp,
@@ -8,9 +8,7 @@ import {
   UsersThree,
   type Icon,
 } from '@phosphor-icons/react';
-import { version as appVersion } from '../package.json';
 import logoWordmark from './assets/logo-text.png';
-import { getAppInfo } from './lib/desktop';
 import { useAppState } from './lib/store';
 import OverviewPanel from './panels/OverviewPanel';
 import AccountsPanel from './panels/AccountsPanel';
@@ -71,10 +69,12 @@ function platformHint(): string | null {
 
 export default function App() {
   const [active, setActive] = useState<PanelKey>('overview');
-  const [platform, setPlatform] = useState<string | null>(platformHint);
   const [isMaximized, setIsMaximized] = useState(false);
-  const { error, update, openExternal } = useAppState();
+  const { error, update, openExternal, appInfo } = useAppState();
   const desktop = isTauri();
+  // 应用信息（名称、版本、渠道、平台）统一来自 Rust 合并后的配置；首帧先用 UA
+  // 兜底平台，避免 Windows 自绘标题栏与关闭装饰的窗口在首帧错位。
+  const platform = appInfo?.platform ?? platformHint();
   const current = PANELS.find((panel) => panel.key === active) ?? PANELS[0];
   // 启动检查只在有正式新版本时提示；设置页仍可手动重新检查。
   // 侧栏页脚只放一个轻量入口，详细状态仍在设置页。
@@ -123,21 +123,6 @@ export default function App() {
 
   // 标题栏形态按平台区分：macOS 用 Overlay 原生标题栏（红绿灯浮在内容上），
   // Windows 关闭系统装饰，由 TitleBar 自绘。取不到平台时保持 macOS 布局。
-  useEffect(() => {
-    if (!desktop) return;
-    let mounted = true;
-    getAppInfo()
-      .then((info) => {
-        if (mounted) setPlatform(info.platform);
-      })
-      .catch(() => {
-        // 平台信息只影响留白，读取失败时不阻塞界面。
-      });
-    return () => {
-      mounted = false;
-    };
-  }, [desktop]);
-
   const isWindows = platform === 'windows';
 
   return (
@@ -156,7 +141,7 @@ export default function App() {
           <img
             className={styles.wordmark}
             src={logoWordmark}
-            alt="Token Refill"
+            alt={appInfo?.name ?? 'Token Refill'}
             width={480}
             height={87}
           />
@@ -173,7 +158,14 @@ export default function App() {
           {/* 侧栏底部：版本号 + 可选的升级入口。分隔线只负责分隔导航与应用信息。
               版本号与导航图标同一条左缘；有新版本时入口落在右侧。 */}
           <div className={styles.sidebarFoot}>
-            <span className={styles.version}>v{appVersion}</span>
+            <span className={styles.versionGroup}>
+              <span className={styles.version}>
+                {appInfo ? `v${appInfo.version}` : 'v—'}
+              </span>
+              {appInfo?.channel === 'test' ? (
+                <span className={styles.testBadge}>测试版</span>
+              ) : null}
+            </span>
             {updateAvailable ? (
               <button
                 type="button"

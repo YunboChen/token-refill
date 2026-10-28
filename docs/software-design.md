@@ -61,14 +61,16 @@ Windows 兼容层已落地，变化集中在四处，业务状态模型不变：
 
 - Codex CLI 查找按平台区分候选名（`codex` 与 `codex.exe` / `.cmd` / `.bat` / `.com`）、可执行判定与常见安装目录，覆盖 npm、pnpm、Volta、Bun、Scoop、nvm-windows、fnm 及官方安装包。Codex 桌面端（ChatGPT.app / Codex 桌面应用）自带的 CLI 排在查找链最后：macOS 探测 `Contents/Resources/codex-cli/bin`，Windows 探测安装目录的 `resources\codex-cli\bin` 与 Microsoft Store 的 `WindowsApps\OpenAI.Codex_*`；桌面端与独立 CLI 共用登录态，只装桌面端也能查询本机额度，但仍通过官方 `app-server --stdio` 读取，不解析桌面端内部状态文件。
 - 授权链接在 Windows 上交给 `ShellExecuteW`，避免 `cmd /C start` 把 URL 查询串里的 `&` 当作命令分隔符。
-- 数据继续写入 `app_data_dir()`（Windows 为 `%APPDATA%\<identifier>`）；Unix 权限位保持不变，Windows 依赖该目录的按用户 ACL。
-- 窗口在 macOS 保持 Overlay 原生标题栏；Windows 在 Rust `setup()` 中关闭系统装饰，由前端 `TitleBar` 自绘标题栏。前端读取 `get_app_info().platform` 切换两套布局，首帧用 UA 兜底。主窗口以 `visible: false` 创建，Windows 在前端首帧后由 `main-ui-ready` 事件触发显示（5 秒兜底），macOS 在 `setup()` 中直接显示。
+- 数据继续写入 `app_data_dir()`（Windows 为 `%APPDATA%\<identifier>`；测试版为 `...\dev.tokenrefill.desktop.test`）；Unix 权限位保持不变，Windows 依赖该目录的按用户 ACL。
+- 窗口在 macOS 保持 Overlay 原生标题栏；Windows 在 Rust `setup()` 中关闭系统装饰，由前端 `TitleBar` 自绘标题栏。前端读取 `get_app_info().platform` 切换两套布局，首帧用 UA 兜底。主窗口以 `visible: false` 创建，Windows 在前端首帧后由 `main-ui-ready` 事件触发显示（5 秒兜底），macOS 在 `setup()` 中直接显示。应用名、版本与 `channel` 同样来自 `get_app_info()`。
+
+分发渠道：正式版与测试版共用代码，测试版通过 `src-tauri/tauri.test.conf.json` 覆盖 `productName` 与 `identifier`，数据目录、单实例锁、通知权限与开机自启随之隔离；渠道由 Rust `channel.rs` 按 identifier 的 `.test` 后缀判定，不引入第二套构建期开关。测试版版本号由 CI 注入为 `<基础版本>-test.g<短提交>`，不写回源文件；测试渠道不发起 GitHub 版本检查，下载与安装命令直接拒绝应用内更新。
 
 Windows 安装包与界面运行验收尚未完成，最低 Windows 版本待确定。macOS 仍须分架构构建并分别运行验收，不把交叉编译通过等同于 Intel 运行已验证。详见 [Windows 兼容设计](./windows-support.md)。
 
 ### 3.2 菜单栏与快速查看面板（已实现）
 
-- Rust `tray` 模块用 Tauri 的 `tray-icon` 能力创建菜单栏图标：macOS 使用随包附带的单色模板图标并按系统外观自动反色；Windows 使用应用图标。右键菜单提供「打开主窗口」「查看额度」「退出 Token Refill」。
+- Rust `tray` 模块用 Tauri 的 `tray-icon` 能力创建菜单栏图标：macOS 使用随包附带的单色模板图标并按系统外观自动反色（测试版使用右下角带圆点的变体，正式版与测试版可同时常驻）；Windows 使用应用图标。右键菜单提供「打开主窗口」「查看额度」「退出 <应用名>」，应用名取合并后的 `productName`。
 - 快速查看面板是在 `tauri.conf.json` 中声明为 `create: false` 的窗口 `tray-panel`：380×560、无边框、透明背景、置顶、跳过任务栏，加载同一前端产物的 `index.html?view=tray`。第一次点开时才按配置创建，隐藏 60 秒后销毁 WebView；重建时窗口保持隐藏，等页面加载完成（或 1.5 秒兜底）后再定位显示，避免透明窗口闪空白。前端按 URL 参数渲染 `TrayPanel`，与主窗口共用 `AppStateProvider` 与 `RelayProvider`。
 - 左键点击图标切换面板；macOS 用 `NSScreen` / `NSEvent` 的原生坐标把面板放在鼠标所在屏幕的菜单栏下方并水平对齐图标，避免 Retina 与普通屏混排时 Tauri 物理坐标不一致；其他平台按托盘矩形与目标显示器可用区域计算。
 - 面板失焦自动收起，并记录失焦时间避免“点击图标关闭”时又立刻重开；按 Esc 收起。关闭主窗口只隐藏，隐藏满 60 秒后销毁 WebView（有登录流程或更新下载在进行时跳过），再次打开时按配置重建并等待页面加载；应用继续在菜单栏驻留并刷新。销毁最后一个窗口会让 Tauri 请求退出，`RunEvent::ExitRequested` 在“没有窗口且非程序化退出”时调用 `prevent_exit`，避免空闲销毁把常驻应用结束掉。只有菜单或面板中的退出入口会结束进程并停止调度。macOS 关闭主窗口时把激活策略切到 `Accessory`，Dock 图标、Cmd+Tab 与应用菜单栏一并消失；显示主窗口前先切回 `Regular` 再显示并聚焦，否则窗口拿不到 key 焦点，也没有应用菜单栏。
@@ -362,10 +364,10 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | update_preferences | 经校验的设置变更 | 保存常规设置并协调系统操作；系统拒绝通知或自启时如实返回实际状态 | REQ-004、REQ-006、REQ-010 |
 | get_system_permissions / request_notification_permission | 读取状态或用户明确触发的权限请求 | 区分应用设置与系统许可；不在额度查询失败时反复弹出权限申请 | REQ-006、REQ-010 |
 | open_management_window / quit_app | 用户明确操作 | 窗口复用或退出清理，不能把关闭管理窗口等同于退出 | REQ-005、REQ-009 |
-| check_for_update（已实现） | 无敏感输入 | 读取 GitHub Releases 最新正式版本的版本号与发布页地址；只比较与展示，不下载、不安装 | REQ-012 |
-| download_update（已实现） | 无敏感输入，用户点击触发 | 从 `latest.json` 取最新更新包，按应用代理设置下载并校验 minisign 签名；进度通过事件推送，包暂存在内存 | REQ-012 |
+| check_for_update（已实现） | 无敏感输入 | 读取 GitHub Releases 最新正式版本的版本号与发布页地址；只比较与展示，不下载、不安装。测试渠道直接返回“无更新”，不发起网络请求 | REQ-012 |
+| download_update（已实现） | 无敏感输入，用户点击触发 | 从 `latest.json` 取最新更新包，按应用代理设置下载并校验 minisign 签名；进度通过事件推送，包暂存在内存。测试渠道直接拒绝 | REQ-012 |
 | downloaded_update_version（已实现） | 无 | 返回已下载待安装的版本号，供设置页重建状态 | REQ-012 |
-| install_update（已实现） | 无，用户点击触发 | 安装已校验的更新包：macOS 替换 `.app` 后重启，Windows 启动 NSIS 安装器并退出；免安装 exe 直接拒绝 | REQ-012 |
+| install_update（已实现） | 无，用户点击触发 | 安装已校验的更新包：macOS 替换 `.app` 后重启，Windows 启动 NSIS 安装器并退出；免安装 exe 与测试渠道直接拒绝 | REQ-012 |
 
 授权输入通道必须按平台实际能力设计；不为方便而把 Keychain 内容或原始响应回传前端。若某平台需要手动输入秘密，应先设计合适的受控输入通道，而不是在普通前端状态或日志中保存。
 

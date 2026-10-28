@@ -17,8 +17,10 @@ pub fn prepare() {
 /// 发送一条系统通知。返回的错误信息可直接展示给用户。
 pub fn send(app: &tauri::AppHandle, title: &str, body: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    if macos::available() {
-        return macos::send(title, body);
+    {
+        if macos::available() {
+            return macos::send(&app.package_info().name, title, body);
+        }
     }
 
     use tauri_plugin_notification::NotificationExt;

@@ -163,6 +163,17 @@ jobs:
               exit 1
             fi
           done
+          # 正式版必须使用正式标识与不带 prerelease 的版本号；测试渠道请走 build-test，
+          # 避免误把 tauri.test.conf.json 的身份带进发布产物。
+          identifier=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json', 'utf8')).identifier")
+          if [ "$identifier" != "dev.tokenrefill.desktop" ]; then
+            echo "::error::正式发布的 identifier 必须是 dev.tokenrefill.desktop（当前为 ${identifier}）。测试渠道请使用 build-test workflow。"
+            exit 1
+          fi
+          if [[ "$conf_version" == *-* ]]; then
+            echo "::error::正式发布版本 ${conf_version} 不能带 prerelease 后缀；测试版本由 build-test 在构建时注入。"
+            exit 1
+          fi
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             tag_version="${GITHUB_REF_NAME#v}"
             if [ "$conf_version" != "$tag_version" ]; then

@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
+import { version as packageVersion } from '../../package.json';
 import {
   addAntigravityAccount as addAntigravityAccountCommand,
   addApiKeyAccount as addApiKeyAccountCommand,
@@ -16,6 +17,7 @@ import {
   beginBailianLogin as beginBailianLoginCommand,
   cancelAccountLogin,
   checkForUpdate,
+  getAppInfo,
   getAppState,
   onAppStateChanged,
   openExternalUrl,
@@ -25,6 +27,7 @@ import {
   replaceApiKey as replaceApiKeyCommand,
   setAutoLaunch as setAutoLaunchCommand,
   updatePreferences,
+  type AppInfo,
   type AppState,
   type LoginStart,
   type Preferences,
@@ -40,6 +43,15 @@ const UPDATE_RETRY_INTERVAL_MS = 30 * 60 * 1000;
 /** 窗口重新获得焦点时的最小复查间隔，避免频繁请求接口。 */
 const UPDATE_FOCUS_MIN_INTERVAL_MS = 60 * 60 * 1000;
 
+/** 浏览器预览拿不到 Rust 的应用信息，回退到 package.json 的版本与正式渠道。 */
+const fallbackAppInfo: AppInfo = {
+  name: 'Token Refill',
+  version: packageVersion,
+  platform: 'web',
+  arch: 'unknown',
+  channel: 'pro',
+};
+
 /** 发起授权的结果：失败原因随结果返回，由发起方在弹窗内展示，不进入页面级提示。 */
 export interface LoginAttempt {
   start: LoginStart | null;
@@ -48,6 +60,8 @@ export interface LoginAttempt {
 
 interface AppStateContextValue {
   state: AppState;
+  /** 应用名、版本与渠道；Rust 侧加载完成前为 null。 */
+  appInfo: AppInfo | null;
   ready: boolean;
   desktop: boolean;
   error: string | null;
@@ -88,14 +102,35 @@ function errorMessage(err: unknown): string {
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const desktop = isTauri();
   const [state, setState] = useState<AppState>(defaultAppState);
+  const [appInfo, setAppInfo] = useState<AppInfo | null>(
+    desktop ? null : fallbackAppInfo,
+  );
   const [ready, setReady] = useState(!desktop);
   const [error, setError] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
+
+  // 应用名、版本与渠道以 Rust 合并后的配置为准；浏览器预览沿用 package.json 回退值。
+  useEffect(() => {
+    if (!desktop) return;
+    let disposed = false;
+    void getAppInfo().then(
+      (info) => {
+        if (!disposed) setAppInfo(info);
+      },
+      () => {
+        // 读取失败时保持回退值，不阻塞其余状态加载。
+      },
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [desktop]);
 
   // 启动时静默检查一次版本；失败（离线、限流）不打扰用户，设置页仍可手动重试。
   // 应用会长时间驻留（支持开机自启），只查一次会错过启动之后发布的新版本，
   // 因此定期复查，并在窗口重新获得焦点时按节流复查；失败后较短间隔重试。
   // 菜单栏面板与主窗口同时存在，只由主窗口发起检查，避免重复请求 GitHub。
+  // 测试渠道由 Rust 侧直接返回“无更新”，这里不做渠道分支，保持原有节流语义。
   const updateCheckedAt = useRef(0);
   useEffect(() => {
     if (!desktop || IS_TRAY_VIEW) return;
@@ -400,6 +435,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AppStateContextValue>(
     () => ({
       state,
+      appInfo,
       ready,
       desktop,
       error,
@@ -420,6 +456,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     }),
     [
       state,
+      appInfo,
       ready,
       desktop,
       error,
