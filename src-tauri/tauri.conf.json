@@ -21,7 +21,8 @@
         "center": true,
         "resizable": true,
         "titleBarStyle": "Overlay",
-        "hiddenTitle": true
+        "hiddenTitle": true,
+        "visible": false
       },
       {
         "label": "tray-panel",
@@ -38,7 +39,8 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "visible": false,
-        "focus": false
+        "focus": false,
+        "create": false
       }
     ],
     "security": {

@@ -50,7 +50,7 @@ pnpm tauri:dev:test
 
 桌面应用启动后进入总览页：先展示 Rust 侧缓存（首次为空时显示查询中），随后按设置自动刷新。总览顶部可在「订阅账户额度」与「中转站账户额度」之间切换；后者在切换时先展示上次成功快照，并把超过刷新间隔的账户自动刷新一次；扫描本地配置改为管理页上的手动入口，两处与「中转站账户管理」页共享同一份结果。Codex 需要本机已安装官方 CLI 或 Codex 桌面端；本机账户沿用已有登录态，未安装或未登录时界面会显示对应错误，其他界面仍可用。
 
-应用同时常驻菜单栏：左键点击菜单栏图标会在图标下方打开快速查看面板，先展示现有额度与更新时间，有中转站账户时再按刷新间隔补查；点击面板外部或按 Esc 收起。右键菜单提供打开主窗口、查看额度与退出。关闭管理窗口只隐藏窗口，应用继续在菜单栏驻留并后台刷新；macOS 上同时隐藏 Dock 图标与 Cmd+Tab 条目，只保留菜单栏图标，从菜单栏菜单、面板中的打开入口、Finder / Spotlight 或再次启动应用都能恢复管理窗口，恢复时 Dock 图标重新出现。退出必须通过菜单栏菜单或面板右下角的电源按钮，退出后停止调度。
+应用同时常驻菜单栏：左键点击菜单栏图标会在图标下方打开快速查看面板，先展示现有额度与更新时间，有中转站账户时再按刷新间隔补查；点击面板外部或按 Esc 收起。右键菜单提供打开主窗口、查看额度与退出。关闭管理窗口只隐藏窗口，应用继续在菜单栏驻留并后台刷新（窗口隐藏 60 秒后会释放 WebView 以降低内存占用，再次打开需要重新加载界面；快速面板首次打开也有一次短暂加载）；macOS 上同时隐藏 Dock 图标与 Cmd+Tab 条目，只保留菜单栏图标，从菜单栏菜单、面板中的打开入口、Finder / Spotlight 或再次启动应用都能恢复管理窗口，恢复时 Dock 图标重新出现。退出必须通过菜单栏菜单或面板右下角的电源按钮，退出后停止调度。
 
 重复启动只保留一个实例：第二次启动会直接退出，并把已运行的窗口恢复、置顶，避免两个进程同时写 `state.json` 和授权目录。单实例锁按应用标识区分，因此正式版与测试版可以各自保留一个实例。
 
@@ -82,7 +82,7 @@ pnpm dev
 - Codex CLI 查找顺序：`CODEX_BIN` → `CODEX_CLI_PATH` → `PATH` → nvm-windows / fnm 的版本目录 → npm、pnpm、Volta、Bun、Scoop、`%LOCALAPPDATA%\Programs\OpenAI\Codex\bin` 等默认安装位置 → Codex 桌面端内置 CLI（`%LOCALAPPDATA%\Programs\ChatGPT\resources\codex-cli\bin`、Microsoft Store 版 `WindowsApps\OpenAI.Codex_<版本>\` 等）。候选文件为 `codex.exe`、`codex.cmd`、`codex.bat`、`codex.com`，优先原生可执行文件；只装桌面端、没有单独安装 CLI 时也能查询本机额度（两者共用 `~/.codex` 登录态）。找不到时设置 `CODEX_BIN` 指向完整路径。
 - 数据目录为 `%APPDATA%\dev.tokenrefill.desktop\`（测试版为 `%APPDATA%\dev.tokenrefill.desktop.test\`），其中 `state.json` 存设置与快照，`codex-profiles\<accountId>\` 是各独立 Codex 账户的 `CODEX_HOME`，`bailian-profiles\<accountId>\` 与 `api-profiles\<accountId>\` 分别保存百炼控制台令牌和 OpenCode / Command Code 的 API Key，`relay-profiles\<relayId>\` 保存手动填写的中转站凭证。
 - Antigravity 需要本机可运行的 `agy`，查找顺序为 `AGY_BIN` → `PATH` → `%LOCALAPPDATA%\agy\bin` 等常见目录；额度通过 `agy -p /usage --output-format json` 读取。
-- 窗口使用系统标题栏，前端按 `get_app_info().platform` 收窄侧栏顶部留白。
+- 主窗口使用自绘标题栏：Rust 侧关闭系统装饰，前端 `TitleBar` 负责拖拽、最小化、最大化与关闭；macOS 仍使用系统 Overlay 标题栏，前端按 `get_app_info().platform` 切换布局。Windows 侧标题栏仍需在实机验收。
 - 授权链接通过 `ShellExecuteW` 交给系统浏览器，不经过 `cmd.exe`，URL 中的 `&` 不会被当作命令分隔符。
 - `src-tauri/tauri.windows.conf.json` 把 Windows 的 `bundle.targets` 收窄为 `["nsis"]`：`pnpm tauri build` 只产出 NSIS 安装器（`-setup.exe`），不再生成 MSI；免安装单文件 exe 用 `pnpm tauri build --no-bundle`。两者尚未做安装与卸载验收。详见 [Windows 兼容设计](./docs/windows-support.md)。
 

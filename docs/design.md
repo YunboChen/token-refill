@@ -164,10 +164,11 @@
 
 ### 3.2 标题栏与平台适配
 
-- macOS 使用 Overlay 标题栏：`.titlebarSafeArea` 高 44px，承载红绿灯并作为拖拽区。
-- Windows 使用系统标题栏：`data-platform="windows"` 时安全区降为 10px。
+- macOS 使用 Overlay 原生标题栏：`.titlebarSafeArea` 高 44px，承载红绿灯并作为拖拽区；不渲染 `TitleBar` 组件。
+- Windows 关闭系统装饰（Rust `setup()` 中 `set_decorations(false)`），由 `TitleBar` 自绘标题栏，负责拖拽、最小化、最大化与关闭；`.app[data-platform='windows']` 在非最大化时补 1px 内描边。
+- 主窗口在 `tauri.conf.json` 中以 `visible: false` 创建，避免 React 首绘前露出系统标题栏：macOS 在 `setup()` 中直接显示；Windows 由 `TitleBar` 首帧 emit `main-ui-ready`，Rust 侧收到后 `show()` 并聚焦，另有 5 秒兜底。
 - 页头、标题、副标题均带 `data-tauri-drag-region`；按钮和可交互元素不要加，否则会吞掉点击。
-- 平台信息来自 `getAppInfo()`，读取失败保持 macOS 布局，不阻塞界面。
+- 平台信息来自 `getAppInfo()`；首次渲染用 UA 同步兜底（避免 Windows 标题栏首帧缺失），读取失败保持 macOS 布局，不阻塞界面。
 
 ### 3.3 新增页面的接入点
 
@@ -537,7 +538,7 @@ div.panel（透明窗口内的圆角面板）
 - 账户头右侧显示相对更新时间（`刚刚更新` / `N 分钟前` / 钟点）与单个账户的刷新按钮；顶部「全部刷新」同时刷新订阅账户与中转站。额度条 6px，低于提醒阈值时条与百分比转为 `--warning` 琥珀色。
 - 中转站账户与订阅账户同卡式排版：账户名 + 相对更新时间 + 刷新按钮，第二行是 `平台 · 主机名`，下面是密钥/账户金额摘要与一条剩余比例条；不复制管理页的两列大卡。
 - 页脚不做实色主按钮：左侧版本号，右侧是两个纯文字动作（主色「打开主窗口」、弱化色「退出」），中间用一根竖线分隔。头部「全部刷新」与「打开主窗口」同一套文字动作样式，只换图标与位置。
-- 面板打开事件由 Rust 广播（`tray-panel-shown`）；收到后先展示缓存，再按刷新间隔补查中转站。面板在应用启动时就已加载，因此中转站列表读完前不会主动发请求。
+- 面板打开事件由 Rust 广播（`tray-panel-shown`）；收到后先展示缓存，再按刷新间隔补查中转站。面板只在用户点开时才创建，挂载即视为首次打开，会自己补一次状态同步与过期检查；中转站列表读完前不会主动发请求。
 - 面板内按 Esc 收起；点击面板外部由 Rust 的失焦监听收起。主题切换通过 `storage` 事件从主窗口同步。
 - 文案与数字遵循与主窗口相同的字号/字重级别，但整体缩小一档：面板正文 10–13px，行距更紧，避免在 380px 宽度内换行撑高。时间文案统一走 `src/lib/format.ts` 的 `stampLabel` / `relativeUpdateLabel`。
 

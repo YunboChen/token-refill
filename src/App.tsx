@@ -14,6 +14,7 @@ import OverviewPanel from './panels/OverviewPanel';
 import AccountsPanel from './panels/AccountsPanel';
 import RelayPanel from './panels/RelayPanel';
 import SettingsPanel from './panels/SettingsPanel';
+import TitleBar from './components/TitleBar';
 import styles from './App.module.css';
 
 type PanelKey = 'overview' | 'accounts' | 'relay' | 'settings';
@@ -58,11 +59,22 @@ const PANELS: PanelDef[] = [
   },
 ];
 
+/* 平台信息由 Rust 侧异步返回；先用 UA 同步兜底，避免 Windows 自绘标题栏首帧缺失。 */
+function platformHint(): string | null {
+  if (typeof navigator === 'undefined') return null;
+  if (/Windows/i.test(navigator.userAgent)) return 'windows';
+  if (/Macintosh|Mac OS X/i.test(navigator.userAgent)) return 'macos';
+  return null;
+}
+
 export default function App() {
   const [active, setActive] = useState<PanelKey>('overview');
+  const [isMaximized, setIsMaximized] = useState(false);
   const { error, update, openExternal, appInfo } = useAppState();
   const desktop = isTauri();
-  const platform = appInfo?.platform ?? null;
+  // 应用信息（名称、版本、渠道、平台）统一来自 Rust 合并后的配置；首帧先用 UA
+  // 兜底平台，避免 Windows 自绘标题栏与关闭装饰的窗口在首帧错位。
+  const platform = appInfo?.platform ?? platformHint();
   const current = PANELS.find((panel) => panel.key === active) ?? PANELS[0];
   // 启动检查只在有正式新版本时提示；设置页仍可手动重新检查。
   // 侧栏页脚只放一个轻量入口，详细状态仍在设置页。
@@ -109,95 +121,107 @@ export default function App() {
     </button>
   );
 
+  // 标题栏形态按平台区分：macOS 用 Overlay 原生标题栏（红绿灯浮在内容上），
+  // Windows 关闭系统装饰，由 TitleBar 自绘。取不到平台时保持 macOS 布局。
+  const isWindows = platform === 'windows';
+
   return (
-    <div className={styles.app} data-platform={platform ?? undefined}>
-      <aside className={styles.sidebar}>
-        {/* macOS Overlay 标题栏：顶部安全区留给红绿灯，同时作为窗口拖拽区。
-            Windows 用系统标题栏，这段只保留极小的顶部留白。 */}
-        <div className={styles.titlebarSafeArea} data-tauri-drag-region aria-hidden="true" />
-        <img
-          className={styles.wordmark}
-          src={logoWordmark}
-          alt={appInfo?.name ?? 'Token Refill'}
-          width={480}
-          height={87}
-        />
+    <div
+      className={styles.app}
+      data-platform={platform ?? undefined}
+      data-maximized={isMaximized || undefined}
+    >
+      {isWindows ? <TitleBar onMaximizedChange={setIsMaximized} /> : null}
+      <div className={styles.appBody}>
+        <aside className={styles.sidebar}>
+          {/* macOS 原生标题栏：顶部安全区留给红绿灯，同时作为窗口拖拽区。 */}
+          {isWindows ? null : (
+            <div className={styles.titlebarSafeArea} data-tauri-drag-region aria-hidden="true" />
+          )}
+          <img
+            className={styles.wordmark}
+            src={logoWordmark}
+            alt={appInfo?.name ?? 'Token Refill'}
+            width={480}
+            height={87}
+          />
 
-        <nav
-          className={styles.nav}
-          aria-label="主导航"
-          role="tablist"
-          aria-orientation="vertical"
-        >
-          {PANELS.map(renderNavItem)}
-        </nav>
-
-        {/* 侧栏底部：版本号 + 可选的升级入口。分隔线只负责分隔导航与应用信息。
-            版本号与导航图标同一条左缘；有新版本时入口落在右侧。 */}
-        <div className={styles.sidebarFoot}>
-          <span className={styles.versionGroup}>
-            <span className={styles.version}>
-              {appInfo ? `v${appInfo.version}` : 'v—'}
-            </span>
-            {appInfo?.channel === 'test' ? (
-              <span className={styles.testBadge}>测试版</span>
-            ) : null}
-          </span>
-          {updateAvailable ? (
-            <button
-              type="button"
-              className={styles.updateChip}
-              onClick={openUpdateEntry}
-              title={`发现新版本 v${updateAvailable.version}，前往更新`}
-              aria-label={`发现新版本 v${updateAvailable.version}，前往更新`}
-            >
-              <ArrowUp size={11} weight="bold" aria-hidden />
-              v{updateAvailable.version}
-            </button>
-          ) : null}
-        </div>
-      </aside>
-
-      <main className={styles.main}>
-        {/* 页面头部独立于滚动区：直接顶到窗口上沿，同时作为拖拽区 */}
-        <header className={styles.pageHeader} data-tauri-drag-region>
-          <div className={styles.pageHeaderInner}>
-            <h1 className={styles.panelTitle} data-tauri-drag-region>
-              {current.title}
-            </h1>
-            <p className={styles.subtitle} data-tauri-drag-region>
-              {current.subtitle}
-            </p>
-          </div>
-        </header>
-
-        <div className={styles.mainScroll}>
-          {error ? (
-            <p className={`${styles.noticeDanger} ${styles.globalNotice}`} role="alert">
-              {error}
-            </p>
-          ) : null}
-          <div
-            key={active}
-            id={`panel-${active}`}
-            role="tabpanel"
-            aria-labelledby={`tab-${active}`}
-            className={styles.panelWrap}
+          <nav
+            className={styles.nav}
+            aria-label="主导航"
+            role="tablist"
+            aria-orientation="vertical"
           >
-            {active === 'overview' ? <OverviewPanel desktop={desktop} /> : null}
-            {active === 'accounts' ? <AccountsPanel /> : null}
-            {active === 'relay' ? <RelayPanel /> : null}
-            {active === 'settings' ? <SettingsPanel /> : null}
-          </div>
+            {PANELS.map(renderNavItem)}
+          </nav>
 
-          {!desktop ? (
-            <footer className={styles.footer}>
-              当前为浏览器预览，接口需在桌面应用内调用（
-              <code className={styles.codeChip}>pnpm tauri dev</code>）。
-            </footer>
-          ) : null}
-        </div>
-      </main>
+          {/* 侧栏底部：版本号 + 可选的升级入口。分隔线只负责分隔导航与应用信息。
+              版本号与导航图标同一条左缘；有新版本时入口落在右侧。 */}
+          <div className={styles.sidebarFoot}>
+            <span className={styles.versionGroup}>
+              <span className={styles.version}>
+                {appInfo ? `v${appInfo.version}` : 'v—'}
+              </span>
+              {appInfo?.channel === 'test' ? (
+                <span className={styles.testBadge}>测试版</span>
+              ) : null}
+            </span>
+            {updateAvailable ? (
+              <button
+                type="button"
+                className={styles.updateChip}
+                onClick={openUpdateEntry}
+                title={`发现新版本 v${updateAvailable.version}，前往更新`}
+                aria-label={`发现新版本 v${updateAvailable.version}，前往更新`}
+              >
+                <ArrowUp size={11} weight="bold" aria-hidden />
+                v{updateAvailable.version}
+              </button>
+            ) : null}
+          </div>
+        </aside>
+
+        <main className={styles.main}>
+          {/* 页面头部独立于滚动区：直接顶到窗口上沿，同时作为拖拽区 */}
+          <header className={styles.pageHeader} data-tauri-drag-region>
+            <div className={styles.pageHeaderInner}>
+              <h1 className={styles.panelTitle} data-tauri-drag-region>
+                {current.title}
+              </h1>
+              <p className={styles.subtitle} data-tauri-drag-region>
+                {current.subtitle}
+              </p>
+            </div>
+          </header>
+
+          <div className={styles.mainScroll}>
+            {error ? (
+              <p className={`${styles.noticeDanger} ${styles.globalNotice}`} role="alert">
+                {error}
+              </p>
+            ) : null}
+            <div
+              key={active}
+              id={`panel-${active}`}
+              role="tabpanel"
+              aria-labelledby={`tab-${active}`}
+              className={styles.panelWrap}
+            >
+              {active === 'overview' ? <OverviewPanel desktop={desktop} /> : null}
+              {active === 'accounts' ? <AccountsPanel /> : null}
+              {active === 'relay' ? <RelayPanel /> : null}
+              {active === 'settings' ? <SettingsPanel /> : null}
+            </div>
+
+            {!desktop ? (
+              <footer className={styles.footer}>
+                当前为浏览器预览，接口需在桌面应用内调用（
+                <code className={styles.codeChip}>pnpm tauri dev</code>）。
+              </footer>
+            ) : null}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

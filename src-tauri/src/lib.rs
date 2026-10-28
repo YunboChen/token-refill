@@ -22,10 +22,17 @@ use std::process::Command;
 use std::sync::Arc;
 
 use serde::Serialize;
+#[cfg(windows)]
+use tauri::Listener;
 use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 use state::{LoginStartPayload, PersistedState, Preferences, StateStore};
+
+/// 前端首帧就绪（自绘标题栏已画出）。Windows 主窗口以隐藏状态创建，
+/// 收到该事件后再显示，避免 React 首绘前先露出约 1 秒的系统标题栏。
+#[cfg(windows)]
+const MAIN_UI_READY_EVENT: &str = "main-ui-ready";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -387,12 +394,10 @@ fn open_main_window(app: tauri::AppHandle) {
     tray::show_main_window(&app);
 }
 
-/// 面板按 Esc 收起；隐藏而不是销毁，保持已加载的状态与订阅。
+/// 面板按 Esc 收起；隐藏后进入空闲销毁倒计时，再次打开时按需重建。
 #[tauri::command]
 fn hide_tray_panel(app: tauri::AppHandle) {
-    if let Some(panel) = app.get_webview_window(tray::PANEL_LABEL) {
-        let _ = panel.hide();
-    }
+    tray::hide_panel(&app);
 }
 
 /// 菜单栏面板里的明确退出入口；RunEvent::Exit 负责让调度器停止。
@@ -463,6 +468,36 @@ pub fn run() {
             // macOS 在启动时申请通知授权，避免首次提醒才弹授权框。
             notification::prepare();
 
+            // Windows 使用前端自绘标题栏，需要去掉系统边框与标题按钮；主窗口在配置里
+            // 以隐藏状态创建，等前端画出标题栏再显示，否则启动瞬间会先露出系统标题栏。
+            // 平台配置文件走 JSON Merge Patch，覆盖 windows 数组会整体替换，
+            // 因此装饰只在运行时按平台关掉。
+            #[cfg(windows)]
+            {
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.set_decorations(false);
+                }
+                let handle = app.handle().clone();
+                app.handle().listen(MAIN_UI_READY_EVENT, move |_event| {
+                    tray::show_main_window(&handle);
+                });
+                // 前端没走到就绪事件（脚本异常等）时兜底显示，避免窗口一直隐藏、
+                // 只能靠托盘菜单找回来。
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    if let Some(main) = handle.get_webview_window("main") {
+                        if !main.is_visible().unwrap_or(true) {
+                            let _ = main.show();
+                        }
+                    }
+                });
+            }
+
+            // macOS 保持 Overlay 原生标题栏（红绿灯与拖拽交给系统），窗口随启动显示。
+            #[cfg(not(windows))]
+            tray::show_main_window(app.handle());
+
             // 菜单栏图标与快速查看面板；关闭主窗口只隐藏，应用继续常驻。
             tray::setup(app.handle())?;
 
@@ -509,6 +544,14 @@ pub fn run() {
         // 管理窗口带回来。Dock 图标在窗口隐藏期间不显示，不会触发这里。
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => tray::show_main_window(app_handle),
+        // 菜单栏应用常驻：最后一个窗口按空闲策略销毁时系统会请求退出
+        // （code 为 None），必须拦住。主窗口还在时的用户退出（如 Cmd+Q）
+        // 保持原行为；显式退出走 app.exit(0)，code 为 Some，照常放行。
+        tauri::RunEvent::ExitRequested { api, code, .. } => {
+            if code.is_none() && app_handle.webview_windows().is_empty() {
+                api.prevent_exit();
+            }
+        }
         // 退出时让调度器停止发起新任务；在途查询随后随进程结束。
         tauri::RunEvent::Exit => {
             app_handle.state::<Arc<StateStore>>().shutdown();

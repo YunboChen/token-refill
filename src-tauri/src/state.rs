@@ -2355,6 +2355,12 @@ impl StateStore {
             .any(|pending| pending.account_id == account_id)
     }
 
+    /// 是否有等待中的浏览器授权。登录弹窗只存在于主窗口的前端内存里，
+    /// 空闲销毁 WebView 前必须排除这种情况，否则流程会失去界面。
+    pub fn has_active_login(&self) -> bool {
+        !lock(&self.logins).is_empty()
+    }
+
     fn emit_login_event(
         &self,
         login_id: &str,

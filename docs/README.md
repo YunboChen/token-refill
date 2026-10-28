@@ -46,6 +46,6 @@
 - 已接入：总览页按账户展示缓存/查询中/失败组合状态；账户页支持添加独立授权账户、取消授权、改名、重新授权与移除；设置页刷新间隔与提醒阈值写入 Rust 状态。
 - 已实现：Codex 多账户。每账户使用独立 `CODEX_HOME` 与官方 `account/login/start` 浏览器授权，登录令牌由 Codex CLI 保存在隔离目录，应用不读取或复制本机默认凭证。
 - 已实现：百炼 Token Plan 个人版与 Coding Plan 中国站。应用在 `127.0.0.1` 回环地址接收官方控制台登录回传的令牌并存入私有目录，直接调用控制台网关读取额度；不依赖 `bl` CLI，也不读取其配置。同一账户下两类套餐作为两个产品展示，Token Plan 为订阅月比例，Coding Plan 保留调用次数与三个窗口。
-- 已实现：Windows 兼容层。按平台查找 `codex.exe` / `codex.cmd` 及常见安装目录，授权链接改用 `ShellExecuteW`，数据目录沿用 `%APPDATA%`，标题栏按平台留白；Windows 本机构建、单元测试、真实 CLI 握手与启动验证通过，详见 [Windows 兼容设计](./windows-support.md)。
+- 已实现：Windows 兼容层。按平台查找 `codex.exe` / `codex.cmd` 及常见安装目录，授权链接改用 `ShellExecuteW`，数据目录沿用 `%APPDATA%`，标题栏按平台分治（macOS 原生 Overlay、Windows 自绘）；Windows 本机构建、单元测试、真实 CLI 握手与启动验证通过，详见 [Windows 兼容设计](./windows-support.md)。
 - 已实现：版本检查与应用内更新。设置页读取 GitHub Releases 最新正式版本；安装版可显式下载并重启安装（更新包先经 minisign 校验），免安装 exe 仍跳转发布页；启动时静默检查，运行期间定期复查。
 - 尚未完成：系统级凭证安全存储、限流退避参数、菜单栏常驻、发布及工期估算；百炼跨账号隔离与令牌续期仍待实测。低额度、授权失效与重置三类提醒已接入系统通知，开机自启已接入系统登录项。

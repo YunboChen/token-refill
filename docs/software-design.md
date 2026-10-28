@@ -62,7 +62,7 @@ Windows 兼容层已落地，变化集中在四处，业务状态模型不变：
 - Codex CLI 查找按平台区分候选名（`codex` 与 `codex.exe` / `.cmd` / `.bat` / `.com`）、可执行判定与常见安装目录，覆盖 npm、pnpm、Volta、Bun、Scoop、nvm-windows、fnm 及官方安装包。Codex 桌面端（ChatGPT.app / Codex 桌面应用）自带的 CLI 排在查找链最后：macOS 探测 `Contents/Resources/codex-cli/bin`，Windows 探测安装目录的 `resources\codex-cli\bin` 与 Microsoft Store 的 `WindowsApps\OpenAI.Codex_*`；桌面端与独立 CLI 共用登录态，只装桌面端也能查询本机额度，但仍通过官方 `app-server --stdio` 读取，不解析桌面端内部状态文件。
 - 授权链接在 Windows 上交给 `ShellExecuteW`，避免 `cmd /C start` 把 URL 查询串里的 `&` 当作命令分隔符。
 - 数据继续写入 `app_data_dir()`（Windows 为 `%APPDATA%\<identifier>`；测试版为 `...\dev.tokenrefill.desktop.test`）；Unix 权限位保持不变，Windows 依赖该目录的按用户 ACL。
-- 窗口在 Windows 使用系统标题栏；前端读取 `get_app_info().platform` 后收窄侧栏顶部留白；应用名、版本与 `channel` 同样来自 `get_app_info()`。
+- 窗口在 macOS 保持 Overlay 原生标题栏；Windows 在 Rust `setup()` 中关闭系统装饰，由前端 `TitleBar` 自绘标题栏。前端读取 `get_app_info().platform` 切换两套布局，首帧用 UA 兜底。主窗口以 `visible: false` 创建，Windows 在前端首帧后由 `main-ui-ready` 事件触发显示（5 秒兜底），macOS 在 `setup()` 中直接显示。应用名、版本与 `channel` 同样来自 `get_app_info()`。
 
 分发渠道：正式版与测试版共用代码，测试版通过 `src-tauri/tauri.test.conf.json` 覆盖 `productName` 与 `identifier`，数据目录、单实例锁、通知权限与开机自启随之隔离；渠道由 Rust `channel.rs` 按 identifier 的 `.test` 后缀判定，不引入第二套构建期开关。测试版版本号由 CI 注入为 `<基础版本>-test.g<短提交>`，不写回源文件；测试渠道不发起 GitHub 版本检查，下载与安装命令直接拒绝应用内更新。
 
@@ -71,9 +71,9 @@ Windows 安装包与界面运行验收尚未完成，最低 Windows 版本待确
 ### 3.2 菜单栏与快速查看面板（已实现）
 
 - Rust `tray` 模块用 Tauri 的 `tray-icon` 能力创建菜单栏图标：macOS 使用随包附带的单色模板图标并按系统外观自动反色（测试版使用右下角带圆点的变体，正式版与测试版可同时常驻）；Windows 使用应用图标。右键菜单提供「打开主窗口」「查看额度」「退出 <应用名>」，应用名取合并后的 `productName`。
-- 快速查看面板是 `tauri.conf.json` 中预创建的隐藏窗口 `tray-panel`：380×560、无边框、透明背景、置顶、跳过任务栏，加载同一前端产物的 `index.html?view=tray`。前端按 URL 参数渲染 `TrayPanel`，与主窗口共用 `AppStateProvider` 与 `RelayProvider`。
+- 快速查看面板是在 `tauri.conf.json` 中声明为 `create: false` 的窗口 `tray-panel`：380×560、无边框、透明背景、置顶、跳过任务栏，加载同一前端产物的 `index.html?view=tray`。第一次点开时才按配置创建，隐藏 60 秒后销毁 WebView；重建时窗口保持隐藏，等页面加载完成（或 1.5 秒兜底）后再定位显示，避免透明窗口闪空白。前端按 URL 参数渲染 `TrayPanel`，与主窗口共用 `AppStateProvider` 与 `RelayProvider`。
 - 左键点击图标切换面板；macOS 用 `NSScreen` / `NSEvent` 的原生坐标把面板放在鼠标所在屏幕的菜单栏下方并水平对齐图标，避免 Retina 与普通屏混排时 Tauri 物理坐标不一致；其他平台按托盘矩形与目标显示器可用区域计算。
-- 面板失焦自动收起，并记录失焦时间避免“点击图标关闭”时又立刻重开；按 Esc 收起。关闭主窗口只隐藏，应用继续在菜单栏驻留并刷新；只有菜单或面板中的退出入口会结束进程并停止调度。macOS 关闭主窗口时把激活策略切到 `Accessory`，Dock 图标、Cmd+Tab 与应用菜单栏一并消失；显示主窗口前先切回 `Regular` 再显示并聚焦，否则窗口拿不到 key 焦点，也没有应用菜单栏。
+- 面板失焦自动收起，并记录失焦时间避免“点击图标关闭”时又立刻重开；按 Esc 收起。关闭主窗口只隐藏，隐藏满 60 秒后销毁 WebView（有登录流程或更新下载在进行时跳过），再次打开时按配置重建并等待页面加载；应用继续在菜单栏驻留并刷新。销毁最后一个窗口会让 Tauri 请求退出，`RunEvent::ExitRequested` 在“没有窗口且非程序化退出”时调用 `prevent_exit`，避免空闲销毁把常驻应用结束掉。只有菜单或面板中的退出入口会结束进程并停止调度。macOS 关闭主窗口时把激活策略切到 `Accessory`，Dock 图标、Cmd+Tab 与应用菜单栏一并消失；显示主窗口前先切回 `Regular` 再显示并聚焦，否则窗口拿不到 key 焦点，也没有应用菜单栏。
 - 面板打开时先展示现有额度与更新时间，再按刷新间隔补查中转站账户；订阅账户继续由 Rust 调度器后台刷新。版本检查只由主窗口发起，面板不重复请求 GitHub。
 
 ## 4. 平台接入验证

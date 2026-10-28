@@ -7,6 +7,7 @@
 - 目标：macOS 首发能力在 Windows 10/11 x64 + WebView2 上可用，不引入第二套业务实现。
 - 已完成：Codex CLI 查找、app-server 子进程启动、授权链接打开、数据目录与文件写入、窗口标题栏布局。
 - 未完成：Windows 安装包签名、Windows 上的真实账户授权、长时间运行验收、最低 Windows 版本结论。
+- 2026-10-28 的窗口 WebView 按需创建 / 空闲销毁改动，Windows 验收步骤见 [Windows 内存优化验证](./windows-memory-validation.md)（待执行）。
 - 构建工具链：必须使用 MSVC 目标。GNU 目标未验证；本机 GNU 工具链缺 `dlltool.exe`，`cargo check` 直接失败。
 - `tauri dev` 由 CLI 启动的 `cargo run` 不使用 `RUSTUP_TOOLCHAIN` 环境变量（实测仍选 GNU），需用 `rustup default stable-x86_64-pc-windows-msvc` 或对 `src-tauri` 设置目录级 override。
 - 开发端口从 1420/1421 改为 5173/5174：本机 Hyper-V/WinNAT 预留了 1377–1576，落在该区间的监听会返回 `EACCES`。改端口时需同步 `vite.config.ts` 与 `tauri.conf.json` 的 `devUrl`、`devCsp`。
@@ -23,7 +24,7 @@
 | 打开授权链接 | `open` | `ShellExecuteW` | 不走 `cmd /C start`，URL 不经 shell 解析 |
 | 数据目录 | `~/Library/Application Support/<identifier>` | `%APPDATA%\<identifier>` | `app.path().app_data_dir()`，应用代码不拼平台路径 |
 | 目录/文件权限 | 0700 / 0600 | 继承 `%APPDATA%` 的按用户 ACL | Unix 显式设权限位，Windows 不设 |
-| 窗口标题栏 | Overlay + 隐藏标题 | 系统标题栏 | `titleBarStyle` / `hiddenTitle` 仅 macOS 生效；前端按平台调整留白 |
+| 窗口标题栏 | Overlay + 隐藏标题（原生红绿灯） | 自绘标题栏（关闭系统装饰） | `titleBarStyle` / `hiddenTitle` 仅 macOS 生效；Windows 在 `setup()` 中 `set_decorations(false)`，由前端 `TitleBar` 绘制控制按钮与拖拽区 |
 
 ## 3. Codex CLI 查找顺序
 
@@ -90,11 +91,12 @@ Windows 目标目录：
 
 ## 7. 窗口与前端
 
-- `tauri.conf.json` 里的 `titleBarStyle: "Overlay"` 与 `hiddenTitle` 只在 macOS 生效（Tauri 在 macOS 分支才应用这两个字段），Windows 保留系统标题栏与关闭/最小化按钮。
+- `tauri.conf.json` 里的 `titleBarStyle: "Overlay"` 与 `hiddenTitle` 只在 macOS 生效（Tauri 在 macOS 分支才应用这两个字段）。Windows 保持原生窗口配置，在 Rust `setup()` 中用 `#[cfg(windows)]` 调 `set_decorations(false)` 关闭系统边框，由前端 `TitleBar` 承担拖拽、最小化、最大化和关闭；不在 `tauri.windows.conf.json` 覆盖 `app.windows`，因为平台配置走 JSON Merge Patch，数组会被整体替换。
 - 所有 Windows 构建（含 debug）都使用 GUI 子系统（`#![cfg_attr(windows, windows_subsystem = "windows")]`）。此前 debug 构建是控制台子系统，从资源管理器双击会额外拉起一个控制台窗口（默认由 Windows Terminal 承载）；改为 GUI 后不再出现。从终端运行 `cargo run` / `tauri dev` 时 stdio 仍被继承，日志与 panic 照常输出。
 - GUI 子系统进程没有控制台，启动 `codex.exe` 这类控制台程序（以及 `.cmd` 背后的 `cmd.exe`）时 Windows 会为子进程新建控制台窗口。`cli::apply_no_window` 给所有外置 CLI 子进程加 `CREATE_NO_WINDOW`，额度刷新与授权等待期间不再出现黑色控制台窗口；子进程的 stdin/stdout 管道不受影响。
 - 单实例由 `tauri-plugin-single-instance` 保证，标识来自应用 `identifier`：免安装 exe 与 NSIS 安装版同时启动也只会保留一个进程，第二次启动把已有窗口从最小化恢复并置顶。正式版与测试版的 identifier 不同，可以各自保留一个实例。
-- 前端启动后调用 `get_app_info` 取 `platform`，写到根节点 `data-platform`。Windows 下侧栏顶部的红绿灯安全区从 44px 收窄到 10px，页面头仍作为拖拽区。
+- 前端启动后调用 `get_app_info` 取 `platform`，写到根节点 `data-platform`；首次渲染先用 UA 同步判断，避免 Windows 自绘标题栏首帧缺失。Windows 渲染 `TitleBar`，macOS 使用 44px 红绿灯安全区，页面头仍作为拖拽区。
+- 主窗口在 `tauri.conf.json` 中以 `visible: false` 创建，避免 React 首绘前露出约 1 秒的系统标题栏：Windows 的 `TitleBar` 首帧 emit `main-ui-ready`，Rust 侧收到后显示并聚焦窗口（5 秒兜底，前端异常时也能出现）；macOS 在 `setup()` 中直接显示。
 - 取不到平台信息时保持 macOS 布局；浏览器预览不请求平台信息。
 
 ## 8. 打包
@@ -131,4 +133,5 @@ Windows 目标目录：
 - 已完成授权的账户在 Windows 上查询额度（本机 CLI 未登录，只验证到授权失效路径）。
 - 应用窗口的实际渲染与视觉细节（仅确认进程启动与状态写入，未截图窗口）。
 - 菜单栏/托盘图标、快速查看面板的显示、定位（任务栏上方）、失焦收起与关闭主窗口后常驻尚未在 Windows 实机验证。
+- 自绘标题栏在 Windows 的实机表现：`set_decorations(false)` 是否出现原生边框闪烁、拖拽与边缘缩放是否正常、双击最大化、关闭后常驻、最大化态与不同缩放比例下的布局。需要在 Windows 实机逐项验收并记录结果。
 - Windows 10 具体小版本、arm64、长时间运行与休眠恢复。

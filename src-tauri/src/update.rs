@@ -6,7 +6,7 @@
 //! macOS 替换当前 `.app` 后重启，Windows 启动 NSIS 安装器。
 //! Windows 的免安装单文件 exe 没有安装目录可替换，只提供发布页跳转。
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -56,6 +56,24 @@ struct DownloadedUpdate {
 #[derive(Default)]
 pub struct UpdateStore {
     downloaded: Mutex<Option<DownloadedUpdate>>,
+    /// 正在下载更新包。下载期间主窗口不能按空闲策略销毁：进度条与
+    /// 「重启并安装」入口都只存在于该窗口的前端。
+    downloading: Arc<AtomicBool>,
+}
+
+impl UpdateStore {
+    pub fn is_downloading(&self) -> bool {
+        self.downloading.load(Ordering::SeqCst)
+    }
+}
+
+/// 下载结束时无条件复位；函数里有多处提前返回，靠 Drop 覆盖所有路径。
+struct DownloadingGuard(Arc<AtomicBool>);
+
+impl Drop for DownloadingGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 /// GitHub Releases API 中本功能用到的字段；其余忽略。
@@ -225,6 +243,14 @@ pub async fn download_update(app: AppHandle) -> Result<String, String> {
     if !self_update_supported(&app) {
         return Err("当前是免安装版本，请在发布页下载新版本后手动替换。".to_string());
     }
+
+    // 先标记下载开始，再发起网络请求：期间主窗口不会被空闲策略销毁。
+    let downloading = {
+        let store = app.state::<UpdateStore>();
+        Arc::clone(&store.downloading)
+    };
+    downloading.store(true, Ordering::SeqCst);
+    let _guard = DownloadingGuard(downloading);
 
     let update = updater_for(&app)?
         .check()
