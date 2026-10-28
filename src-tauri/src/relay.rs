@@ -29,6 +29,17 @@ const SNAPSHOT_FILE: &str = "snapshot.json";
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// 中转站条目变化后广播给所有窗口（主窗口与菜单栏面板）。
+/// `revision` 用于丢弃乱序到达的旧快照，避免窗口回退到旧数据。
+pub const RELAY_ACCOUNTS_EVENT: &str = "relay-accounts-changed";
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayAccountsEvent {
+    pub revision: u64,
+    pub accounts: Vec<RelayAccount>,
+}
+
 /// 密钥来源；手动输入与本地配置自动读取共用同一份注册表。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -242,6 +253,8 @@ pub struct RelayStore {
     entries: Mutex<Vec<RelayEntry>>,
     /// 本次运行最近一次扫描的候选，等待用户勾选；密钥不离开 Rust 内存。
     pending: Mutex<Vec<PendingCandidate>>,
+    /// 条目修订号；每次变更都在持有条目锁时递增，供跨窗口事件排序。
+    revision: AtomicU64,
     /// `None` 表示纯内存模式，供测试与未配置数据目录的场景使用。
     dir: Option<PathBuf>,
 }
@@ -251,6 +264,7 @@ impl Default for RelayStore {
         Self {
             entries: Mutex::new(Vec::new()),
             pending: Mutex::new(Vec::new()),
+            revision: AtomicU64::new(0),
             dir: None,
         }
     }
@@ -262,6 +276,7 @@ impl RelayStore {
         let store = Self {
             entries: Mutex::new(Vec::new()),
             pending: Mutex::new(Vec::new()),
+            revision: AtomicU64::new(0),
             dir: Some(dir),
         };
         store.load_from_disk();
@@ -272,6 +287,20 @@ impl RelayStore {
         self.entries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// 记录一次条目变更。调用方需持有条目锁，保证修订号与列表快照一一对应。
+    fn bump_revision(&self) {
+        self.revision.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// 条目列表与对应修订号；两者在同一把锁内读取，事件消费方可以按修订号丢弃旧快照。
+    pub fn view_with_revision(&self) -> RelayAccountsEvent {
+        let entries = self.lock();
+        RelayAccountsEvent {
+            revision: self.revision.load(Ordering::SeqCst),
+            accounts: entries.iter().map(RelayEntry::view).collect(),
+        }
     }
 
     /// 读取每个账户目录；损坏或权限不符的条目直接跳过并记录，不影响启动。
@@ -608,6 +637,7 @@ impl RelayStore {
             if entry.is_retained() {
                 self.persist_snapshot(entry);
             }
+            self.bump_revision();
             return Ok(entry.view());
         }
 
@@ -647,6 +677,7 @@ impl RelayStore {
         }
         let view = entry.view();
         entries.push(entry);
+        self.bump_revision();
         Ok(view)
     }
 
@@ -701,6 +732,7 @@ impl RelayStore {
             }
             Err(error) => entry.last_error = Some(error),
         }
+        self.bump_revision();
         Ok(entry.view())
     }
 
@@ -728,6 +760,8 @@ impl RelayStore {
             if new_api_user_id.is_some() {
                 entry.account_user_id = new_api_user_id;
             }
+            // 后续 refresh 还会递增一次；这里先记录令牌本身的变更。
+            self.bump_revision();
             let token = entry.account_token.clone();
             let user_id = entry.account_user_id.clone();
             if let Some(reference) = entry.source_ref.as_mut() {
@@ -767,6 +801,7 @@ impl RelayStore {
             }
         }
         entries.remove(index);
+        self.bump_revision();
         Ok(())
     }
 
@@ -960,6 +995,39 @@ mod tests {
         let second = store.query(&base, "sk-test", None, None).unwrap();
         assert_eq!(first.id, second.id);
         assert_eq!(store.list().len(), 1);
+    }
+
+    #[test]
+    fn revision_advances_with_every_entry_change() {
+        // 两个窗口按修订号丢弃乱序事件，因此每次变更都必须递增。
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        let base = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+            ("/api/usage/token/", 401, "{}"),
+            ("/v1/usage", 401, "{}"),
+        ]);
+        let store = RelayStore::default();
+        let empty = store.view_with_revision();
+        assert_eq!(empty.revision, 0);
+        assert!(empty.accounts.is_empty());
+
+        let account = store.query(&base, "sk-test", None, None).unwrap();
+        let added = store.view_with_revision();
+        assert_eq!(added.revision, 1);
+        assert_eq!(added.accounts.len(), 1);
+        assert_eq!(added.accounts[0].id, account.id);
+
+        store.refresh(&account.id).unwrap();
+        let refreshed = store.view_with_revision();
+        assert_eq!(refreshed.revision, 2);
+        assert!(refreshed.accounts[0].last_error.is_some());
+
+        store.remove(&account.id).unwrap();
+        let removed = store.view_with_revision();
+        assert_eq!(removed.revision, 3);
+        assert!(removed.accounts.is_empty());
     }
 
     #[test]
@@ -1217,6 +1285,7 @@ mod tests {
         let store = RelayStore {
             entries: Mutex::new(Vec::new()),
             pending: Mutex::new(Vec::new()),
+            revision: AtomicU64::new(0),
             dir: Some(dir),
         };
         store.load_from_disk_with(|| candidates.clone());

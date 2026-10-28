@@ -279,15 +279,15 @@ jobs:
             echo "::error::dmg not found"
             exit 1
           fi
-          cp "$dmg" "output/Token.Refill_${version}_${label}.dmg"
+          cp "$dmg" "output/Token.Refill_${version}_macos-${label}.dmg"
 
           archive=$(find "$bundle_dir/macos" -maxdepth 1 -type f -name '*.app.tar.gz' 2>/dev/null | head -1) || true
           if [ -z "$archive" ] || [ ! -f "${archive}.sig" ]; then
             echo "::error::updater archive or signature not found"
             exit 1
           fi
-          cp "$archive" "output/Token.Refill_${version}_${label}.app.tar.gz"
-          cp "${archive}.sig" "output/Token.Refill_${version}_${label}.app.tar.gz.sig"
+          cp "$archive" "output/Token.Refill_${version}_macos-${label}.app.tar.gz"
+          cp "${archive}.sig" "output/Token.Refill_${version}_macos-${label}.app.tar.gz.sig"
           ls -lh output
 
       # 产物先存成 workflow artifact，由 publish job 统一发到 release，
@@ -348,14 +348,14 @@ jobs:
           [System.IO.File]::WriteAllText($updaterConfig, '{"bundle":{"createUpdaterArtifacts":true}}')
           pnpm tauri build --bundles nsis --config $updaterConfig
           New-Item -ItemType Directory -Force output | Out-Null
-          Copy-Item "src-tauri/target/release/token-refill.exe" "output/Token.Refill_${version}_x64.exe"
+          Copy-Item "src-tauri/target/release/token-refill.exe" "output/Token.Refill_${version}_windows-x64.exe"
 
           # v2 更新包就是 NSIS 安装器本身，签名文件与安装器同目录。
           $setup = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
           if (-not $setup) { throw "NSIS installer not found" }
           if (-not (Test-Path "$($setup.FullName).sig")) { throw "Updater signature not found" }
-          Copy-Item $setup.FullName "output/Token.Refill_${version}_x64-setup.exe"
-          Copy-Item "$($setup.FullName).sig" "output/Token.Refill_${version}_x64-setup.exe.sig"
+          Copy-Item $setup.FullName "output/Token.Refill_${version}_windows-x64-setup.exe"
+          Copy-Item "$($setup.FullName).sig" "output/Token.Refill_${version}_windows-x64-setup.exe.sig"
           Get-ChildItem output | Format-Table Name, Length
 
       - uses: actions/upload-artifact@v7
@@ -394,16 +394,16 @@ jobs:
           const signature = (file) => fs.readFileSync(file, 'utf8').trim();
           const platforms = {
             'darwin-aarch64': {
-              signature: signature(`artifacts/macos-arm64/Token.Refill_${version}_arm64.app.tar.gz.sig`),
-              url: `${base}/Token.Refill_${version}_arm64.app.tar.gz`,
+              signature: signature(`artifacts/macos-arm64/Token.Refill_${version}_macos-arm64.app.tar.gz.sig`),
+              url: `${base}/Token.Refill_${version}_macos-arm64.app.tar.gz`,
             },
             'darwin-x86_64': {
-              signature: signature(`artifacts/macos-x64/Token.Refill_${version}_x64.app.tar.gz.sig`),
-              url: `${base}/Token.Refill_${version}_x64.app.tar.gz`,
+              signature: signature(`artifacts/macos-x64/Token.Refill_${version}_macos-x64.app.tar.gz.sig`),
+              url: `${base}/Token.Refill_${version}_macos-x64.app.tar.gz`,
             },
             'windows-x86_64': {
-              signature: signature(`artifacts/windows/Token.Refill_${version}_x64-setup.exe.sig`),
-              url: `${base}/Token.Refill_${version}_x64-setup.exe`,
+              signature: signature(`artifacts/windows/Token.Refill_${version}_windows-x64-setup.exe.sig`),
+              url: `${base}/Token.Refill_${version}_windows-x64-setup.exe`,
             },
           };
           const manifest = {

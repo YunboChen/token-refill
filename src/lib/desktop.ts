@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 export interface AppInfo {
   name: string;
@@ -119,6 +119,18 @@ export interface AppState {
 
 export const APP_STATE_EVENT = 'app-state-changed';
 export const ACCOUNT_LOGIN_EVENT = 'account-login-changed';
+export const THEME_CHANGED_EVENT = 'theme-changed';
+
+/** 主题是前端本地偏好；切换后广播给菜单栏面板。 */
+export function emitThemeChanged(theme: string): Promise<void> {
+  return emit(THEME_CHANGED_EVENT, theme);
+}
+
+export function onThemeChanged(
+  handler: (theme: string) => void,
+): Promise<UnlistenFn> {
+  return listen<string>(THEME_CHANGED_EVENT, (event) => handler(event.payload));
+}
 
 export function getAppState(): Promise<AppState> {
   return invoke<AppState>('get_app_state');
@@ -283,6 +295,29 @@ export function onAccountLoginChanged(
   return listen<AccountLoginEvent>(ACCOUNT_LOGIN_EVENT, (event) => handler(event.payload));
 }
 
+// ---------- 菜单栏快速查看 ----------
+
+const TRAY_PANEL_SHOWN_EVENT = 'tray-panel-shown';
+
+/** 面板每次从菜单栏打开时触发；用于补查中转站额度。 */
+export function onTrayPanelShown(handler: () => void): Promise<UnlistenFn> {
+  return listen(TRAY_PANEL_SHOWN_EVENT, () => handler());
+}
+
+/** 打开管理窗口；由 Rust 收起面板并恢复被隐藏的主窗口。 */
+export function openMainWindow(): Promise<void> {
+  return invoke<void>('open_main_window');
+}
+
+export function hideTrayPanel(): Promise<void> {
+  return invoke<void>('hide_tray_panel');
+}
+
+/** 明确的退出入口：停止后台刷新并结束进程。 */
+export function quitApp(): Promise<void> {
+  return invoke<void>('quit_app');
+}
+
 // ---------- 中转站密钥额度（手动凭证由 Rust 保存在应用数据目录）----------
 
 export type QuotaProvider = 'new-api' | 'sub2-api';
@@ -412,8 +447,25 @@ export function refreshRelayAccount(id: string): Promise<RelayAccount> {
   return invoke<RelayAccount>('relay_refresh', { id });
 }
 
-export function listRelayAccounts(): Promise<RelayAccount[]> {
-  return invoke<RelayAccount[]>('relay_list');
+/** 中转站条目列表 + 修订号；两个窗口共用同一份 Rust 注册表。 */
+export interface RelayAccountsEvent {
+  revision: number;
+  accounts: RelayAccount[];
+}
+
+const RELAY_ACCOUNTS_EVENT = 'relay-accounts-changed';
+
+/** 任意窗口变更中转站条目后广播，另一个窗口据此更新；按修订号丢弃旧快照。 */
+export function onRelayAccountsChanged(
+  handler: (event: RelayAccountsEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<RelayAccountsEvent>(RELAY_ACCOUNTS_EVENT, (event) =>
+    handler(event.payload),
+  );
+}
+
+export function listRelayAccounts(): Promise<RelayAccountsEvent> {
+  return invoke<RelayAccountsEvent>('relay_list');
 }
 
 export function removeRelayAccount(id: string): Promise<void> {

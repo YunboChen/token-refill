@@ -12,7 +12,7 @@
 
 ## 需求与设计文档
 
-首版产品范围已基本收敛，当前进行接入可行性验证与软件设计，尚未开始业务功能实现。以下文档区分已确认需求、工程建议与待验证事项。
+首版产品范围已基本收敛，额度查询、多账户授权、菜单栏快速查看与更新链路已进入实现阶段。以下文档区分已确认需求、工程建议与待验证事项。
 
 - [文档索引](./docs/README.md)
 - [需求文档](./docs/requirements.md)
@@ -41,6 +41,8 @@ pnpm tauri dev
 工作分支一律从 `main` 切出并 PR 到 `main` 合并；`dev` 只承载日常集成（定期合入 `main` 保持同步），不作为工作分支的基线。
 
 桌面应用启动后进入总览页：先展示 Rust 侧缓存（首次为空时显示查询中），随后按设置自动刷新。总览顶部可在「订阅账户额度」与「中转站账户额度」之间切换；后者在切换时先展示上次成功快照，并把超过刷新间隔的账户自动刷新一次；扫描本地配置改为管理页上的手动入口，两处与「中转站账户管理」页共享同一份结果。Codex 需要本机已安装官方 CLI 或 Codex 桌面端；本机账户沿用已有登录态，未安装或未登录时界面会显示对应错误，其他界面仍可用。
+
+应用同时常驻菜单栏：左键点击菜单栏图标会在图标下方打开快速查看面板，先展示现有额度与更新时间，有中转站账户时再按刷新间隔补查；点击面板外部或按 Esc 收起。右键菜单提供打开主窗口、查看额度与退出。关闭管理窗口只隐藏窗口，应用继续在菜单栏驻留并后台刷新；macOS 上同时隐藏 Dock 图标与 Cmd+Tab 条目，只保留菜单栏图标，从菜单栏菜单、面板中的打开入口、Finder / Spotlight 或再次启动应用都能恢复管理窗口，恢复时 Dock 图标重新出现。退出必须通过菜单栏菜单或面板右下角的电源按钮，退出后停止调度。
 
 重复启动只保留一个实例：第二次启动会直接退出，并把已运行的窗口恢复、置顶，避免两个进程同时写 `state.json` 和授权目录。
 
@@ -122,6 +124,7 @@ macOS 26+ 的自适应分层图标（浅色 / 深色 / 有色 / 降低透明度�
 - 缺 `actool`（只装了 Command Line Tools）或 actool 主版本低于 26 时，只记一条日志并跳过 Assets.car，产物仍是平图，构建不失败。
 - 这个 `.icon` 是手工生成的草稿：先用 Icon Composer 打开、逐外观检查并重新保存，再 `pnpm tauri build --bundles app`。验收看三处——`.app/Contents/Resources/Assets.car` 存在、`Info.plist` 里有 `CFBundleIconName`、`assetutil --info Assets.car` 里能查到该名字的 `Icon Image` rendition。
 - `pnpm tauri dev` 的 Dock 图标是编译期内嵌 ICNS 的单张图，不体现自适应效果；必须用打包后的 `.app` 在 Finder 与 Dock 上验收。
+- 菜单栏模板图标 `src-tauri/icons/tray-template.png` 取自 `src/assets/logo.png` 的 alpha 轮廓（单色、透明底），由 Rust 编译期内嵌；替换页头标志后需要同步重新生成，保持图形与留白一致。模板图标只保留 alpha，菜单栏会按浅色/深色自动反色。
 
 ## 目录
 
@@ -135,17 +138,19 @@ src/
   lib/relay.tsx       中转站账户的共享状态与操作
   lib/relayFormat.ts  中转站文案、金额与窗口格式化
   lib/prefs.ts        主题与默认偏好
-  panels/             总览、账户、中转站账户管理、设置
+  panels/             总览、账户、中转站账户管理、设置与菜单栏快速查看
+  panels/TrayPanel.tsx 菜单栏快速查看面板（380×560）
   assets/logo.png     页头品牌标志
-  main.tsx            React 与 Motion 入口
+  main.tsx            React 与 Motion 入口（按窗口 URL 选择主界面或面板）
 src-tauri/
   src/lib.rs          Tauri 启动入口与 IPC 命令
   src/state.rs        状态模型、JSON 持久化与刷新调度
   src/codex.rs        Codex app-server 只读适配器
   src/bailian.rs      百炼控制台只读适配器与浏览器登录回调
   src/main.rs         桌面可执行入口
+  src/tray.rs         菜单栏图标、快速查看面板定位与常驻行为
   capabilities/       本地窗口与事件权限配置
-  icons/              应用图标与 1024 源图
+  icons/              应用图标、1024 源图与菜单栏模板图标
   icons/macos/        macOS 分层图标草稿 TokenRefill.icon
   tauri.conf.json     窗口、构建和 CSP 配置
   tauri.macos.conf.json  macOS 专属打包配置（追加分层图标）
@@ -155,6 +160,8 @@ public/               浏览器标签图标、Web manifest
 ## 发布
 
 打包由 [.github/workflows/release.yml](./.github/workflows/release.yml) 在 GitHub Actions 上完成：macOS 分别提供 Apple Silicon（arm64）与 Intel（x64）的 `.dmg`，以及 Windows x64 的免安装单文件 exe 与 NSIS 安装器（`-setup.exe`）。Windows 不产出 MSI。
+
+产物文件名带平台前缀，便于区分：`Token.Refill_<版本>_macos-arm64.dmg`、`Token.Refill_<版本>_macos-x64.dmg`、`Token.Refill_<版本>_windows-x64.exe`（免安装）与 `Token.Refill_<版本>_windows-x64-setup.exe`（NSIS）。
 
 应用内更新另需各平台的更新包与签名：macOS 的 `.app.tar.gz` 及 `.sig`，Windows 的 NSIS 安装器（同时作为更新包）及 `.exe.sig`，再加一份 `latest.json`。清单由 `publish` job 生成并和其它产物一起挂到 Release；应用从 `releases/latest/download/latest.json` 读取版本、下载地址与签名。
 
@@ -231,7 +238,6 @@ Windows 的免安装 exe 与 NSIS 安装器由 `build-windows` job 用 MSVC 工�
 
 - 独立账户凭证的系统级安全存储（当前使用应用数据目录的私有文件：Codex 由 CLI 维护授权文件，百炼保存控制台会话令牌）。
 - 平台限流退避参数、休眠唤醒后的补偿策略。
-- 菜单栏常驻、弹窗定位和窗口焦点策略。
 - Windows 免安装 exe 的应用内更新（NSIS 安装版已支持）。
 - 原生 Liquid Glass 与旧系统材质回退。目前没有将 CSS 毛玻璃伪称为系统 Liquid Glass。
 
