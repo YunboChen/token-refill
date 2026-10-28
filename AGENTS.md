@@ -30,7 +30,7 @@
 - 网络请求放在 Rust 侧（目前是版本检查的 ureq 请求）；前端不直连第三方接口，不为了方便放宽 CSP 的 `connect-src`。
 - 不新增 filesystem / shell / http 类 Tauri 插件；**禁止**把任意路径、命令行或 URL 交给系统 shell 拼接执行。更新器插件只从 Rust 侧调用，前端不获得它的 IPC 权限，不属于上述插件类别。
 - `open_external_url` 只接受 `https://`、长度受限且无控制字符的地址；Windows 用 `ShellExecuteW`，不得改回 `cmd /C start`（URL 中的 `&` 会被当作命令分隔符）。
-- capabilities 保持最小：`core:default`、`core:event:default`、`core:window:allow-start-dragging`。新增能力必须说明理由并验证。
+- capabilities 保持最小：`core:default`、`core:event:default`、`core:window:allow-start-dragging`；Windows 自绘标题栏另需 `core:window:allow-minimize`、`allow-toggle-maximize`、`allow-maximize`、`allow-unmaximize`、`allow-close`、`allow-is-maximized`，仅服务于 `TitleBar` 的最小化/最大化/关闭与状态同步，不得再扩大。新增能力必须说明理由并验证。
 - 状态持久化：带 `schemaVersion` 的 JSON；先写临时文件再原子替换；Unix 权限 0600/0700，Windows 依赖 `%APPDATA%` 的按用户 ACL。改动 schema 必须处理旧文件与损坏文件（备份后回退），不能静默覆盖。
 - 不引入遥测、云同步、远程配置；版本检查与更新清单只请求 GitHub Releases 的公开数据，固定 User-Agent，不携带账户或本机信息。
 - 应用内更新由 Rust 侧 `tauri-plugin-updater` 完成，前端不授予 `updater:*` 能力，也没有下载/安装的自动入口：下载与安装是两个独立命令，必须由用户点击触发。更新包必须带 minisign 签名，客户端校验通过才允许安装；私钥只存在于 GitHub Secrets，公钥写在 `plugins.updater.pubkey`。
@@ -42,7 +42,7 @@
 - Rust 目标必须是 `stable-x86_64-pc-windows-msvc`；GNU 目标缺 `dlltool.exe`，不可用。
 - Codex 可执行文件查找要覆盖 `codex.exe` / `.cmd` / `.bat` / `.com`；用户目录优先 `USERPROFILE`（`HOME` 可能被 Git Bash 设成 POSIX 路径）。新增安装位置时同时考虑 PATH、版本管理器与包管理器默认目录。
 - 所有 Windows 构建（含 debug）使用 GUI 子系统（`#![cfg_attr(windows, windows_subsystem = "windows")]`）；不要让 debug 包重新出现控制台窗口。终端启动时 stdio 仍应可继承，日志与 panic 可见。
-- 窗口使用系统标题栏；前端通过 `get_app_info().platform` 收窄侧栏顶部留白。菜单栏快速面板在 Windows 上按托盘矩形与显示器可用区域定位到任务栏上方，不使用 macOS 的 `NSScreen` 定位分支。
+- 主窗口关闭系统装饰，由前端 `TitleBar` 自绘标题栏（拖拽、最小化、最大化、关闭）；关闭按钮仍走既有的「隐藏不退出」逻辑。平台差异在 Rust `setup()` 里用 `#[cfg(windows)]` 调 `set_decorations(false)`，不要在 `tauri.windows.conf.json` 覆盖 `app.windows`——平台配置走 JSON Merge Patch，数组会被整体替换。主窗口在 `tauri.conf.json` 中以 `visible: false` 创建：Windows 等前端画出标题栏后 emit `main-ui-ready`、Rust 侧再 `show()`（另有 5 秒兜底），避免 React 首绘前露出约 1 秒的系统标题栏；macOS 在 `setup()` 中直接显示，行为与之前一致。前端通过 `get_app_info().platform` 切换标题栏布局。菜单栏快速面板在 Windows 上按托盘矩形与显示器可用区域定位到任务栏上方，不使用 macOS 的 `NSScreen` 定位分支。
 - 打包只产出：免安装单文件 exe（`--no-bundle`）与 NSIS 安装器（`tauri.windows.conf.json` 把 `bundle.targets` 固定为 `["nsis"]`）。**不产出、不发布 MSI**。
 - Codex 登录回调端口由上游固定为 1455（1457 仅在占用时回退），本应用不能改；遇到 `os error 10013` 只提示用户释放端口，不要尝试修改 CLI 行为。
 
@@ -50,6 +50,7 @@
 
 - 发布构建分别使用 `--target aarch64-apple-darwin` 与 `--target x86_64-apple-darwin`，各产出一个 `.dmg`；不合并 Universal fat binary（体积与构建成本都会翻倍）。最低系统 12.0；当前 ad-hoc 签名、未公证，不得把产物描述为已签名/已公证。
 - CI 使用 `cargo tauri` 而不是 `pnpm tauri`：Node 版 CLI 下 libuv 会关闭继承的 fd 0，`actool` 的 helper 崩溃，`.icon` 编不出 `Assets.car`（tauri#15315）。改回 `pnpm tauri` 前必须验证打包产物里存在 `Assets.car` 与 `CFBundleIconName`。
+- 主窗口使用系统 Overlay 标题栏（`titleBarStyle: "Overlay"` + `hiddenTitle`），红绿灯与拖拽交给系统；侧栏顶部保留 44px 拖拽安全区，不要改成自绘标题栏。
 - 不引入需要关闭 Gatekeeper 或降低系统安全设置的常规安装步骤。
 - 应用内更新替换 `.app` 后仍是 ad-hoc 签名，cdhash 会变化，通知权限、开机自启可能需要用户重新授权；在实机验证前不得把它描述成无感更新。
 - 菜单栏面板用 Cocoa 坐标定位（`NSScreen` / `NSEvent` / `NSWindow`），因为 Tauri 在 Retina 与普通屏混排时的物理坐标不可靠。定位与显示必须经 `run_on_main_thread` 执行；不要改成直接调用 `set_position(PhysicalPosition)`。
