@@ -376,12 +376,10 @@ fn open_main_window(app: tauri::AppHandle) {
     tray::show_main_window(&app);
 }
 
-/// 面板按 Esc 收起；隐藏而不是销毁，保持已加载的状态与订阅。
+/// 面板按 Esc 收起；隐藏后进入空闲销毁倒计时，再次打开时按需重建。
 #[tauri::command]
 fn hide_tray_panel(app: tauri::AppHandle) {
-    if let Some(panel) = app.get_webview_window(tray::PANEL_LABEL) {
-        let _ = panel.hide();
-    }
+    tray::hide_panel(&app);
 }
 
 /// 菜单栏面板里的明确退出入口；RunEvent::Exit 负责让调度器停止。
@@ -489,6 +487,14 @@ pub fn run() {
         // 管理窗口带回来。Dock 图标在窗口隐藏期间不显示，不会触发这里。
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => tray::show_main_window(app_handle),
+        // 菜单栏应用常驻：最后一个窗口按空闲策略销毁时系统会请求退出
+        // （code 为 None），必须拦住。主窗口还在时的用户退出（如 Cmd+Q）
+        // 保持原行为；显式退出走 app.exit(0)，code 为 Some，照常放行。
+        tauri::RunEvent::ExitRequested { api, code, .. } => {
+            if code.is_none() && app_handle.webview_windows().is_empty() {
+                api.prevent_exit();
+            }
+        }
         // 退出时让调度器停止发起新任务；在途查询随后随进程结束。
         tauri::RunEvent::Exit => {
             app_handle.state::<Arc<StateStore>>().shutdown();
