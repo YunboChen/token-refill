@@ -20,6 +20,7 @@ pub const PANEL_SHOWN_EVENT: &str = "tray-panel-shown";
 
 /// 面板与菜单栏 / 任务栏之间留出的距离，避免贴边。
 const PANEL_GAP: f64 = 6.0;
+#[cfg(target_os = "macos")]
 /// 面板与屏幕左右边缘的最小距离。
 const EDGE_MARGIN: f64 = 8.0;
 /// 面板的逻辑尺寸（点）；macOS 直接使用，其他平台按目标显示器缩放。
