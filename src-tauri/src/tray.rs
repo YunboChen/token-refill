@@ -35,6 +35,7 @@ pub const PANEL_SHOWN_EVENT: &str = "tray-panel-shown";
 /// 面板与菜单栏 / 任务栏之间留出的距离，避免贴边。
 const PANEL_GAP: f64 = 6.0;
 /// 面板与屏幕左右边缘的最小距离。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const EDGE_MARGIN: f64 = 8.0;
 /// 面板的逻辑尺寸（点）；macOS 直接使用，其他平台按目标显示器缩放。
 const PANEL_WIDTH: f64 = 380.0;
@@ -484,6 +485,10 @@ fn create_main_window(app: &AppHandle) -> Option<WebviewWindow> {
             return None;
         }
     };
+    // Windows 由前端自绘标题栏：重建的窗口同样要去掉系统边框，否则空闲销毁
+    // 后再打开会重新露出系统标题栏。启动时的窗口在 `setup()` 里已关过装饰。
+    #[cfg(windows)]
+    let builder = builder.decorations(false);
     let main = match builder
         .visible(false)
         .on_page_load(move |window, payload| {

@@ -21,10 +21,17 @@ use std::process::Command;
 use std::sync::Arc;
 
 use serde::Serialize;
+#[cfg(windows)]
+use tauri::Listener;
 use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 use state::{LoginStartPayload, PersistedState, Preferences, StateStore};
+
+/// 前端首帧就绪（自绘标题栏已画出）。Windows 主窗口以隐藏状态创建，
+/// 收到该事件后再显示，避免 React 首绘前先露出约 1 秒的系统标题栏。
+#[cfg(windows)]
+const MAIN_UI_READY_EVENT: &str = "main-ui-ready";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -440,6 +447,36 @@ pub fn run() {
 
             // macOS 在启动时申请通知授权，避免首次提醒才弹授权框。
             notification::prepare();
+
+            // Windows 使用前端自绘标题栏，需要去掉系统边框与标题按钮；主窗口在配置里
+            // 以隐藏状态创建，等前端画出标题栏再显示，否则启动瞬间会先露出系统标题栏。
+            // 平台配置文件走 JSON Merge Patch，覆盖 windows 数组会整体替换，
+            // 因此装饰只在运行时按平台关掉。
+            #[cfg(windows)]
+            {
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.set_decorations(false);
+                }
+                let handle = app.handle().clone();
+                app.handle().listen(MAIN_UI_READY_EVENT, move |_event| {
+                    tray::show_main_window(&handle);
+                });
+                // 前端没走到就绪事件（脚本异常等）时兜底显示，避免窗口一直隐藏、
+                // 只能靠托盘菜单找回来。
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    if let Some(main) = handle.get_webview_window("main") {
+                        if !main.is_visible().unwrap_or(true) {
+                            let _ = main.show();
+                        }
+                    }
+                });
+            }
+
+            // macOS 保持 Overlay 原生标题栏（红绿灯与拖拽交给系统），窗口随启动显示。
+            #[cfg(not(windows))]
+            tray::show_main_window(app.handle());
 
             // 菜单栏图标与快速查看面板；关闭主窗口只隐藏，应用继续常驻。
             tray::setup(app.handle())?;
