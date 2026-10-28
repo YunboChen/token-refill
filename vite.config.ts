@@ -21,5 +21,18 @@ export default defineConfig({
   },
   build: {
     target: ['es2022', 'safari15'],
+    chunkSizeWarningLimit: 1000,
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'vendor',
+              test: /node_modules/,
+            },
+          ],
+        },
+      },
+    },
   },
 });
