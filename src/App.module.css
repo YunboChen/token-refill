@@ -1,4 +1,5 @@
-/* 壳层：纵向布局，顶部为跨平台自绘标题栏，主体为左侧边栏 + 右侧主内容区。 */
+/* 壳层：纵向布局。Windows 顶部是自绘标题栏；macOS 没有这一行，
+   直接由侧栏的红绿灯安全区承接原生标题栏。 */
 .app {
   display: flex;
   flex-direction: column;
@@ -8,8 +9,9 @@
   box-sizing: border-box;
 }
 
-/* 非最大化时为无边框窗口补充 1px 细边框，增强在不同壁纸下的轮廓立体感 */
-.app:not([data-maximized='true']) {
+/* Windows 无系统边框；非最大化时补 1px 细边框，增强不同壁纸下的轮廓立体感。
+   macOS 用原生窗口边框，不加内描边。 */
+.app[data-platform='windows']:not([data-maximized='true']) {
   border: 1px solid var(--border);
 }
 
@@ -30,6 +32,12 @@
   background: var(--surface);
 }
 
+/* macOS 原生 Overlay 标题栏：只留红绿灯所需高度，字标尽量上提；
+   整段作为窗口拖拽区。Windows 由 TitleBar 承担这一行，故该元素不渲染。 */
+.titlebarSafeArea {
+  flex-shrink: 0;
+  height: 44px;
+}
 
 /* 字标独立成行，位于红绿灯条下方；整组图标 + 文字使用同一张 lockup 图。 */
 /* 偏移 2px 让图中图标中心正对导航图标中心；
@@ -39,9 +47,14 @@
   width: calc(100% - 4px);
   max-width: 136px;
   height: auto;
-  margin: 14px 0 20px 4px;
+  margin: 2px 0 20px 4px;
   /* 深色下字标偏蓝、对比不足，整体提亮一档；滤镜值随主题变量切换 */
   filter: var(--wordmark-filter);
+}
+
+/* Windows 没有红绿灯安全区，字标与自绘标题栏之间留出一档呼吸 */
+.app[data-platform='windows'] .wordmark {
+  margin-top: 14px;
 }
 
 /* 侧边导航：每项 34px，选中项用一整块轻底色，不再让滑块跨越分组。 */
@@ -111,11 +124,31 @@
   border-top: 1px solid var(--border);
 }
 
+.versionGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .version {
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/* 测试版标记：只做轻量提示，不抢版本号的视觉权重。 */
+.testBadge {
+  flex: none;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 

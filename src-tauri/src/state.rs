@@ -1656,6 +1656,7 @@ impl StateStore {
     }
 
     fn notify_auth_expired(&self, notice: &AuthExpiredNotice) {
+        let fallback = format!("请打开 {} 重新授权。", self.app.package_info().name);
         let action = match (notice.platform.as_str(), notice.source) {
             ("codex", AccountSource::Local) => "请重新登录本机 Codex CLI 后再刷新。",
             (ANTIGRAVITY_PLATFORM, _) => "请先在终端重新运行 agy 完成登录后再刷新。",
@@ -1665,7 +1666,7 @@ impl StateStore {
             (OPENCODE_GO_PLATFORM | COMMAND_CODE_PLATFORM, _) => {
                 "请在账户页重新填写 API Key 后再刷新。"
             }
-            _ => "请打开 Token Refill 重新授权。",
+            _ => fallback.as_str(),
         };
         self.show_notification(
             "授权失效提醒",
@@ -2352,6 +2353,12 @@ impl StateStore {
         lock(&self.logins)
             .values()
             .any(|pending| pending.account_id == account_id)
+    }
+
+    /// 是否有等待中的浏览器授权。登录弹窗只存在于主窗口的前端内存里，
+    /// 空闲销毁 WebView 前必须排除这种情况，否则流程会失去界面。
+    pub fn has_active_login(&self) -> bool {
+        !lock(&self.logins).is_empty()
     }
 
     fn emit_login_event(

@@ -225,3 +225,4 @@
 | DEC-026 | 优先读取本机 CLI 登录态：OpenCode 使用 `opencode auth export`，Antigravity 先实际读取 `agy /usage`；检测成功自动接入，未检测到再走手动添加 | 用户明确要求先读 CLI 逻辑 | REQ-003、REQ-004；不直接解析 SQLite、钥匙串或浏览器 Cookie；本地 OpenCode 账户每次刷新重新读取 CLI 凭据 |
 | DEC-027 | 应用内更新采用 Tauri 官方 updater + minisign，下载与安装分两步由用户确认；只对 NSIS 安装版开放，免安装 Windows exe 保持发布页跳转；不做静默下载或静默安装 | 用户明确要求“直接下载并替换”，并确认两段式交互与便携版处理方式 | REQ-012；更新私钥只存 GitHub Secrets；ad-hoc 签名下更新后的权限状态与回滚策略仍需实测与明确 |
 | DEC-028 | 中转站扫描改为手动入口：扫描 cc-switch 保存的 provider（Claude Code / Codex）与 Claude Code / Codex 当前配置，只列候选、不联网、不自动登记；用户勾选确认后才查询额度并加入列表 | 用户要求改造 cc-switch 配置扫描，并确认“列出候选、勾选导入” | REQ-003、REQ-004；cc-switch 数据库只读打开，扫描到的密钥不复制到应用目录；导入后只保存来源引用，启动时重新读取源配置 |
+| DEC-029 | 标题栏按平台分治：macOS 保留 Overlay 原生标题栏，Windows 关闭系统装饰并由前端自绘标题栏，Windows 运行时在 `setup()` 中 `set_decorations(false)` | 用户明确要求 macOS 只用原生标题栏，新增自绘栏是为了 Windows 标题栏与界面一体化 | REQ-005、REQ-007；平台配置走 JSON Merge Patch 不能只覆盖单个窗口，故用运行时而非 `tauri.windows.conf.json`；自绘栏需实机验证 Windows 拖拽、缩放与贴靠布局 |

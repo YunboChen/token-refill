@@ -5,7 +5,6 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { version as appVersion } from '../../package.json';
 import {
   ArrowClockwise,
   ArrowSquareOut,
@@ -432,7 +431,7 @@ function latestUpdate(
 }
 
 export default function TrayPanel() {
-  const { state, ready, desktop, error, refresh, resync } = useAppState();
+  const { state, appInfo, ready, desktop, error, refresh, resync } = useAppState();
   const {
     accounts: relayAccounts,
     loaded: relayLoaded,
@@ -464,7 +463,7 @@ export default function TrayPanel() {
       account.products.some((product) => product.query.refreshing),
     );
 
-  // 打开面板时才读取中转站账户；面板常驻内存，事件监听只注册一次。
+  // 打开面板时才读取中转站账户；事件监听在本次窗口生命周期内只注册一次。
   const ensureLoadedRef = useRef(ensureLoaded);
   const reloadRef = useRef(reload);
   const resyncRef = useRef(resync);
@@ -479,6 +478,12 @@ export default function TrayPanel() {
   useEffect(() => {
     if (!desktop) return;
     ensureLoadedRef.current();
+
+    // 面板只在用户点开时才创建，挂载即代表第一次打开。这样即使加载完成
+    // 早于事件监听注册、错过了首个 `tray-panel-shown`，也不会漏掉首轮同步。
+    setOpened(true);
+    void resyncRef.current();
+    void refreshDueRef.current(refreshMinutesRef.current);
 
     let disposed = false;
     let unlisten: (() => void) | undefined;
@@ -575,7 +580,7 @@ export default function TrayPanel() {
     <div className={styles.panel}>
       <header className={styles.header}>
         <div className={styles.brand}>
-          <img className={styles.wordmark} src={wordmark} alt="Token Refill" />
+          <img className={styles.wordmark} src={wordmark} alt={appInfo?.name ?? 'Token Refill'} />
           <span className={styles.updated}>
             {accountCount > 0 ? `${accountCount} 个账户 · ` : ''}
             {updated !== null
@@ -727,7 +732,9 @@ export default function TrayPanel() {
       </div>
 
       <footer className={styles.footer}>
-        <span className={styles.version}>v{appVersion}</span>
+        <span className={styles.version}>
+          {appInfo ? `v${appInfo.version}` : 'v—'}
+        </span>
         <div className={styles.footerActions}>
           <button
             type="button"
@@ -742,8 +749,8 @@ export default function TrayPanel() {
             type="button"
             className={styles.quitButton}
             onClick={() => void quitApp()}
-            aria-label="退出 Token Refill"
-            title="退出 Token Refill"
+            aria-label={`退出 ${appInfo?.name ?? 'Token Refill'}`}
+            title={`退出 ${appInfo?.name ?? 'Token Refill'}`}
           >
             <Power size={14} aria-hidden />
             退出

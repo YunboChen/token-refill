@@ -1,11 +1,15 @@
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
 
+export type AppChannel = 'pro' | 'test';
+
 export interface AppInfo {
   name: string;
   version: string;
   platform: string;
   arch: string;
+  /** pro：正式版；test：独立标识的测试版。 */
+  channel: AppChannel;
 }
 
 export function getAppInfo(): Promise<AppInfo> {

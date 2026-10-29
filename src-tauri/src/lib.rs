@@ -1,6 +1,7 @@
 mod antigravity;
 mod api_key;
 mod bailian;
+mod channel;
 mod cli;
 mod codex;
 mod commandcode;
@@ -21,28 +22,48 @@ use std::process::Command;
 use std::sync::Arc;
 
 use serde::Serialize;
+#[cfg(windows)]
+use tauri::Listener;
 use tauri::{Emitter, Manager};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 use state::{LoginStartPayload, PersistedState, Preferences, StateStore};
 
+/// 前端首帧就绪（自绘标题栏已画出）。Windows 主窗口以隐藏状态创建，
+/// 收到该事件后再显示，避免 React 首绘前先露出约 1 秒的系统标题栏。
+#[cfg(windows)]
+const MAIN_UI_READY_EVENT: &str = "main-ui-ready";
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppInfo {
-    name: &'static str,
-    version: &'static str,
+    name: String,
+    version: String,
     platform: &'static str,
     arch: &'static str,
+    channel: &'static str,
+}
+
+/// 应用名与版本来自合并后的 `tauri.conf.json`（测试渠道由 `--config` 覆盖），
+/// 渠道由 identifier 后缀判定，前端不再按 package.json 展示版本。
+fn compose_app_info(name: String, version: String, channel: channel::Channel) -> AppInfo {
+    AppInfo {
+        name,
+        version,
+        platform: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        channel: channel.as_str(),
+    }
 }
 
 #[tauri::command]
-fn get_app_info() -> AppInfo {
-    AppInfo {
-        name: "Token Refill",
-        version: env!("CARGO_PKG_VERSION"),
-        platform: std::env::consts::OS,
-        arch: std::env::consts::ARCH,
-    }
+fn get_app_info(app: tauri::AppHandle) -> AppInfo {
+    let info = app.package_info();
+    compose_app_info(
+        info.name.clone(),
+        info.version.to_string(),
+        channel::of(&app),
+    )
 }
 
 /// 返回脱敏的完整状态；前端首次打开窗口或重连时以此为准。
@@ -189,11 +210,8 @@ fn set_auto_launch(
 async fn send_test_notification(app: tauri::AppHandle) -> Result<(), String> {
     // 查询授权状态会等系统回调，放到阻塞线程，避免卡住界面。
     tauri::async_runtime::spawn_blocking(move || {
-        notification::send(
-            &app,
-            "Token Refill · 测试通知",
-            "如果你看到这条通知，说明系统通知已经可用。",
-        )
+        let title = format!("{} · 测试通知", app.package_info().name);
+        notification::send(&app, &title, "如果你看到这条通知，说明系统通知已经可用。")
     })
     .await
     .map_err(|err| format!("发送测试通知失败：{err}"))?
@@ -260,8 +278,8 @@ fn open_in_browser(url: &str) -> Result<(), String> {
 /// 查询 GitHub Releases 的最新正式版本；只比较版本与返回下载页，不下载文件。
 /// 网络请求是阻塞的，放到专用线程，避免占用 IPC 处理线程。
 #[tauri::command]
-async fn check_for_update() -> Result<update::UpdateStatus, String> {
-    tauri::async_runtime::spawn_blocking(update::check_for_update)
+async fn check_for_update(app: tauri::AppHandle) -> Result<update::UpdateStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || update::check_for_update(&app))
         .await
         .map_err(|err| format!("检查更新失败：{err}"))?
 }
@@ -376,12 +394,10 @@ fn open_main_window(app: tauri::AppHandle) {
     tray::show_main_window(&app);
 }
 
-/// 面板按 Esc 收起；隐藏而不是销毁，保持已加载的状态与订阅。
+/// 面板按 Esc 收起；隐藏后进入空闲销毁倒计时，再次打开时按需重建。
 #[tauri::command]
 fn hide_tray_panel(app: tauri::AppHandle) {
-    if let Some(panel) = app.get_webview_window(tray::PANEL_LABEL) {
-        let _ = panel.hide();
-    }
+    tray::hide_panel(&app);
 }
 
 /// 菜单栏面板里的明确退出入口；RunEvent::Exit 负责让调度器停止。
@@ -424,6 +440,15 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             fs::create_dir_all(&data_dir)?;
+
+            // 窗口标题来自合并后的 productName：正式版与测试版各自显示自己的名称。
+            let app_name = app.package_info().name.clone();
+            for label in ["main", tray::PANEL_LABEL] {
+                if let Some(window) = app.get_webview_window(label) {
+                    let _ = window.set_title(&app_name);
+                }
+            }
+
             let store = Arc::new(StateStore::load(
                 app.handle().clone(),
                 data_dir.join("state.json"),
@@ -442,6 +467,36 @@ pub fn run() {
 
             // macOS 在启动时申请通知授权，避免首次提醒才弹授权框。
             notification::prepare();
+
+            // Windows 使用前端自绘标题栏，需要去掉系统边框与标题按钮；主窗口在配置里
+            // 以隐藏状态创建，等前端画出标题栏再显示，否则启动瞬间会先露出系统标题栏。
+            // 平台配置文件走 JSON Merge Patch，覆盖 windows 数组会整体替换，
+            // 因此装饰只在运行时按平台关掉。
+            #[cfg(windows)]
+            {
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.set_decorations(false);
+                }
+                let handle = app.handle().clone();
+                app.handle().listen(MAIN_UI_READY_EVENT, move |_event| {
+                    tray::show_main_window(&handle);
+                });
+                // 前端没走到就绪事件（脚本异常等）时兜底显示，避免窗口一直隐藏、
+                // 只能靠托盘菜单找回来。
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    if let Some(main) = handle.get_webview_window("main") {
+                        if !main.is_visible().unwrap_or(true) {
+                            let _ = main.show();
+                        }
+                    }
+                });
+            }
+
+            // macOS 保持 Overlay 原生标题栏（红绿灯与拖拽交给系统），窗口随启动显示。
+            #[cfg(not(windows))]
+            tray::show_main_window(app.handle());
 
             // 菜单栏图标与快速查看面板；关闭主窗口只隐藏，应用继续常驻。
             tray::setup(app.handle())?;
@@ -482,13 +537,21 @@ pub fn run() {
             quit_app
         ])
         .build(tauri::generate_context!())
-        .expect("failed to build Token Refill");
+        .expect("failed to build the application");
 
     app.run(|app_handle, event| match event {
         // 从 Finder、Spotlight 等重新打开应用时，把被“关闭”（实际是隐藏）的
         // 管理窗口带回来。Dock 图标在窗口隐藏期间不显示，不会触发这里。
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen { .. } => tray::show_main_window(app_handle),
+        // 菜单栏应用常驻：最后一个窗口按空闲策略销毁时系统会请求退出
+        // （code 为 None），必须拦住。主窗口还在时的用户退出（如 Cmd+Q）
+        // 保持原行为；显式退出走 app.exit(0)，code 为 Some，照常放行。
+        tauri::RunEvent::ExitRequested { api, code, .. } => {
+            if code.is_none() && app_handle.webview_windows().is_empty() {
+                api.prevent_exit();
+            }
+        }
         // 退出时让调度器停止发起新任务；在途查询随后随进程结束。
         tauri::RunEvent::Exit => {
             app_handle.state::<Arc<StateStore>>().shutdown();
@@ -499,15 +562,29 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::get_app_info;
+    use super::compose_app_info;
+    use crate::channel::Channel;
 
     #[test]
-    fn app_info_reports_the_current_build_and_target() {
-        let info = get_app_info();
+    fn app_info_reports_the_merged_config_and_channel() {
+        let pro = compose_app_info(
+            "Token Refill".to_string(),
+            "0.2.6".to_string(),
+            Channel::Pro,
+        );
+        assert_eq!(pro.name, "Token Refill");
+        assert_eq!(pro.version, "0.2.6");
+        assert_eq!(pro.channel, "pro");
+        assert_eq!(pro.platform, std::env::consts::OS);
+        assert_eq!(pro.arch, std::env::consts::ARCH);
 
-        assert_eq!(info.name, "Token Refill");
-        assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(info.platform, std::env::consts::OS);
-        assert_eq!(info.arch, std::env::consts::ARCH);
+        let test = compose_app_info(
+            "Token Refill Test".to_string(),
+            "0.2.6-test.g1b2c3d".to_string(),
+            Channel::Test,
+        );
+        assert_eq!(test.name, "Token Refill Test");
+        assert_eq!(test.version, "0.2.6-test.g1b2c3d");
+        assert_eq!(test.channel, "test");
     }
 }

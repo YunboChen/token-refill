@@ -1,37 +1,59 @@
 import { useEffect, useState, type MouseEvent } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import logoIcon from '../assets/logo.png';
 import styles from './TitleBar.module.css';
 
+/* 主窗口在 Rust 侧以隐藏状态创建（见 lib.rs setup），标题栏画出后由这里通知显示。
+   窗口还隐藏时 rAF 可能被节流，另留定时器兜底，保证窗口一定会出现。 */
+const UI_READY_EVENT = 'main-ui-ready';
+const UI_READY_FALLBACK_MS = 200;
+
 export interface TitleBarProps {
-  platform: string | null;
   title?: string;
   onMaximizedChange?: (maximized: boolean) => void;
 }
 
-export default function TitleBar({ platform, title = 'Token Refill', onMaximizedChange }: TitleBarProps) {
+/* Windows 专用自绘标题栏：窗口在 Rust 侧关闭系统装饰，最小化/最大化/关闭
+   与拖拽都由这里承担。macOS 继续使用 Overlay 原生标题栏，不渲染本组件。 */
+export default function TitleBar({ title = 'Token Refill', onMaximizedChange }: TitleBarProps) {
   const [isMaximized, setIsMaximized] = useState(false);
   const desktop = isTauri();
 
-  // 若平台尚未获取到，根据用户环境平滑兜底
-  const isMac = platform
-    ? platform === 'macos' || platform === 'darwin'
-    : typeof navigator !== 'undefined' && /Macintosh|Mac OS X/i.test(navigator.userAgent);
+  // 首帧渲染完成后告诉 Rust 侧可以显示窗口；只发一次，重复发送无副作用但没必要。
+  useEffect(() => {
+    if (!desktop) return;
+    let sent = false;
+    const notifyReady = () => {
+      if (sent) return;
+      sent = true;
+      void emit(UI_READY_EVENT).catch(() => {
+        // 显示窗口失败时 Rust 侧还有超时兜底，这里不打断界面。
+      });
+    };
+    const frame = window.requestAnimationFrame(() =>
+      window.requestAnimationFrame(notifyReady),
+    );
+    const timer = window.setTimeout(notifyReady, UI_READY_FALLBACK_MS);
+    // 不在卸载时补发：StrictMode 在开发模式下会挂载两次，提前显示会让窗口先空一帧。
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [desktop]);
 
   useEffect(() => {
     if (!desktop) return;
+    let disposed = false;
     let unlisten: (() => void) | undefined;
-    let mounted = true;
 
     const syncMaximized = async () => {
       try {
-        const appWindow = getCurrentWindow();
-        const max = await appWindow.isMaximized();
-        if (mounted) {
-          setIsMaximized(max);
-          onMaximizedChange?.(max);
-        }
+        const max = await getCurrentWindow().isMaximized();
+        if (disposed) return;
+        setIsMaximized(max);
+        onMaximizedChange?.(max);
       } catch {
         // 忽略非桌面或初始化未就绪的情况
       }
@@ -43,15 +65,18 @@ export default function TitleBar({ platform, title = 'Token Refill', onMaximized
     appWindow
       .onResized(syncMaximized)
       .then((fn) => {
-        unlisten = fn;
+        // 组件在订阅返回前卸载时立刻退订，避免监听泄漏。
+        if (disposed) fn();
+        else unlisten = fn;
       })
       .catch(() => {
+        if (disposed) return;
         window.addEventListener('resize', syncMaximized);
         unlisten = () => window.removeEventListener('resize', syncMaximized);
       });
 
     return () => {
-      mounted = false;
+      disposed = true;
       unlisten?.();
     };
   }, [desktop, onMaximizedChange]);
@@ -90,70 +115,8 @@ export default function TitleBar({ platform, title = 'Token Refill', onMaximized
     }
   };
 
-  if (isMac) {
-    return (
-      <header className={styles.titleBar} data-platform="macos" role="banner">
-        <div className={styles.macControls}>
-          <button
-            type="button"
-            className={`${styles.macButton} ${styles.macClose}`}
-            onClick={handleClose}
-            title="关闭"
-            aria-label="关闭"
-          >
-            <svg width="6" height="6" viewBox="0 0 6 6" aria-hidden="true">
-              <line x1="0.7" y1="0.7" x2="5.3" y2="5.3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-              <line x1="5.3" y1="0.7" x2="0.7" y2="5.3" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className={`${styles.macButton} ${styles.macMinimize}`}
-            onClick={handleMinimize}
-            title="最小化"
-            aria-label="最小化"
-          >
-            <svg width="6" height="2" viewBox="0 0 6 2" aria-hidden="true">
-              <line x1="0.5" y1="1" x2="5.5" y2="1" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className={`${styles.macButton} ${styles.macMaximize}`}
-            onClick={handleToggleMaximize}
-            title={isMaximized ? '还原' : '全屏'}
-            aria-label={isMaximized ? '还原' : '全屏'}
-          >
-            <svg width="6" height="6" viewBox="0 0 6 6" aria-hidden="true">
-              <path
-                d="M1 5L5 1M1 2.6V5H3.4M2.6 1H5V3.4"
-                stroke="currentColor"
-                strokeWidth="0.9"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                fill="none"
-              />
-            </svg>
-          </button>
-        </div>
-
-        <div
-          className={`${styles.dragArea} ${styles.macCenter}`}
-          data-tauri-drag-region
-          onDoubleClick={handleToggleMaximize}
-        >
-          <span className={styles.macTitle} data-tauri-drag-region>
-            {title}
-          </span>
-        </div>
-
-        <div className={styles.macRightSpacer} aria-hidden="true" />
-      </header>
-    );
-  }
-
   return (
-    <header className={styles.titleBar} data-platform="windows" role="banner">
+    <header className={styles.titleBar} role="banner">
       <div
         className={styles.brand}
         data-tauri-drag-region
