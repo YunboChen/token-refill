@@ -224,6 +224,19 @@ cargo tauri signer generate -w ~/.tauri/token-refill.key
 
 把输出的公钥填入 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`，把私钥文件内容与密码分别存为仓库 Secrets `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。私钥丢失后无法再给已发布版本推送更新，只能换公钥并让用户手动重装一次，因此务必离线备份。更新清单本身不签名，但每个更新包都由私钥签名，客户端会先校验再安装。
 
+### 测试版构建
+
+需要在不发版的情况下验证某个分支时，用 [.github/workflows/build-test.yml](./.github/workflows/build-test.yml)：在 Actions 页面手动触发 `build-test`，用 `ref` 输入指定要构建的分支、tag 或提交（默认 `dev`），并可只构建 macOS 或 Windows。
+
+GitHub 只为**默认分支**（本仓库是 `main`）上的工作流文件登记手动触发入口，所以这个文件需要存在于 `main`；要构建的分支由 `ref` 指定，业务代码不必合入 `main`，目标分支本身也不需要包含该文件。
+
+- 只产出 workflow artifact（在本次运行的 Artifacts 区下载），**不创建 Release、不打 tag**，不会覆盖已发布版本；产物保留 14 天。
+- 检查与打包步骤和正式发布一致，版本号保持当前值、不在构建时改写。
+- 产物名带短提交 SHA（如 `Token.Refill_0.2.1-f4296bf_arm64.dmg`），多个测试包下载到同一目录不会互相覆盖；应用内显示的仍是不带 SHA 的版本号，需要靠文件名区分是哪一个提交。
+- 签名状态与正式包相同：macOS ad-hoc 签名未公证、Windows 未签名，首次打开的限制见下一节。
+
+不要用 `release` workflow 的手动触发打测试包——那条路径会直接发布 Release。
+
 ### 签名状态
 
 当前未接入 Apple Developer 证书，产物是 ad-hoc 签名、未公证，其他 Mac 首次打开会提示"无法验证开发者"。可以右键 →「打开」，或先移除隔离属性：

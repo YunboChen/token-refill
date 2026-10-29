@@ -80,6 +80,7 @@
   - 应用内更新清单 `latest.json`：由 publish job 生成，按 `darwin-aarch64` / `darwin-x86_64` / `windows-x86_64` 写入下载地址与签名
 - 应用内更新的 minisign 私钥存放在 GitHub Secrets（`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`），不进仓库、不写日志；`createUpdaterArtifacts` 只在 CI 用 `--config` 打开，本地构建不依赖私钥。私钥丢失只能换公钥并要求用户手动重装，发布前确认已离线备份。
 - Release 构建成功后直接发布（`draft: false`），不设草稿确认环节；推送 `main` 前必须自行确认版本号、产物与签名状态，发布即对用户可见。
+- 测试包走 `.github/workflows/build-test.yml`（手动触发，用 `ref` 输入选择任意分支与平台），只上传 workflow artifact，不创建 Release、不打 tag、不改版本号；验证分支不必先合入 `main`，也不得用 `release.yml` 的手动触发代替测试构建。GitHub 只为默认分支（`main`）登记手动触发入口，该工作流文件需保留在 `main` 上；目标分支靠 `ref` 指定，因此不必包含该文件。
 - 版本检查只做「比较 + 提示」；应用内更新由用户分别确认下载与安装，更新包经 minisign 校验后才替换。不做后台静默安装，也没有自动回滚：更新出问题只能发新版本或让用户手动重装。
 
 ## 6. 开发与验证
