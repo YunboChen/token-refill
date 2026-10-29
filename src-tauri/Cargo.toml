@@ -1,6 +1,6 @@
 [package]
 name = "token-refill"
-version = "0.3.1"
+version = "0.3.2"
 license = "MIT"
 description = "A local desktop companion for AI subscription usage"
 edition = "2021"
