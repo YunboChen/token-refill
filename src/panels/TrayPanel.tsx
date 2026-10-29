@@ -27,6 +27,7 @@ import {
 import { THEME_OPTIONS, type ThemePref } from '../lib/prefs';
 import { applyTheme } from '../lib/theme';
 import {
+  groupLabel,
   planTierLabel,
   quotaWindowLabel,
   relativeUpdateLabel,
@@ -49,6 +50,7 @@ import styles from './TrayPanel.module.css';
 interface QuotaRow {
   key: string;
   label: string;
+  groupName: string | null;
   eyebrow: string | null;
   percent: number | null;
   meta: string[];
@@ -101,18 +103,26 @@ function accountRows(
   const rows: QuotaRow[] = [];
 
   account.products.forEach((product) => {
-    // 多套餐账户（如百炼）在每类套餐的第一行标注套餐名。
+    // 多套餐账户（如百炼）在每类套餐的第一行标注套餐名；单套餐多分组账户（如 Antigravity）在每组第一行标注组名。
     let productLead = multipleProducts;
     const groups = (product.snapshot?.groups ?? []).filter(
       (group) => group.windows.length > 0,
     );
+    const multipleGroups = groups.length > 1;
     groups.forEach((group, groupIndex) => {
+      let groupLead = multipleGroups;
       group.windows.forEach((window) => {
         const percent = window.remainingPercent;
+        const currentGroup = groupLabel(group.limitName);
+        const eyebrowParts = [
+          productLead ? product.displayName : null,
+          groupLead ? currentGroup : null,
+        ].filter(Boolean);
         rows.push({
           key: `${product.productId}-${groupIndex}-${window.windowId}`,
           label: quotaWindowLabel(window.windowDurationMins, window.windowName),
-          eyebrow: productLead ? product.displayName : null,
+          groupName: currentGroup,
+          eyebrow: eyebrowParts.length > 0 ? eyebrowParts.join(' · ') : null,
           percent,
           meta: [amountText(window), resetLabel(window.resetsAtEpoch)].filter(
             (part): part is string => part !== null,
@@ -120,6 +130,7 @@ function accountRows(
           low: lowQuotaEnabled && percent !== null && percent <= threshold,
         });
         productLead = false;
+        groupLead = false;
       });
     });
   });
@@ -134,16 +145,16 @@ function QuotaMeter({
   account: AccountState;
   row: QuotaRow;
 }) {
+  const fullLabel = row.groupName ? `${row.groupName} · ${row.label}` : row.label;
   return (
     <div className={styles.quotaRow} data-low={row.low || undefined}>
-      <span className={styles.quotaLabel} title={row.label}>
+      <span className={styles.quotaLabel} title={fullLabel}>
         {row.label}
       </span>
       <div
         className={styles.bar}
         role="progressbar"
-        aria-label={`${account.displayName} ${row.label}剩余比例`}
-        aria-valuemin={0}
+        aria-label={`${account.displayName} ${fullLabel}剩余比例`}
         aria-valuemax={100}
         aria-valuenow={
           row.percent !== null ? Math.round(row.percent) : undefined

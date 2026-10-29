@@ -456,11 +456,11 @@ fn show_main_window_now(app: &AppHandle) {
     }
 }
 
-fn show_main_now(app: &AppHandle, window: &WebviewWindow) {
+fn show_main_now(_app: &AppHandle, window: &WebviewWindow) {
     #[cfg(target_os = "macos")]
     {
-        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
-        let _ = app.show();
+        let _ = _app.set_activation_policy(tauri::ActivationPolicy::Regular);
+        let _ = _app.show();
     }
     let _ = window.unminimize();
     let _ = window.show();

@@ -17,6 +17,7 @@ import { groupAccountsByPlatform } from '../lib/platforms';
 import {
   clockLabel,
   compactQuotaWindowLabel,
+  groupLabel,
   planTierLabel,
   quotaWindowLabel,
   resetLabel,
@@ -106,8 +107,29 @@ function accountSummary(account: AccountState): string {
       )
       .join(' · ');
 
-  // 单套餐账户不重复套餐名，直接列出各窗口（如 Codex 的 5 小时 / 周）。
+  // 单套餐单分组账户不重复套餐名，直接列出各窗口（如 Codex 的 5 小时 / 周）。
   if (account.products.length === 1) {
+    const groups = (account.products[0].snapshot?.groups ?? []).filter(
+      (group) => group.windows.some((w) => w.remainingPercent !== null),
+    );
+    // 单套餐多分组（如 Antigravity 的 Gemini / Claude 模型分组）：按组展示紧凑摘要
+    if (groups.length > 1) {
+      return groups
+        .map((group) => {
+          const validWindows = group.windows.filter(
+            (w): w is QuotaWindow & { remainingPercent: number } =>
+              w.remainingPercent !== null,
+          );
+          if (validWindows.length === 0) return null;
+          const tightest = validWindows.reduce((lowest, w) =>
+            w.remainingPercent < lowest.remainingPercent ? w : lowest,
+          );
+          const name = groupLabel(group.limitName) || '额度';
+          return `${name} ${windowSummary([tightest])}`;
+        })
+        .filter(Boolean)
+        .join(' | ');
+    }
     return windowSummary(products[0].windows);
   }
 
@@ -341,7 +363,7 @@ function AccountBody({
               usedAmount !== null || metrics.entries.length > 2;
             const eyebrowParts = [
               entry.productLead ? product.displayName : null,
-              entry.groupLead ? group.limitName : null,
+              entry.groupLead ? groupLabel(group.limitName) : null,
             ].filter(
               (part, index, list): part is string =>
                 Boolean(part) && list.indexOf(part) === index,

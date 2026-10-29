@@ -9,14 +9,60 @@ export function durationLabel(mins: number | null): string {
   return `${Math.round(mins / 1440)} 天`;
 }
 
+/** 规范化窗口名称：将英文周期名或带“窗口”后缀的名称转换为统一中文名。 */
+export function normalizeWindowName(
+  name: string | null = null,
+  mins: number | null = null,
+): string | null {
+  if (!name) {
+    if (mins === 300) return '5 小时';
+    if (mins === 10080) return '1 周';
+    return null;
+  }
+  const lower = name.toLowerCase();
+  if (
+    lower.includes('five')
+    || lower.includes('5h')
+    || name.startsWith('5 小时')
+    || name.startsWith('5小时')
+  ) {
+    return '5 小时';
+  }
+  if (
+    lower.includes('week')
+    || name.startsWith('1 周')
+    || name.startsWith('1周')
+    || name === '周'
+  ) {
+    return '1 周';
+  }
+  if (lower.includes('month') || name.includes('月')) {
+    return '订阅月';
+  }
+  if (lower.includes('day') || name.includes('天') || name.includes('日')) {
+    return '1 天';
+  }
+  return name.replace(/(?:窗口|额度)$/, '');
+}
+
+/** 平台模型分组显示名称（如 Antigravity 下的 Gemini / Claude 模型分组）。 */
+export function groupLabel(name: string | null | undefined): string | null {
+  if (!name) return null;
+  const trimmed = name.trim();
+  if (/^gemini\s+models$/i.test(trimmed)) return 'Gemini 模型';
+  if (/^claude\s+and\s+gpt\s+models$/i.test(trimmed)) return 'Claude 与 GPT 模型';
+  return trimmed;
+}
+
 /** 总览的窗口标题：「订阅月」统一称「月额度」。 */
 export function quotaWindowLabel(
   mins: number | null,
   name: string | null = null,
 ): string {
-  if (name) {
+  const normalized = normalizeWindowName(name, mins);
+  if (normalized) {
     // 「订阅月」与其它窗口统一成「月额度」，不再保留「订阅」二字。
-    return name === '订阅月' ? '月额度' : `${name}额度`;
+    return normalized === '订阅月' ? '月额度' : `${normalized}额度`;
   }
   const duration = durationLabel(mins);
   return duration ? `${duration}额度` : '额度';
@@ -24,9 +70,13 @@ export function quotaWindowLabel(
 
 /** 折叠行里的窗口名更短：1 周写作「周」，订阅月写作「月」。 */
 export function compactQuotaWindowLabel(window: QuotaWindow): string {
-  if (window.windowName) {
-    if (window.windowName === '订阅月') return '月';
-    return window.windowName.replace(/^1\s*周$/, '周');
+  const normalized = normalizeWindowName(
+    window.windowName,
+    window.windowDurationMins,
+  );
+  if (normalized) {
+    if (normalized === '订阅月' || normalized === '月') return '月';
+    return normalized.replace(/^1\s*周$/, '周');
   }
   if (window.windowDurationMins === 10080) return '周';
   return durationLabel(window.windowDurationMins) || '额度';
