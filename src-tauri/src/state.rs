@@ -1249,6 +1249,7 @@ fn low_quota_notices(state: &mut PersistedState, account_id: &str) -> Vec<LowQuo
             let Some(snapshot) = &product.snapshot else {
                 continue;
             };
+            let multi_group = snapshot.groups.len() > 1;
             for group in &snapshot.groups {
                 for window in &group.windows {
                     let Some(remaining) = window.remaining_percent else {
@@ -1260,6 +1261,12 @@ fn low_quota_notices(state: &mut PersistedState, account_id: &str) -> Vec<LowQuo
                         .unwrap_or_else(|| window_label(window.window_duration_mins));
                     let label = if multi_product {
                         format!("{} · {base_label}", product.display_name)
+                    } else if multi_group {
+                        if let Some(group_name) = &group.limit_name {
+                            format!("{group_name} · {base_label}")
+                        } else {
+                            base_label
+                        }
                     } else {
                         base_label
                     };

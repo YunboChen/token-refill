@@ -407,10 +407,10 @@ fn parse_usage(text: &str, checked_at_epoch: i64) -> Result<AntigravityUsage, Pr
                 .or_else(|| text_field(bucket, "bucketId"))
                 .or_else(|| text_field(bucket, "id"))
                 .unwrap_or_else(|| format!("{group_index}-{index}"));
-            let window_name = text_field(bucket, "display_name")
+            let raw_name = text_field(bucket, "display_name")
                 .or_else(|| text_field(bucket, "displayName"))
-                .or_else(|| text_field(bucket, "name"))
-                .unwrap_or_else(|| window_label(window.as_deref()));
+                .or_else(|| text_field(bucket, "name"));
+            let window_name = normalize_window_name(raw_name.as_deref(), window.as_deref());
             let fraction = fraction(bucket.get("remaining_fraction"))
                 .or_else(|| fraction(bucket.get("remainingFraction")))
                 .or_else(|| {
@@ -428,7 +428,8 @@ fn parse_usage(text: &str, checked_at_epoch: i64) -> Result<AntigravityUsage, Pr
             windows.push(AntigravityWindow {
                 source_id,
                 name: window_name,
-                window_duration_mins: window_duration(window.as_deref()),
+                window_duration_mins: window_duration(window.as_deref())
+                    .or_else(|| window_duration(raw_name.as_deref())),
                 remaining_percent,
                 resets_at_epoch,
             });
@@ -482,11 +483,42 @@ fn window_duration(window: Option<&str>) -> Option<i64> {
     }
 }
 
+fn normalize_window_name(raw: Option<&str>, window: Option<&str>) -> String {
+    let duration = window_duration(window).or_else(|| window_duration(raw));
+    match duration {
+        Some(300) => "5 小时".to_string(),
+        Some(10080) => "1 周".to_string(),
+        Some(1440) => "1 天".to_string(),
+        _ => {
+            if let Some(text) = raw {
+                if text.chars().any(|c| c > '\u{7f}') {
+                    return text.to_string();
+                }
+                let lower = text.to_ascii_lowercase();
+                if lower.contains("five") || lower.contains("5h") {
+                    return "5 小时".to_string();
+                }
+                if lower.contains("week") {
+                    return "1 周".to_string();
+                }
+                if lower.contains("day") {
+                    return "1 天".to_string();
+                }
+                if lower.contains("month") {
+                    return "订阅月".to_string();
+                }
+            }
+            window_label(window)
+        }
+    }
+}
+
 fn window_label(window: Option<&str>) -> String {
     match window_duration(window) {
-        Some(300) => "5 小时窗口".to_string(),
-        Some(10080) => "1 周窗口".to_string(),
-        _ => "额度窗口".to_string(),
+        Some(300) => "5 小时".to_string(),
+        Some(10080) => "1 周".to_string(),
+        Some(1440) => "1 天".to_string(),
+        _ => "额度".to_string(),
     }
 }
 
@@ -521,8 +553,10 @@ mod tests {
         assert_eq!(usage.plan_tier.as_deref(), Some("Pro"));
         assert_eq!(usage.groups.len(), 1);
         let windows = &usage.groups[0].windows;
+        assert_eq!(windows[0].name, "5 小时");
         assert_eq!(windows[0].remaining_percent, Some(75));
         assert_eq!(windows[0].window_duration_mins, Some(300));
+        assert_eq!(windows[1].name, "1 周");
         assert_eq!(windows[1].remaining_percent, Some(50));
         assert_eq!(windows[1].window_duration_mins, Some(10080));
     }
@@ -544,6 +578,42 @@ mod tests {
             usage.groups[0].windows[0].resets_at_epoch,
             Some(1_780_000_000)
         );
+    }
+
+    #[test]
+    fn localizes_native_english_bucket_names() {
+        let payload = r#"{
+            "status": "SUCCESS",
+            "command": {
+                "name": "usage",
+                "data": {
+                    "groups": [
+                        {
+                            "name": "Gemini Models",
+                            "buckets": [
+                                { "id": "gemini-weekly", "name": "Weekly Limit Remaining", "window": "weekly", "remaining_fraction": 0.91, "reset_time": "2026-11-04T02:40:48Z" },
+                                { "id": "gemini-5h", "name": "Five Hour Limit Remaining", "window": "5h", "remaining_fraction": 0.84, "reset_time": "2026-10-29T07:25:39Z" }
+                            ]
+                        },
+                        {
+                            "name": "Gemini 4 Argon",
+                            "buckets": [
+                                { "id": "gemini-argon-wtu-weekly", "name": "Gemini 4 Argon Weekly Limit", "window": "weekly", "remaining_fraction": 1.0, "reset_time": "2026-11-05T03:43:11Z" }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }"#;
+
+        let usage = parse_usage(payload, 1).unwrap();
+        assert_eq!(usage.groups.len(), 2);
+        assert_eq!(usage.groups[0].windows[0].name, "1 周");
+        assert_eq!(usage.groups[0].windows[0].window_duration_mins, Some(10080));
+        assert_eq!(usage.groups[0].windows[1].name, "5 小时");
+        assert_eq!(usage.groups[0].windows[1].window_duration_mins, Some(300));
+        assert_eq!(usage.groups[1].windows[0].name, "1 周");
+        assert_eq!(usage.groups[1].windows[0].window_duration_mins, Some(10080));
     }
 
     #[test]
