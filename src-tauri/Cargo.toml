@@ -45,6 +45,8 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSScreen", "NSWindow"] }
 objc2-foundation = "0.3"
 objc2-user-notifications = "0.3"
+# 快速面板使用非激活 NSPanel，覆盖其他应用的全屏空间；仅 Rust 侧调用。
+tauri-nspanel = "=2.1.1"
 
 # 打开授权链接直接调 ShellExecuteW，避免经 cmd.exe 解析 URL 里的 & 等字符。
 [target.'cfg(windows)'.dependencies]
