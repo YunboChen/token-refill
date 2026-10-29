@@ -27,6 +27,9 @@ use tauri::{
 use crate::state::StateStore;
 use crate::update::UpdateStore;
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 pub const MAIN_LABEL: &str = "main";
 pub const PANEL_LABEL: &str = "tray-panel";
 /// 面板打开后广播给前端，用于按刷新间隔补查中转站额度。
@@ -266,6 +269,14 @@ fn create_panel(app: &AppHandle) -> Option<WebviewWindow> {
         }
     };
 
+    #[cfg(target_os = "macos")]
+    if let Err(err) = macos::prepare(&panel) {
+        PANEL_LOADING.store(false, Ordering::SeqCst);
+        let _ = panel.destroy();
+        eprintln!("[window] 创建原生快速面板失败：{err}");
+        return None;
+    }
+
     attach_panel_handlers(&panel);
     start_load_fallback(app, &panel, generation);
     Some(panel)
@@ -315,9 +326,31 @@ fn show_panel_now(app: &AppHandle, panel: &WebviewWindow, rect: Rect) {
         place_panel_generic(app, panel, &rect);
     }
 
-    let _ = panel.show();
-    let _ = panel.set_focus();
+    #[cfg(target_os = "macos")]
+    if macos::show(panel).is_err() {
+        eprintln!("[window] 显示原生快速面板失败：窗口尚未注册");
+        return;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = panel.show();
+        let _ = panel.set_focus();
+    }
     let _ = app.emit(PANEL_SHOWN_EVENT, ());
+}
+
+/// 面板跨桌面空间显示，并允许覆盖其他应用的全屏空间；保留无关窗口行为。
+#[cfg(target_os = "macos")]
+fn panel_collection_behavior(
+    mut behavior: objc2_app_kit::NSWindowCollectionBehavior,
+) -> objc2_app_kit::NSWindowCollectionBehavior {
+    use objc2_app_kit::NSWindowCollectionBehavior as Behavior;
+
+    behavior.remove(
+        Behavior::MoveToActiveSpace | Behavior::FullScreenPrimary | Behavior::FullScreenNone,
+    );
+    behavior.insert(Behavior::CanJoinAllSpaces | Behavior::FullScreenAuxiliary);
+    behavior
 }
 
 /// macOS：以鼠标位置所在屏幕为基准，面板贴在菜单栏下方、水平对齐菜单栏图标。
@@ -332,6 +365,12 @@ fn place_panel_on_macos(panel: &tauri::WebviewWindow) -> tauri::Result<bool> {
     let Some(mtm) = MainThreadMarker::new() else {
         return Ok(false);
     };
+
+    let pointer = panel.ns_window()? as *mut NSWindow;
+    // SAFETY: 已确认当前在主线程，`ns_window` 返回由 panel 持有的有效窗口指针。
+    let window = unsafe { &*pointer };
+    // 仅置顶不能进入其他应用的全屏空间；必须在显示和聚焦前配置空间行为。
+    window.setCollectionBehavior(panel_collection_behavior(window.collectionBehavior()));
 
     let mouse = NSEvent::mouseLocation();
     let screens = NSScreen::screens(mtm);
@@ -356,9 +395,6 @@ fn place_panel_on_macos(panel: &tauri::WebviewWindow) -> tauri::Result<bool> {
     // 屏幕特别矮时面板会向下溢出，但顶边仍需贴着菜单栏。
     let top = visible.origin.y + visible.size.height - PANEL_GAP;
 
-    let pointer = panel.ns_window()? as *mut NSWindow;
-    // SAFETY: 托盘事件在主线程触发，`ns_window` 返回当前窗口的 NSWindow 指针。
-    let window = unsafe { &*pointer };
     window.setFrameTopLeftPoint(NSPoint::new(x, top));
     Ok(true)
 }
@@ -640,6 +676,10 @@ fn destroy_idle_window(app: &AppHandle, label: &'static str) -> bool {
         if let Some(window) = app_for_task.get_webview_window(label) {
             if !window.is_visible().unwrap_or(false) {
                 eprintln!("[window] 销毁空闲窗口 {label}");
+                #[cfg(target_os = "macos")]
+                if label == PANEL_LABEL {
+                    macos::restore(&window);
+                }
                 let _ = window.destroy();
             }
         }
@@ -671,6 +711,9 @@ fn cursor_rect(app: &AppHandle) -> Rect {
 }
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    app.plugin(tauri_nspanel::init())?;
+
     // 关闭主窗口只隐藏：应用继续在菜单栏驻留并后台刷新；隐藏满 60 秒后
     // 销毁 WebView，下次打开时重建。macOS 同时退成附件形态，Dock 图标、
     // Cmd+Tab 与应用菜单栏一并消失，只留菜单栏图标。
@@ -767,6 +810,38 @@ mod tests {
             width: 1440.0,
             height: 875.0,
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_panel_can_join_desktop_and_fullscreen_spaces() {
+        use objc2_app_kit::NSWindowCollectionBehavior as Behavior;
+
+        for initial in [
+            Behavior::Default,
+            Behavior::MoveToActiveSpace | Behavior::FullScreenPrimary,
+            Behavior::FullScreenNone,
+        ] {
+            let behavior = panel_collection_behavior(initial);
+            assert!(behavior.contains(Behavior::CanJoinAllSpaces));
+            assert!(behavior.contains(Behavior::FullScreenAuxiliary));
+            assert!(!behavior.intersects(
+                Behavior::MoveToActiveSpace
+                    | Behavior::FullScreenPrimary
+                    | Behavior::FullScreenNone
+            ));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_panel_space_behavior_preserves_other_flags_and_is_idempotent() {
+        use objc2_app_kit::NSWindowCollectionBehavior as Behavior;
+
+        let unrelated = Behavior::Transient | Behavior::IgnoresCycle;
+        let behavior = panel_collection_behavior(unrelated);
+        assert!(behavior.contains(unrelated));
+        assert_eq!(panel_collection_behavior(behavior), behavior);
     }
 
     #[test]
