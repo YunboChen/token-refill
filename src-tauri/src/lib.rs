@@ -6,6 +6,7 @@ mod cli;
 mod codex;
 mod commandcode;
 mod discovery;
+mod logging;
 mod notification;
 mod opencode;
 mod proxy;
@@ -440,6 +441,16 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             fs::create_dir_all(&data_dir)?;
+            // 窗口生命周期的本地日志（不含凭证）：Windows 发布包没有控制台，
+            // 托盘/窗口打不开这类问题只能靠它事后确认事件是否到达。
+            logging::init(&data_dir);
+            logging::lifecycle!(
+                "[app] 启动 {} {}（{} / {}）",
+                app.package_info().name,
+                app.package_info().version,
+                std::env::consts::OS,
+                channel::of(app.handle()).as_str()
+            );
 
             // 窗口标题来自合并后的 productName：正式版与测试版各自显示自己的名称。
             let app_name = app.package_info().name.clone();
@@ -549,6 +560,7 @@ pub fn run() {
         // 保持原行为；显式退出走 app.exit(0)，code 为 Some，照常放行。
         tauri::RunEvent::ExitRequested { api, code, .. } => {
             if code.is_none() && app_handle.webview_windows().is_empty() {
+                logging::lifecycle!("[window] 窗口已全部销毁，拦截退出请求");
                 api.prevent_exit();
             }
         }
