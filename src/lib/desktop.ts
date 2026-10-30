@@ -114,11 +114,20 @@ export interface AccountLoginEvent {
   message: string | null;
 }
 
+/** 总览的展示顺序：平台键与账户标识，未列出的保持默认顺序。 */
+export interface OverviewOrder {
+  platforms: string[];
+  accounts: string[];
+}
+
 export interface AppState {
   schemaVersion: number;
   revision: number;
   accounts: AccountState[];
   preferences: Preferences;
+  overviewOrder: OverviewOrder;
+  /** 中转站账户的展示顺序；未列出的保持注册表顺序。 */
+  relayOrder: string[];
 }
 
 export const APP_STATE_EVENT = 'app-state-changed';
@@ -147,6 +156,19 @@ export function refreshUsage(accountId?: string): Promise<void> {
 
 export function updatePreferences(preferences: Preferences): Promise<AppState> {
   return invoke<AppState>('update_preferences', { preferences });
+}
+
+/** 保存总览的账户类型与账户排序；只提交标识列表。 */
+export function setOverviewOrder(
+  platforms: string[],
+  accounts: string[],
+): Promise<AppState> {
+  return invoke<AppState>('set_overview_order', { platforms, accounts });
+}
+
+/** 保存中转站账户的展示顺序；只提交注册表标识。 */
+export function setRelayOrder(ids: string[]): Promise<AppState> {
+  return invoke<AppState>('set_relay_order', { ids });
 }
 
 export function onAppStateChanged(

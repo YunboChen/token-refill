@@ -35,6 +35,7 @@ import {
   stampLabel,
 } from '../lib/format';
 import { groupAccountsByPlatform, platformMeta } from '../lib/platforms';
+import { applySavedOrder } from '../lib/order';
 import { useRelay } from '../lib/relay';
 import {
   RELAY_PROVIDER_LABELS,
@@ -464,7 +465,12 @@ export default function TrayPanel() {
   const threshold = state.preferences.lowQuotaThreshold;
   const lowQuotaEnabled = state.preferences.lowQuotaEnabled;
   const refreshMinutes = state.preferences.refreshMinutes;
-  const groups = groupAccountsByPlatform(state.accounts);
+  const groups = groupAccountsByPlatform(state.accounts, state.overviewOrder);
+  const orderedRelayAccounts = applySavedOrder(
+    relayAccounts,
+    state.relayOrder,
+    (account) => account.id,
+  );
   const updated = latestUpdate(state.accounts, relayAccounts);
   const accountCount = state.accounts.length + relayAccounts.length;
   const busy =
@@ -724,7 +730,7 @@ export default function TrayPanel() {
                   id="tray-section-relay"
                   open={!collapsed.has('relay')}
                 >
-                  {relayAccounts.map((account) => (
+                  {orderedRelayAccounts.map((account) => (
                     <RelayCard
                       key={account.id}
                       account={account}

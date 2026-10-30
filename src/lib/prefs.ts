@@ -54,6 +54,8 @@ export function defaultAppState(): AppState {
       },
     ],
     preferences: DEFAULT_PREFERENCES,
+    overviewOrder: { platforms: [], accounts: [] },
+    relayOrder: [],
   };
 }
 

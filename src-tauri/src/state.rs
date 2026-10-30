@@ -55,6 +55,9 @@ const REMINDER_KEY_SEP: char = '\u{1f}';
 const SCHEDULER_TICK: Duration = Duration::from_secs(5);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 const DISPLAY_NAME_MAX_CHARS: usize = 60;
+/// 总览排序只保存标识与相对顺序；限制条目数与单项长度，避免状态文件被撑大。
+const OVERVIEW_ORDER_MAX_ITEMS: usize = 200;
+const OVERVIEW_ORDER_KEY_MAX_CHARS: usize = 128;
 const PROFILES_DIR_NAME: &str = "codex-profiles";
 const BAILIAN_PROFILES_DIR_NAME: &str = "bailian-profiles";
 const API_PROFILES_DIR_NAME: &str = "api-profiles";
@@ -269,6 +272,18 @@ pub struct LowQuotaMark {
     pub resets_at_epoch: Option<i64>,
 }
 
+/// 总览的展示顺序：账户类型（平台）与账户分别保存用户拖动后的标识顺序。
+/// 未列出的标识保持应用的默认顺序并排在已列出项之后；标识本身来自应用，
+/// 不包含账户名、邮箱或任何凭证。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverviewOrder {
+    #[serde(default)]
+    pub platforms: Vec<String>,
+    #[serde(default)]
+    pub accounts: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedState {
@@ -280,6 +295,12 @@ pub struct PersistedState {
     /// 旧版本状态文件没有该字段，读取时回退为空记录。
     #[serde(default)]
     pub reminders: ReminderMarks,
+    /// 旧版本状态文件没有该字段，读取时回退为默认顺序。
+    #[serde(default)]
+    pub overview_order: OverviewOrder,
+    /// 中转站账户的展示顺序；旧版本状态文件缺省为空，按注册表顺序展示。
+    #[serde(default)]
+    pub relay_order: Vec<String>,
 }
 
 pub fn default_state() -> PersistedState {
@@ -289,6 +310,8 @@ pub fn default_state() -> PersistedState {
         accounts: vec![local_codex_account()],
         preferences: Preferences::default(),
         reminders: ReminderMarks::default(),
+        overview_order: OverviewOrder::default(),
+        relay_order: Vec::new(),
     }
 }
 
@@ -334,6 +357,30 @@ fn reconcile_local_codex(mut state: PersistedState, available: bool) -> Persiste
 }
 
 // ---------- 纯状态变换 ----------
+
+/// 排序标识去重、去空白并截断；只保留应用生成的平台键与账户标识，
+/// 不接受任意长字符串进入状态文件。
+fn sanitize_order_keys(items: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    items
+        .into_iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| {
+            !item.is_empty()
+                && item.chars().count() <= OVERVIEW_ORDER_KEY_MAX_CHARS
+                && !item.chars().any(char::is_control)
+        })
+        .filter(|item| seen.insert(item.clone()))
+        .take(OVERVIEW_ORDER_MAX_ITEMS)
+        .collect()
+}
+
+fn sanitize_overview_order(platforms: Vec<String>, accounts: Vec<String>) -> OverviewOrder {
+    OverviewOrder {
+        platforms: sanitize_order_keys(platforms),
+        accounts: sanitize_order_keys(accounts),
+    }
+}
 
 fn epoch_now() -> i64 {
     SystemTime::now()
@@ -1806,6 +1853,32 @@ impl StateStore {
     /// 自启设置已由系统确认生效后，回写偏好并返回新状态。
     pub fn set_auto_launch_preference(&self, enabled: bool) -> Result<PersistedState, String> {
         self.update_strict(|state| state.preferences.auto_launch_enabled = enabled)
+    }
+
+    /// 保存总览排序。排序只是界面偏好，不改变账户或额度数据；
+    /// 重复提交相同顺序时不递增修订号，避免多余的落盘与广播。
+    pub fn set_overview_order(
+        &self,
+        platforms: Vec<String>,
+        accounts: Vec<String>,
+    ) -> Result<PersistedState, String> {
+        let order = sanitize_overview_order(platforms, accounts);
+        let current = self.snapshot();
+        if current.overview_order == order {
+            return Ok(current);
+        }
+        self.update_strict(move |state| state.overview_order = order)
+    }
+
+    /// 保存中转站账户的展示顺序。只保存标识，不改变中转站注册表、凭证或额度；
+    /// 重复提交相同顺序时同样跳过落盘与广播。
+    pub fn set_relay_order(&self, ids: Vec<String>) -> Result<PersistedState, String> {
+        let order = sanitize_order_keys(ids);
+        let current = self.snapshot();
+        if current.relay_order == order {
+            return Ok(current);
+        }
+        self.update_strict(move |state| state.relay_order = order)
     }
 
     /// 启动时把系统登录项的实际状态同步到偏好。失败只记录日志，不阻断启动。
@@ -3718,6 +3791,59 @@ mod tests {
         let state: PersistedState = serde_json::from_value(value).expect("legacy state parses");
         assert_eq!(state.accounts[0].source, AccountSource::Local);
         assert_eq!(state.accounts[0].identity_hint, None);
+    }
+
+    #[test]
+    fn overview_order_is_sanitized() {
+        let order = sanitize_overview_order(
+            vec![
+                " codex ".to_string(),
+                "bailian".to_string(),
+                "codex".to_string(),
+                String::new(),
+                "bad\nkey".to_string(),
+            ],
+            vec!["codex-local".to_string(), "codex-local".to_string()],
+        );
+
+        assert_eq!(order.platforms, vec!["codex", "bailian"]);
+        assert_eq!(order.accounts, vec!["codex-local"]);
+
+        let too_long = "x".repeat(OVERVIEW_ORDER_KEY_MAX_CHARS + 1);
+        assert!(sanitize_order_keys(vec![too_long]).is_empty());
+
+        let many: Vec<String> = (0..OVERVIEW_ORDER_MAX_ITEMS + 5)
+            .map(|index| format!("platform-{index}"))
+            .collect();
+        assert_eq!(sanitize_order_keys(many).len(), OVERVIEW_ORDER_MAX_ITEMS);
+    }
+
+    #[test]
+    fn old_state_without_overview_order_keeps_default_order() {
+        let mut value = serde_json::to_value(default_state()).expect("serialize");
+        let object = value.as_object_mut().expect("state object");
+        object.remove("overviewOrder");
+        object.remove("relayOrder");
+
+        let state: PersistedState = serde_json::from_value(value).expect("legacy state parses");
+        assert_eq!(state.overview_order, OverviewOrder::default());
+        assert!(state.relay_order.is_empty());
+    }
+
+    #[test]
+    fn overview_order_round_trips_through_disk() {
+        let path = temp_state_path("overview-order");
+        let mut state = default_state();
+        state.overview_order.platforms = vec!["bailian".to_string(), "codex".to_string()];
+        state.overview_order.accounts = vec!["codex-local".to_string()];
+        state.relay_order = vec!["relay-0001".to_string(), "relay-0002".to_string()];
+
+        write_state(&path, &state).expect("write state");
+        let loaded = load_state(&path);
+
+        assert_eq!(loaded.overview_order, state.overview_order);
+        assert_eq!(loaded.relay_order, state.relay_order);
+        fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
     #[test]

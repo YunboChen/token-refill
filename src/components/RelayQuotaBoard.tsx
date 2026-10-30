@@ -1,8 +1,16 @@
 import { Fragment, useEffect, useState } from 'react';
 import { ArrowClockwiseIcon, PlugsIcon } from '@phosphor-icons/react';
-import { AnimatePresence, m, useReducedMotion } from 'motion/react';
+import {
+  AnimatePresence,
+  m,
+  Reorder,
+  useDragControls,
+  useReducedMotion,
+  type DragControls,
+} from 'motion/react';
 import type { KeyQuota, KeyQuotaWindow, RelayAccount } from '../lib/desktop';
 import { clockLabel, resetLabel } from '../lib/format';
+import { applySavedOrder, moveItemBy, savedOrderKey } from '../lib/order';
 import { useRelay } from '../lib/relay';
 import {
   RELAY_MODE_LABELS,
@@ -15,7 +23,9 @@ import {
   relayWindowLabel,
 } from '../lib/relayFormat';
 import { useAppState } from '../lib/store';
+import { useSavedOrder } from '../lib/useSavedOrder';
 import ChevronIcon from './ChevronIcon';
+import ReorderHandle from './ReorderHandle';
 import styles from '../App.module.css';
 
 /** 两列额度各自需要的展示数据；未知与「未提供」不折算成 0。 */
@@ -364,6 +374,9 @@ function RelayQuotaCard({
   lowQuotaEnabled,
   onToggle,
   onRefresh,
+  showHandle,
+  onMove,
+  dragControls,
 }: {
   account: RelayAccount;
   desktop: boolean;
@@ -373,6 +386,10 @@ function RelayQuotaCard({
   lowQuotaEnabled: boolean;
   onToggle: () => void;
   onRefresh: () => void;
+  /** 同列表存在多个账户时才提供排序手柄。 */
+  showHandle: boolean;
+  onMove: (delta: -1 | 1) => void;
+  dragControls: DragControls;
 }) {
   const quota = account.quota;
   const host = relayHost(account.baseUrl);
@@ -392,7 +409,16 @@ function RelayQuotaCard({
   );
 
   return (
-    <article className={styles.accountCard} aria-live="polite">
+    <Reorder.Item
+      as="article"
+      value={account.id}
+      className={styles.accountCard}
+      dragListener={false}
+      dragControls={dragControls}
+      layout="position"
+      tabIndex={-1}
+      aria-live="polite"
+    >
       <header className={styles.accountHead}>
         <div className={styles.accountTitleBlock}>
           <div className={styles.accountNameRow}>
@@ -431,13 +457,14 @@ function RelayQuotaCard({
           </span>
         ) : null}
         <div className={styles.accountTools}>
-          {/* 与订阅额度一致：更新时间只在展开时出现，收起后右侧只剩刷新和箭头 */}
+          {/* 与订阅额度一致：更新时间只在展开时出现，收起后右侧只剩刷新、排序和箭头 */}
           {open && account.checkedAtEpoch !== null ? (
             <span className={styles.updatedAt}>
               更新于 {clockLabel(account.checkedAtEpoch)}
               {refreshing ? ' · 刷新中' : ''}
             </span>
           ) : null}
+          {/* 更新时间等文字在前，刷新与排序图标统一靠右成组。 */}
           <button
             type="button"
             className={styles.refreshButton}
@@ -452,6 +479,13 @@ function RelayQuotaCard({
               className={refreshing ? styles.spin : undefined}
             />
           </button>
+          {showHandle ? (
+            <ReorderHandle
+              label={`调整 ${host} 的显示顺序`}
+              controls={dragControls}
+              onMove={onMove}
+            />
+          ) : null}
           {quota ? (
             <button
               type="button"
@@ -522,8 +556,17 @@ function RelayQuotaCard({
           ) : null}
         </AnimatePresence>
       )}
-    </article>
+    </Reorder.Item>
   );
+}
+
+/** 每张中转站卡自持拖动控制，避免列表内多个手柄互相触发。 */
+function SortableRelayQuotaCard(props: Omit<
+  Parameters<typeof RelayQuotaCard>[0],
+  'dragControls'
+>) {
+  const dragControls = useDragControls();
+  return <RelayQuotaCard {...props} dragControls={dragControls} />;
 }
 
 /** 总览的「中转站账户额度」标签页：只读展示额度，操作入口留在中转站管理页。 */
@@ -538,12 +581,22 @@ export default function RelayQuotaBoard({ desktop }: { desktop: boolean }) {
     refreshDue,
     ensureLoaded,
   } = useRelay();
-  const { state } = useAppState();
+  const { state, saveRelayOrder } = useAppState();
   const threshold = state.preferences.lowQuotaThreshold;
   const lowQuotaEnabled = state.preferences.lowQuotaEnabled;
   const refreshMinutes = state.preferences.refreshMinutes;
   // 默认全部展开；只记录被收起的账户，刷新列表时保留用户的折叠选择。
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const [order, persistOrder] = useSavedOrder(
+    state.relayOrder,
+    savedOrderKey,
+    saveRelayOrder,
+  );
+  const orderedAccounts = applySavedOrder(
+    accounts,
+    order,
+    (account) => account.id,
+  );
 
   // 只在真正切到该标签页时扫描，避免启动或停留在订阅额度时额外查询中转站。
   useEffect(() => {
@@ -563,6 +616,12 @@ export default function RelayQuotaBoard({ desktop }: { desktop: boolean }) {
       else next.add(id);
       return next;
     });
+  };
+
+  const moveAccount = (id: string, delta: -1 | 1) => {
+    const ids = orderedAccounts.map((account) => account.id);
+    const next = moveItemBy(ids, ids.indexOf(id), delta);
+    if (next) persistOrder(next);
   };
 
   if (!desktop) {
@@ -632,9 +691,15 @@ export default function RelayQuotaBoard({ desktop }: { desktop: boolean }) {
               </div>
             </div>
           </div>
-          <div className={styles.accountStack}>
-            {accounts.map((account) => (
-              <RelayQuotaCard
+          <Reorder.Group
+            as="div"
+            axis="y"
+            values={orderedAccounts.map((account) => account.id)}
+            onReorder={(ids) => persistOrder(ids)}
+            className={styles.accountStack}
+          >
+            {orderedAccounts.map((account) => (
+              <SortableRelayQuotaCard
                 key={account.id}
                 account={account}
                 desktop={desktop}
@@ -644,9 +709,11 @@ export default function RelayQuotaBoard({ desktop }: { desktop: boolean }) {
                 lowQuotaEnabled={lowQuotaEnabled}
                 onToggle={() => toggle(account.id)}
                 onRefresh={() => void refresh(account.id)}
+                showHandle={orderedAccounts.length > 1}
+                onMove={(delta) => moveAccount(account.id, delta)}
               />
             ))}
-          </div>
+          </Reorder.Group>
         </>
       )}
     </div>

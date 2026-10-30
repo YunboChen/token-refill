@@ -385,21 +385,22 @@ section
 ├─ [订阅账户额度] tabpanel
 │  └─ overviewStack
 │     ├─ 空态（无账户）overviewEmpty
-│     └─ 每个平台 platformGroup
-│        ├─ platformSectionHead → PlatformHeading
-│        └─ quotaBoard
-│           ├─ quotaAccount（展开：第一个账户）
-│           │  ├─ quotaAccountHead（名称/档位 + 身份/来源 + 刷新 + 箭头）
-│           │  └─ quotaBody > quotaBodyInner
-│           │     ├─ 提示（stale / danger）
-│           │     ├─ metricGrid（窗口 / 分隔线）
-│           │     └─ dataGaps
-│           └─ quotaAccount（折叠：其余账户，同一头部 + 一行摘要）
+│     └─ Reorder.Group（平台可拖动排序）
+│        └─ 每个平台 platformGroup（Reorder.Item）
+│           ├─ platformSectionHead → PlatformHeading（右侧排序手柄）
+│           └─ quotaBoard（账户 Reorder.Group）
+│              ├─ quotaAccount（展开：第一个账户，工具区含排序手柄）
+│              │  ├─ quotaAccountHead（名称/档位 + 身份/来源 + 刷新 + 箭头）
+│              │  └─ quotaBody > quotaBodyInner
+│              │     ├─ 提示（stale / danger）
+│              │     ├─ metricGrid（窗口 / 分隔线）
+│              │     └─ dataGaps
+│              └─ quotaAccount（折叠：其余账户，同一头部 + 一行摘要）
 └─ [中转站账户额度] tabpanel
    └─ RelayQuotaBoard
       ├─ platformSectionHead（中转站账户 · 账户余额与密钥额度 · N 个账户）
-      └─ accountStack
-         └─ accountCard × N（默认展开，可收起）
+      └─ accountStack（Reorder.Group）
+         └─ accountCard × N（默认展开，可收起；Reorder.Item，工具区含排序手柄）
             ├─ accountHead（host + 类型/来源/额度口径 + 刷新/箭头；工具与两行标题垂直居中）
             │  └─ 收起时左侧保持两行身份信息，中间显示简易额度摘要，右侧只剩刷新和箭头
             └─ quotaBody → relayQuotaGrid
@@ -411,7 +412,10 @@ section
 
 - 标签栏沿用设置页分段控件的视觉语言：独立使用 `.overviewTabs` / `.overviewTab`，但复用 `.pillThumb` 滑块，等宽列 + `--pill-index` / `--pill-count` 驱动滑动；使用 `role="tablist"` / `role="tab"`；默认停留在「订阅账户额度」，切换不改变顶部页头。
 - 中转站账户与「中转站账户管理」页共用 `RelayProvider` 状态：进入任一页面时只加载已保存条目与上次成功快照，并把超过刷新间隔的账户自动刷新一次；扫描本地配置是管理页上的手动入口，之后在任一页面手动刷新都会同步。
-- 平台顺序由 `groupAccountsByPlatform()` 固定，账户增删不会让分组跳动。
+- 平台与账户都支持拖动排序：平台标题右侧和账户工具区各有排序手柄（`ReorderHandle`），拖动由 motion 的 `Reorder` 接管，只从手柄开始，不影响账户展开、刷新与文本选择；手柄聚焦后可用上下方向键移动一格。同平台只有一个账户时不显示账户手柄。
+- 排序保存到 Rust 状态的 `overviewOrder`（平台键与账户标识，不含名称或凭证），每次打开都按保存后的顺序展示；顺序同样作用于菜单栏快速面板。未参与过排序的新平台/新账户保持默认顺序并排在已排序项之后。界面先本地生效再保存，保存失败时回到后端仍持有的顺序。
+- 中转站额度页的账户使用同一套手柄与本地优先保存逻辑，顺序保存在 `relayOrder`（只含中转站注册表标识）；菜单栏面板的中转站分组同样按该顺序展示，管理页仍保持注册表顺序。列表只有一个账户时不显示手柄。
+- 平台顺序默认仍由 `groupAccountsByPlatform()` 的固定顺序兜底；用户保存排序后优先使用保存顺序，账户增删不会让未参与排序的分组跳动。
 - 同一平台的账户共用一张卡；默认展开第一个，`undefined` 表示沿用默认，`null` 表示全部收起。
 - 折叠摘要由 `accountSummary()` 生成：单套餐列各窗口余量；多套餐（如百炼的 Token Plan + Coding Plan）每个套餐只列剩余最低的窗口，避免摘要铺满整行。
 - 标题区固定为两行：第一行名称与档位，第二行身份/来源；收起时右侧再出现额度摘要（与整块垂直居中、单行省略），左侧身份列沿用 132px 起步宽度。
