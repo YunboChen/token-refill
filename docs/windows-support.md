@@ -8,6 +8,7 @@
 - 已完成：Codex CLI 查找、app-server 子进程启动、授权链接打开、数据目录与文件写入、窗口标题栏布局。
 - 未完成：Windows 安装包签名、Windows 上的真实账户授权、长时间运行验收、最低 Windows 版本结论。
 - 2026-10-28 的窗口 WebView 按需创建 / 空闲销毁改动，Windows 验收步骤见 [Windows 内存优化验证](./windows-memory-validation.md)（待执行）。
+- 2026-10-29 修复“空闲一段时间后托盘菜单与主窗口都打不开”：创建不再在托盘回调里就地执行（改由后台线程转投主线程）、加载标志前移到创建入口（避免重复创建作废显示回调）、面板失焦收起要求确实获得过焦点且过了宽限期、显示补一次延迟重试；同时新增 `logs/window.log` 生命周期日志。Windows 实机验收见 [Windows 内存优化验证](./windows-memory-validation.md) 的 W-17。
 - 构建工具链：必须使用 MSVC 目标。GNU 目标未验证；本机 GNU 工具链缺 `dlltool.exe`，`cargo check` 直接失败。
 - `tauri dev` 由 CLI 启动的 `cargo run` 不使用 `RUSTUP_TOOLCHAIN` 环境变量（实测仍选 GNU），需用 `rustup default stable-x86_64-pc-windows-msvc` 或对 `src-tauri` 设置目录级 override。
 - 开发端口从 1420/1421 改为 5173/5174：本机 Hyper-V/WinNAT 预留了 1377–1576，落在该区间的监听会返回 `EACCES`。改端口时需同步 `vite.config.ts` 与 `tauri.conf.json` 的 `devUrl`、`devCsp`。

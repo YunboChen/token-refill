@@ -31,29 +31,45 @@ pnpm tauri build --no-bundle
 > 用 release 产物验证内存和进程数；`pnpm tauri dev` 会额外启动 Vite，进程数不能作为基线。
 > 验证前先退出已安装的 Token Refill，避免单实例插件把新进程直接结束。
 
-### 带日志启动
+### 日志
 
-窗口生命周期日志写到 stderr（`[window] ...`）。用 PowerShell 启动并重定向：
+窗口与托盘生命周期日志同时写到 stderr 和文件：
+
+```
+%APPDATA%\dev.tokenrefill.desktop\logs\window.log      （正式版）
+%APPDATA%\dev.tokenrefill.desktop.test\logs\window.log （测试版）
+```
+
+直接双击或从开始菜单启动也能拿到日志，不需要重定向。单文件超过 256 KiB 轮转为
+`window.log.1`。想在终端里同时看实时输出时仍可重定向：
 
 ```powershell
 $exe = "C:\path\to\token-refill.exe"
-$log = Join-Path $PWD "tr-verify.log"
-Remove-Item $log -ErrorAction SilentlyContinue
-$p = Start-Process -FilePath $exe -RedirectStandardError $log -PassThru
+$p = Start-Process -FilePath $exe -RedirectStandardError (Join-Path $PWD "tr-verify.log") -PassThru
 "PID=$($p.Id)"
-Get-Content $log -Wait
+Get-Content (Join-Path $PWD "tr-verify.log") -Wait
 ```
 
 日志关键字：
 
 | 日志 | 含义 |
 | --- | --- |
+| `[app] 启动 <名称> <版本>（<平台> / <渠道>）` | 进程启动，日志可用 |
+| `[tray] 点击 Left/Down`、`Left/Up` | 托盘左键事件到达主线程；**没有这行说明点击没到事件循环**（主线程被阻塞或图标属于已退出的进程） |
+| `[tray] 菜单：打开主窗口` / `查看额度` / `退出` | 右键菜单项被选中 |
+| `[window] 创建 tray-panel（无 WebView 窗口可用）` | 面板按需创建开始 |
 | `[window] tray-panel 加载耗时 N ms` | 面板从创建到页面加载完成 |
-| `[window] 主窗口重建加载耗时 N ms` | 主窗口按空闲策略重建 |
-| `[window] 销毁空闲窗口 tray-panel` | 面板隐藏满 60 秒，开始销毁 |
-| `[window] 销毁空闲窗口 main` | 主窗口关闭满 60 秒，开始销毁 |
+| `[window] 主窗口重建（无 WebView 窗口可用）` / `主窗口重建加载耗时 N ms` | 主窗口按空闲策略重建 |
+| `[window] 显示主窗口 visible=true focused=…` | 主窗口显示结果；`focused=false` 说明前台激活被系统拒绝 |
+| `[window] tray-panel 已显示` | 面板显示成功（有点击但没有这一行说明显示没生效） |
+| `[window] tray-panel 再次点击收起` / `失焦收起` | 面板被图标点击 / 失焦收起（后者需要确实获得过焦点） |
+| `[window] tray-panel 未能获得焦点，补一次` | 显示后没拿到激活态，触发了补聚焦 |
+| `[window] tray-panel 加载中再次点击，取消本次显示` | 加载期间的第二次左键点击被当作取消 |
+| `[window] tray-panel 仍不可见，重试显示` / `[window] 主窗口仍不可见，重试显示` | 兜底显示后窗口仍不可见，补了一次显示（**出现即异常**） |
+| `[window] 销毁空闲窗口 tray-panel` / `main` | 隐藏满 60 秒，开始销毁 |
 | `[window] ... 加载超时，直接显示` | 1.5 秒兜底触发（正常应很少出现） |
-| `[window] 创建 tray-panel 失败：...` | 创建失败，需要记录 |
+| `[window] 创建 tray-panel 失败：...` / `重建主窗口失败：...` | 创建失败，需要记录 |
+| `[window] 窗口已全部销毁，拦截退出请求` | 空闲销毁后应用仍常驻（正常） |
 
 ## 3. 进程与内存口径
 
@@ -183,6 +199,14 @@ WebView2 可能在视图销毁后短暂保留进程，**等 15–30 秒再判定
 2. 点托盘图标打开面板 → 能打开；再点托盘右键 →「打开主窗口」→ 能重建。
 3. 预期：全程只有一个进程，功能正常。
 
+**W-17 长时间驻留后的托盘响应（「菜单与主窗口打不开」回归）**
+1. 主窗口关闭、面板关闭，全部窗口已按空闲策略销毁，放置 30 分钟以上（期间可锁屏、睡眠一次）。
+2. 左键点托盘图标：面板应出现；再点一次应收起。
+3. 右键 →「打开主窗口」：主窗口应出现并聚焦。
+4. 重复第 2、3 步 3–5 次，中间分别等待一次 60 秒空闲销毁。
+5. 预期：每次点击都出现 `[tray] 点击 Left/Down`、`Left/Up`；面板只在确实获得过焦点后失焦才收起；不出现 `创建 tray-panel 失败`、`仍不可见，重试显示`、`主窗口正在重建，忽略重复的打开请求` 连续堆积。
+6. 若点击后**没有**任何 `[tray]` 日志，说明点击没到达事件循环（主线程被阻塞或托盘图标属于已退出的残留图标）：记录当时的日志文件与进程列表。
+
 **W-11 登录守卫**
 1. 账户页发起一次需要浏览器授权的登录，保持应用内登录弹窗打开。
 2. 关闭主窗口（隐藏，不取消登录），等 65 秒。
@@ -212,7 +236,7 @@ WebView2 可能在视图销毁后短暂保留进程，**等 15–30 秒再判定
 
 **W-16 数据与凭证**
 1. 验证前后检查 `%APPDATA%\dev.tokenrefill.desktop\`：`state.json`、`codex-profiles\`、`bailian-profiles\`、`api-profiles\`、`relay-profiles\` 结构不变。
-2. 预期：没有新增凭证文件；日志只有 `[window]` 生命周期行，不含令牌、Cookie、邮箱或密钥。
+2. 预期：没有新增凭证文件；`logs\window.log` 只有 `[app]` / `[tray]` / `[window]` 生命周期行，不含令牌、Cookie、邮箱或密钥。
 
 ### 通过标准
 
@@ -240,6 +264,7 @@ WebView2 可能在视图销毁后短暂保留进程，**等 15–30 秒再判定
 | W-14 多显示器与缩放 |  |  |  |
 | W-15 注销与关机 |  |  |  |
 | W-16 数据与凭证 |  |  |  |
+| W-17 长时间驻留后托盘响应 |  |  |  |
 
 ### 内存对比（同一台机器、相同账户）
 
