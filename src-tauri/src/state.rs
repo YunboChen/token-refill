@@ -30,7 +30,7 @@ use crate::opencode::{self, OpencodeUsage};
 use crate::proxy::{self, ProxyMode};
 use crate::usage_api::ProviderError;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 pub const STATE_EVENT: &str = "app-state-changed";
 pub const LOGIN_EVENT: &str = "account-login-changed";
 pub const DEFAULT_ACCOUNT_ID: &str = "codex-local";
@@ -53,6 +53,8 @@ const LOW_QUOTA_MAX: i64 = 50;
 /// 去重键的分隔符；账户与窗口标识都来自受控字符，用不可见字符避免拼接歧义。
 const REMINDER_KEY_SEP: char = '\u{1f}';
 const SCHEDULER_TICK: Duration = Duration::from_secs(5);
+const AUTH_NOTICE_RETRY_BASE_SECS: i64 = 60;
+const AUTH_NOTICE_RETRY_MAX_SECS: i64 = 3600;
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 const DISPLAY_NAME_MAX_CHARS: usize = 60;
 const PROFILES_DIR_NAME: &str = "codex-profiles";
@@ -259,6 +261,19 @@ pub struct AccountLoginEvent {
 pub struct ReminderMarks {
     #[serde(default)]
     pub low_quota: HashMap<String, LowQuotaMark>,
+    #[serde(default)]
+    pub auth_expired: HashMap<String, AuthExpiredMark>,
+}
+
+/// 授权失效与通知送达分开记录；同一次失效的标识跨重试、重启保持不变。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthExpiredMark {
+    pub notice_id: String,
+    /// 只表示系统已接收，不保证横幅实际展示或用户已读。
+    pub delivered: bool,
+    pub attempts: u32,
+    pub next_attempt_epoch: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -892,7 +907,7 @@ fn apply_platform_error(
 }
 
 /// 把一次百炼查询结果写入对应产品。某一类失败只影响该产品，
-/// 两个接口都判定授权失效时才把账户标为需要重新授权。
+/// 没有套餐查询成功且存在明确授权错误时标为需要重新授权。
 fn apply_bailian_readout(
     state: &mut PersistedState,
     account_id: &str,
@@ -1173,34 +1188,102 @@ pub struct LowQuotaNotice {
     pub threshold: i64,
 }
 
-/// 一条待发送的授权失效提醒。
+/// 一条已预留发送机会的授权失效提醒；不包含凭证。
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuthExpiredNotice {
+    pub account_id: String,
+    pub notice_id: String,
     pub account_name: String,
     pub platform: String,
     pub source: AccountSource,
 }
 
-/// 只在授权状态从非失效跃迁到失效时返回提醒。`auth_state` 本身随状态持久化，
-/// 所以重复查询、重复失败与应用重启都不会重复提醒；重新授权成功后状态回到
-/// `Ok`，下一次失效会重新提醒。普通网络错误不会把状态改为失效。
-fn auth_expired_notice(
-    state: &PersistedState,
+/// 所有状态更新共用这一入口，避免某个平台只写失效状态却漏接提醒。
+/// 恢复、重新授权或移除账户时清理；旧版失效账户没有记录时补建待提醒项。
+fn sync_auth_expired_marks(state: &mut PersistedState) {
+    let expired_accounts: HashSet<_> = state
+        .accounts
+        .iter()
+        .filter(|account| {
+            is_supported_platform(&account.platform) && account.auth_state == AuthState::NeedsReauth
+        })
+        .map(|account| account.account_id.clone())
+        .collect();
+    state
+        .reminders
+        .auth_expired
+        .retain(|account_id, _| expired_accounts.contains(account_id));
+    for account_id in expired_accounts {
+        state
+            .reminders
+            .auth_expired
+            .entry(account_id)
+            .or_insert_with(|| {
+                let nanos = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_nanos())
+                    .unwrap_or_default();
+                let sequence = ACCOUNT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+                AuthExpiredMark {
+                    notice_id: format!("auth-expired-{nanos}-{sequence}"),
+                    delivered: false,
+                    attempts: 0,
+                    next_attempt_epoch: None,
+                }
+            });
+    }
+}
+
+fn auth_notice_due(state: &PersistedState, account_id: &str, now: i64) -> bool {
+    state.preferences.auth_expired_enabled
+        && state.accounts.iter().any(|account| {
+            account.account_id == account_id && account.auth_state == AuthState::NeedsReauth
+        })
+        && state
+            .reminders
+            .auth_expired
+            .get(account_id)
+            .is_some_and(|mark| {
+                !mark.delivered && mark.next_attempt_epoch.is_none_or(|next| now >= next)
+            })
+}
+
+/// 在调用系统前预留退避时间并落盘，避免重启或重复查询绕过发送频率限制。
+fn reserve_auth_expired_notice(
+    state: &mut PersistedState,
     account_id: &str,
-    was_reauth: bool,
+    now: i64,
 ) -> Option<AuthExpiredNotice> {
-    if was_reauth || !state.preferences.auth_expired_enabled {
+    if !auth_notice_due(state, account_id, now) {
         return None;
     }
     let account = state
         .accounts
         .iter()
         .find(|account| account.account_id == account_id)?;
-    (account.auth_state == AuthState::NeedsReauth).then(|| AuthExpiredNotice {
+    let mark = state.reminders.auth_expired.get_mut(account_id)?;
+    let delay = AUTH_NOTICE_RETRY_BASE_SECS
+        .saturating_mul(1_i64 << mark.attempts.min(6))
+        .min(AUTH_NOTICE_RETRY_MAX_SECS);
+    mark.attempts = mark.attempts.saturating_add(1);
+    mark.next_attempt_epoch = Some(now.saturating_add(delay));
+    Some(AuthExpiredNotice {
+        account_id: account_id.to_string(),
+        notice_id: mark.notice_id.clone(),
         account_name: account.display_name.clone(),
         platform: account.platform.clone(),
         source: account.source,
     })
+}
+
+fn complete_auth_expired_notice(state: &mut PersistedState, notice: &AuthExpiredNotice) {
+    if let Some(mark) = state.reminders.auth_expired.get_mut(&notice.account_id) {
+        // 发送期间可能已恢复并再次失效，旧回调不能确认新一轮提醒。
+        if mark.notice_id == notice.notice_id {
+            mark.delivered = true;
+            mark.next_attempt_epoch = None;
+        }
+    }
 }
 
 fn reminder_key(account_id: &str, product_id: &str, window_id: &str) -> String {
@@ -1423,6 +1506,7 @@ fn collect_reset_notices(
 
 /// 账户移除后清掉它的去重记录，避免留下永不复用的键。
 fn clear_reminder_marks(state: &mut PersistedState, account_id: &str) {
+    state.reminders.auth_expired.remove(account_id);
     let prefix = format!("{account_id}{REMINDER_KEY_SEP}");
     state
         .reminders
@@ -1548,8 +1632,12 @@ fn load_state(path: &Path) -> PersistedState {
     };
 
     match serde_json::from_str::<PersistedState>(&raw) {
-        Ok(mut state) if state.schema_version == SCHEMA_VERSION => {
+        Ok(mut state) if matches!(state.schema_version, 1 | SCHEMA_VERSION) => {
+            // v1 没有独立的授权提醒记录。保留账户、偏好与快照，为仍失效的账户
+            // 补建待提醒项；原文件直到下一次成功原子写入前保持不变。
+            state.schema_version = SCHEMA_VERSION;
             clear_stale_refresh_flags(&mut state);
+            sync_auth_expired_marks(&mut state);
             state
         }
         Ok(_) | Err(_) => {
@@ -1597,7 +1685,8 @@ impl StateStore {
     pub fn load(app: AppHandle, path: PathBuf) -> Self {
         // 本机没有 Codex 客户端时，不保留必然失败的“本机 Codex”占位账户；
         // 有客户端但状态里缺少该账户时补回，避免卸载/重装后账户消失。
-        let state = reconcile_local_codex(load_state(&path), codex::local_available());
+        let mut state = reconcile_local_codex(load_state(&path), codex::local_available());
+        sync_auth_expired_marks(&mut state);
         proxy::configure(
             state.preferences.proxy_mode,
             state.preferences.proxy_url.clone(),
@@ -1662,7 +1751,7 @@ impl StateStore {
         self.show_notification("额度重置提醒", body);
     }
 
-    fn notify_auth_expired(&self, notice: &AuthExpiredNotice) {
+    fn notify_auth_expired(&self, notice: &AuthExpiredNotice) -> Result<(), String> {
         let fallback = format!("请打开 {} 重新授权。", self.app.package_info().name);
         let action = match (notice.platform.as_str(), notice.source) {
             ("codex", AccountSource::Local) => "请重新登录本机 Codex CLI 后再刷新。",
@@ -1675,13 +1764,50 @@ impl StateStore {
             }
             _ => fallback.as_str(),
         };
-        self.show_notification(
+        crate::notification::send_with_identifier(
+            &self.app,
             "授权失效提醒",
-            format!("{} 的授权已失效，{}", notice.account_name, action),
-        );
+            &format!("{} 的授权已失效，{}", notice.account_name, action),
+            &notice.notice_id,
+        )
     }
 
-    /// 应用一次刷新失败，并在授权状态跃迁到“需要重新授权”时提醒。
+    /// 调度器是授权提醒的唯一发送者；权限或发送失败不影响额度查询。
+    fn retry_auth_expired_notices(&self, now: i64) {
+        let state = self.snapshot();
+        let targets: Vec<_> = state
+            .accounts
+            .iter()
+            .filter(|account| auth_notice_due(&state, &account.account_id, now))
+            .map(|account| account.account_id.clone())
+            .collect();
+        for account_id in targets {
+            if self.shutdown.load(Ordering::SeqCst) {
+                break;
+            }
+            if self.has_pending_login(&account_id) {
+                continue;
+            }
+            let mut notice = None;
+            if let Err(err) = self.update_strict(|state| {
+                notice = reserve_auth_expired_notice(state, &account_id, now);
+            }) {
+                eprintln!("预留授权失效提醒失败：{err}");
+                continue;
+            }
+            let Some(notice) = notice else {
+                continue;
+            };
+            match self.notify_auth_expired(&notice) {
+                Ok(()) => {
+                    self.update_soft(|state| complete_auth_expired_notice(state, &notice));
+                }
+                Err(err) => eprintln!("发送「授权失效提醒」失败，将按退避重试：{err}"),
+            }
+        }
+    }
+
+    /// 应用一次刷新失败；状态更新统一维护待发送的授权提醒。
     fn apply_refresh_error(
         &self,
         account_id: &str,
@@ -1689,42 +1815,15 @@ impl StateStore {
         now: i64,
         identity_update: Option<Option<CodexIdentity>>,
     ) {
-        let mut notice = None;
-        self.update_soft(|state| {
-            let was_reauth = state
-                .accounts
-                .iter()
-                .find(|account| account.account_id == account_id)
-                .map(|account| account.auth_state == AuthState::NeedsReauth)
-                .unwrap_or(true);
-            apply_error(state, account_id, error, now, identity_update);
-            notice = auth_expired_notice(state, account_id, was_reauth);
-        });
-        if let Some(notice) = notice {
-            self.notify_auth_expired(&notice);
-        }
+        self.update_soft(|state| apply_error(state, account_id, error, now, identity_update));
     }
 
-    /// 百炼查询失败：只记录对应产品的错误并保留上次成功快照；
-    /// 授权失效时与 Codex 一样按状态跃迁提醒一次。
+    /// 百炼凭证读取失败：保留上次成功快照，统一维护待发送提醒。
     fn apply_bailian_refresh_error(&self, account_id: &str, error: &BailianError, now: i64) {
-        let mut notice = None;
-        self.update_soft(|state| {
-            let was_reauth = state
-                .accounts
-                .iter()
-                .find(|account| account.account_id == account_id)
-                .map(|account| account.auth_state == AuthState::NeedsReauth)
-                .unwrap_or(true);
-            apply_bailian_error(state, account_id, error, now);
-            notice = auth_expired_notice(state, account_id, was_reauth);
-        });
-        if let Some(notice) = notice {
-            self.notify_auth_expired(&notice);
-        }
+        self.update_soft(|state| apply_bailian_error(state, account_id, error, now));
     }
 
-    /// 单套餐平台失败：记录查询错误，授权失效时按状态跃迁提醒一次。
+    /// 单套餐平台失败：记录查询错误，统一维护待发送提醒。
     fn apply_platform_refresh_error(
         &self,
         account_id: &str,
@@ -1732,20 +1831,7 @@ impl StateStore {
         error: &ProviderError,
     ) {
         let now = epoch_now();
-        let mut notice = None;
-        self.update_soft(|state| {
-            let was_reauth = state
-                .accounts
-                .iter()
-                .find(|account| account.account_id == account_id)
-                .map(|account| account.auth_state == AuthState::NeedsReauth)
-                .unwrap_or(true);
-            apply_platform_error(state, account_id, platform, error, now);
-            notice = auth_expired_notice(state, account_id, was_reauth);
-        });
-        if let Some(notice) = notice {
-            self.notify_auth_expired(&notice);
-        }
+        self.update_soft(|state| apply_platform_error(state, account_id, platform, error, now));
     }
 
     /// 严格更新：落盘失败时不提交内存，也不广播，调用方必须报告失败。
@@ -1756,6 +1842,7 @@ impl StateStore {
         let mut guard = lock(&self.inner);
         let mut next = guard.clone();
         change(&mut next);
+        sync_auth_expired_marks(&mut next);
         next.revision = next.revision.saturating_add(1);
         write_state(&self.path, &next)?;
         *guard = next.clone();
@@ -1772,6 +1859,7 @@ impl StateStore {
         let mut guard = lock(&self.inner);
         let mut next = guard.clone();
         change(&mut next);
+        sync_auth_expired_marks(&mut next);
         next.revision = next.revision.saturating_add(1);
         if let Err(err) = write_state(&self.path, &next) {
             eprintln!("保存应用状态失败：{err}");
@@ -1795,7 +1883,19 @@ impl StateStore {
                 .map(|url| url.trim().to_string())
                 .filter(|url| !url.is_empty());
         }
-        let state = self.update_strict(|state| state.preferences = next)?;
+        let state = self.update_strict(|state| {
+            if !state.preferences.auth_expired_enabled && next.auth_expired_enabled {
+                for mark in state
+                    .reminders
+                    .auth_expired
+                    .values_mut()
+                    .filter(|mark| !mark.delivered)
+                {
+                    mark.next_attempt_epoch = None;
+                }
+            }
+            state.preferences = next;
+        })?;
         proxy::configure(
             state.preferences.proxy_mode,
             state.preferences.proxy_url.clone(),
@@ -2801,6 +2901,8 @@ pub fn start_scheduler(store: Arc<StateStore>) {
         if store.shutdown.load(Ordering::SeqCst) {
             break;
         }
+        // 提醒重试独立于额度刷新间隔，不为重发通知再次请求第三方额度接口。
+        store.retry_auth_expired_notices(epoch_now());
         // 启动时立即检查一次：没有快照会马上补数据，有快照则按间隔等待。
         for account_id in store.due_accounts(epoch_now()) {
             let _ = store.request_refresh(Some(&account_id));
@@ -3234,61 +3336,105 @@ mod tests {
         assert!(state.reminders.low_quota.contains_key(&other));
     }
 
-    #[test]
-    fn auth_error_notifies_once_per_expiry_and_survives_restart() {
-        let mut state = default_state();
-        let was_reauth = state.accounts[0].auth_state == AuthState::NeedsReauth;
+    fn expire_codex_state(state: &mut PersistedState, account_id: &str, now: i64) {
         apply_error(
-            &mut state,
-            DEFAULT_ACCOUNT_ID,
+            state,
+            account_id,
             UsageError {
                 code: "auth-expired".to_string(),
                 message: "需要重新登录".to_string(),
             },
-            1_790_100_000,
+            now,
             None,
         );
-        let notice = auth_expired_notice(&state, DEFAULT_ACCOUNT_ID, was_reauth)
+        sync_auth_expired_marks(state);
+    }
+
+    #[test]
+    fn auth_error_notifies_once_after_system_acceptance_and_survives_restart() {
+        let path = temp_state_path("auth-delivered");
+        let mut state = default_state();
+        let now = 1_790_100_000;
+        expire_codex_state(&mut state, DEFAULT_ACCOUNT_ID, now);
+        let notice = reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, now)
             .expect("first expiry should notify");
         assert_eq!(notice.account_name, "本机 Codex");
         assert_eq!(notice.source, AccountSource::Local);
+        complete_auth_expired_notice(&mut state, &notice);
 
-        // 已经是失效状态时，重复失败不重复提醒。
-        let was_reauth = state.accounts[0].auth_state == AuthState::NeedsReauth;
-        apply_error(
-            &mut state,
-            DEFAULT_ACCOUNT_ID,
-            UsageError {
-                code: "auth-expired".to_string(),
-                message: "需要重新登录".to_string(),
-            },
-            1_790_100_060,
-            None,
+        expire_codex_state(&mut state, DEFAULT_ACCOUNT_ID, now + 60);
+        assert!(reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, now + 60).is_none());
+        write_state(&path, &state).expect("persist delivered mark");
+        let mut reloaded = load_state(&path);
+        expire_codex_state(&mut reloaded, DEFAULT_ACCOUNT_ID, now + 7200);
+        assert!(
+            reserve_auth_expired_notice(&mut reloaded, DEFAULT_ACCOUNT_ID, now + 7200).is_none()
         );
-        assert!(auth_expired_notice(&state, DEFAULT_ACCOUNT_ID, was_reauth).is_none());
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
 
-        // 去重依据是持久化的 authState：模拟重启后继续失败也不重复。
-        let mut reloaded: PersistedState =
-            serde_json::from_str(&serde_json::to_string(&state).expect("serialize"))
-                .expect("deserialize");
-        let was_reauth = reloaded.accounts[0].auth_state == AuthState::NeedsReauth;
-        apply_error(
-            &mut reloaded,
-            DEFAULT_ACCOUNT_ID,
-            UsageError {
-                code: "auth-expired".to_string(),
-                message: "需要重新登录".to_string(),
-            },
-            1_790_100_120,
-            None,
+    #[test]
+    fn failed_auth_notice_retries_with_backoff_and_preserves_identity_across_restart() {
+        let path = temp_state_path("auth-retry");
+        let mut state = default_state();
+        let now = 1_790_100_000;
+        expire_codex_state(&mut state, DEFAULT_ACCOUNT_ID, now);
+        let first = reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, now).unwrap();
+        // 模拟系统拒绝、尚未授权或发送失败：不写入成功回执。
+        assert!(!state.reminders.auth_expired[DEFAULT_ACCOUNT_ID].delivered);
+        expire_codex_state(&mut state, DEFAULT_ACCOUNT_ID, now + 5);
+        assert!(reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, now + 59).is_none());
+        write_state(&path, &state).expect("persist retry deadline");
+        let mut reloaded = load_state(&path);
+        assert!(reserve_auth_expired_notice(&mut reloaded, DEFAULT_ACCOUNT_ID, now + 59).is_none());
+        let second = reserve_auth_expired_notice(&mut reloaded, DEFAULT_ACCOUNT_ID, now + 60)
+            .expect("failed notice should retry");
+        assert_eq!(first.notice_id, second.notice_id);
+        assert_eq!(
+            reloaded.reminders.auth_expired[DEFAULT_ACCOUNT_ID].attempts,
+            2
         );
-        assert!(auth_expired_notice(&reloaded, DEFAULT_ACCOUNT_ID, was_reauth).is_none());
+        assert_eq!(
+            reloaded.reminders.auth_expired[DEFAULT_ACCOUNT_ID].next_attempt_epoch,
+            Some(now + 180)
+        );
+        complete_auth_expired_notice(&mut reloaded, &second);
+        assert!(
+            reserve_auth_expired_notice(&mut reloaded, DEFAULT_ACCOUNT_ID, now + 7200).is_none()
+        );
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn auth_retry_backoff_is_bounded_even_after_many_failures() {
+        let mut state = default_state();
+        let mut now = 1_790_100_000;
+        expire_codex_state(&mut state, DEFAULT_ACCOUNT_ID, now);
+        for expected_delay in [60, 120, 240, 480, 960, 1920, 3600, 3600] {
+            reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, now).unwrap();
+            let next = state.reminders.auth_expired[DEFAULT_ACCOUNT_ID]
+                .next_attempt_epoch
+                .unwrap();
+            assert_eq!(next - now, expected_delay);
+            assert!(!auth_notice_due(&state, DEFAULT_ACCOUNT_ID, next - 1));
+            now = next;
+        }
+        state
+            .reminders
+            .auth_expired
+            .get_mut(DEFAULT_ACCOUNT_ID)
+            .unwrap()
+            .attempts = u32::MAX;
+        reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, now).unwrap();
+        assert_eq!(
+            state.reminders.auth_expired[DEFAULT_ACCOUNT_ID].attempts,
+            u32::MAX
+        );
     }
 
     #[test]
     fn network_error_never_triggers_auth_notice() {
         let mut state = default_state();
-        let was_reauth = state.accounts[0].auth_state == AuthState::NeedsReauth;
         apply_error(
             &mut state,
             DEFAULT_ACCOUNT_ID,
@@ -3299,34 +3445,38 @@ mod tests {
             1_790_100_000,
             None,
         );
-
+        sync_auth_expired_marks(&mut state);
         assert_eq!(state.accounts[0].auth_state, AuthState::Unknown);
-        assert!(auth_expired_notice(&state, DEFAULT_ACCOUNT_ID, was_reauth).is_none());
-    }
-
-    #[test]
-    fn auth_notice_respects_the_disabled_switch() {
-        let mut state = default_state();
-        state.preferences.auth_expired_enabled = false;
-        let was_reauth = state.accounts[0].auth_state == AuthState::NeedsReauth;
-        apply_error(
-            &mut state,
-            DEFAULT_ACCOUNT_ID,
-            UsageError {
-                code: "auth-expired".to_string(),
-                message: "需要重新登录".to_string(),
-            },
-            1_790_100_000,
-            None,
+        assert!(state.reminders.auth_expired.is_empty());
+        assert!(
+            reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, 1_790_100_000).is_none()
         );
-
-        // 开关关闭只影响提醒，不掩盖真实的授权状态。
-        assert_eq!(state.accounts[0].auth_state, AuthState::NeedsReauth);
-        assert!(auth_expired_notice(&state, DEFAULT_ACCOUNT_ID, was_reauth).is_none());
     }
 
     #[test]
-    fn reauthorization_rearms_auth_notice_for_managed_account() {
+    fn auth_notice_pauses_while_disabled_and_resumes_without_repeating_delivered_notices() {
+        let mut state = default_state();
+        let now = 1_790_100_000;
+        state.preferences.auth_expired_enabled = false;
+        expire_codex_state(&mut state, DEFAULT_ACCOUNT_ID, now);
+        assert_eq!(state.accounts[0].auth_state, AuthState::NeedsReauth);
+        assert!(reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, now).is_none());
+        assert_eq!(state.reminders.auth_expired[DEFAULT_ACCOUNT_ID].attempts, 0);
+        state.preferences.auth_expired_enabled = true;
+        let notice = reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, now).unwrap();
+        state.preferences.auth_expired_enabled = false;
+        assert!(reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, now + 60).is_none());
+        state.preferences.auth_expired_enabled = true;
+        let retry = reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, now + 60).unwrap();
+        assert_eq!(retry.notice_id, notice.notice_id);
+        complete_auth_expired_notice(&mut state, &retry);
+        state.preferences.auth_expired_enabled = false;
+        state.preferences.auth_expired_enabled = true;
+        assert!(reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, now + 7200).is_none());
+    }
+
+    #[test]
+    fn reauthorization_rearms_auth_notice_and_ignores_stale_completion() {
         let account_id = "codex-synthetic-1";
         let mut state = default_state();
         apply_login_success(
@@ -3339,22 +3489,10 @@ mod tests {
             None,
             1_790_000_000,
         );
+        expire_codex_state(&mut state, account_id, 1_790_100_000);
+        let old = reserve_auth_expired_notice(&mut state, account_id, 1_790_100_000).unwrap();
+        assert_eq!(old.source, AccountSource::Managed);
 
-        let was_reauth = state.accounts[1].auth_state == AuthState::NeedsReauth;
-        apply_error(
-            &mut state,
-            account_id,
-            UsageError {
-                code: "auth-expired".to_string(),
-                message: "需要重新登录".to_string(),
-            },
-            1_790_100_000,
-            None,
-        );
-        let notice = auth_expired_notice(&state, account_id, was_reauth).expect("notice");
-        assert_eq!(notice.source, AccountSource::Managed);
-
-        // 重新授权成功回到 Ok，下一次失效重新提醒。
         apply_login_success(
             &mut state,
             account_id,
@@ -3365,19 +3503,110 @@ mod tests {
             None,
             1_790_200_000,
         );
-        assert_eq!(state.accounts[1].auth_state, AuthState::Ok);
-        let was_reauth = state.accounts[1].auth_state == AuthState::NeedsReauth;
-        apply_error(
-            &mut state,
-            account_id,
-            UsageError {
-                code: "auth-expired".to_string(),
-                message: "需要重新登录".to_string(),
-            },
-            1_790_300_000,
-            None,
+        sync_auth_expired_marks(&mut state);
+        assert!(!state.reminders.auth_expired.contains_key(account_id));
+        complete_auth_expired_notice(&mut state, &old);
+        assert!(!state.reminders.auth_expired.contains_key(account_id));
+
+        expire_codex_state(&mut state, account_id, 1_790_300_000);
+        complete_auth_expired_notice(&mut state, &old);
+        assert!(!state.reminders.auth_expired[account_id].delivered);
+        let new = reserve_auth_expired_notice(&mut state, account_id, 1_790_300_000).unwrap();
+        assert_ne!(new.notice_id, old.notice_id);
+    }
+
+    #[test]
+    fn all_single_plan_platforms_share_auth_retry_and_recovery() {
+        let now = 1_790_100_000;
+        for platform in [
+            OPENCODE_GO_PLATFORM,
+            COMMAND_CODE_PLATFORM,
+            ANTIGRAVITY_PLATFORM,
+        ] {
+            for code in [
+                "auth-expired",
+                "invalid-key",
+                "not-logged-in",
+                "credentials-missing",
+            ] {
+                let mut state = default_state();
+                state.accounts.push(AccountState {
+                    account_id: "synthetic-provider".to_string(),
+                    platform: platform.to_string(),
+                    display_name: "测试账户".to_string(),
+                    auth_state: AuthState::Ok,
+                    source: AccountSource::Managed,
+                    identity_hint: None,
+                    products: if platform == ANTIGRAVITY_PLATFORM {
+                        antigravity_products()
+                    } else {
+                        vec![api_key_product(platform).unwrap()]
+                    },
+                });
+                apply_platform_error(
+                    &mut state,
+                    "synthetic-provider",
+                    platform,
+                    &ProviderError::new(code, "需要重新授权"),
+                    now,
+                );
+                sync_auth_expired_marks(&mut state);
+                let notice =
+                    reserve_auth_expired_notice(&mut state, "synthetic-provider", now).unwrap();
+                assert_eq!(notice.platform, platform);
+                assert!(!auth_notice_due(&state, "synthetic-provider", now + 59));
+                assert!(auth_notice_due(&state, "synthetic-provider", now + 60));
+                complete_auth_expired_notice(&mut state, &notice);
+                assert!(!auth_notice_due(&state, "synthetic-provider", now + 7200));
+                apply_platform_success(
+                    &mut state,
+                    "synthetic-provider",
+                    platform,
+                    snapshot_from_usage(&synthetic_usage()),
+                    None,
+                    None,
+                    Some(true),
+                );
+                sync_auth_expired_marks(&mut state);
+                assert!(!state
+                    .reminders
+                    .auth_expired
+                    .contains_key("synthetic-provider"));
+                for non_auth_code in [
+                    "network",
+                    "timeout",
+                    "rate-limited",
+                    "not-subscribed",
+                    "upstream",
+                    "cli-outdated",
+                ] {
+                    apply_platform_error(
+                        &mut state,
+                        "synthetic-provider",
+                        platform,
+                        &ProviderError::new(non_auth_code, "查询暂不可用"),
+                        now + 10,
+                    );
+                    sync_auth_expired_marks(&mut state);
+                    assert!(!auth_notice_due(&state, "synthetic-provider", now + 7200));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn removed_account_clears_pending_notice_and_ignores_late_completion() {
+        let mut state = default_state();
+        expire_codex_state(&mut state, DEFAULT_ACCOUNT_ID, 1_790_100_000);
+        let notice =
+            reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, 1_790_100_000).unwrap();
+        state.accounts.clear();
+        sync_auth_expired_marks(&mut state);
+        complete_auth_expired_notice(&mut state, &notice);
+        assert!(state.reminders.auth_expired.is_empty());
+        assert!(
+            reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, 1_790_200_000).is_none()
         );
-        assert!(auth_expired_notice(&state, account_id, was_reauth).is_some());
     }
 
     #[test]
@@ -3708,6 +3937,87 @@ mod tests {
     }
 
     #[test]
+    fn version_one_state_migrates_without_losing_accounts_or_overwriting_the_original() {
+        let path = temp_state_path("auth-migrate-v1");
+        let mut state = default_state();
+        apply_success(&mut state, DEFAULT_ACCOUNT_ID, synthetic_usage(), None);
+        state.accounts[0].auth_state = AuthState::NeedsReauth;
+        state.preferences.refresh_minutes = 15;
+        state.preferences.auth_expired_enabled = false;
+        state.reminders.low_quota.insert(
+            "synthetic-window".to_string(),
+            LowQuotaMark {
+                resets_at_epoch: Some(1_790_010_000),
+            },
+        );
+        let mut legacy = serde_json::to_value(&state).expect("serialize");
+        legacy["schemaVersion"] = 1.into();
+        legacy["reminders"]
+            .as_object_mut()
+            .unwrap()
+            .remove("authExpired");
+        let raw = serde_json::to_vec(&legacy).unwrap();
+        fs::write(&path, &raw).unwrap();
+
+        let mut migrated = load_state(&path);
+        assert_eq!(migrated.schema_version, SCHEMA_VERSION);
+        assert_eq!(migrated.accounts, state.accounts);
+        assert_eq!(migrated.preferences, state.preferences);
+        assert_eq!(migrated.reminders.low_quota, state.reminders.low_quota);
+        assert!(!migrated.reminders.auth_expired[DEFAULT_ACCOUNT_ID].delivered);
+        assert_eq!(fs::read(&path).unwrap(), raw);
+        assert!(
+            reserve_auth_expired_notice(&mut migrated, DEFAULT_ACCOUNT_ID, 1_790_100_000).is_none()
+        );
+        migrated.preferences.auth_expired_enabled = true;
+        let notice =
+            reserve_auth_expired_notice(&mut migrated, DEFAULT_ACCOUNT_ID, 1_790_100_000).unwrap();
+        complete_auth_expired_notice(&mut migrated, &notice);
+        write_state(&path, &migrated).unwrap();
+        let mut reloaded = load_state(&path);
+        assert!(
+            reserve_auth_expired_notice(&mut reloaded, DEFAULT_ACCOUNT_ID, 1_790_200_000).is_none()
+        );
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn corrupt_auth_notice_record_is_backed_up_before_fallback() {
+        let path = temp_state_path("auth-corrupt");
+        let mut state = default_state();
+        expire_codex_state(&mut state, DEFAULT_ACCOUNT_ID, 1_790_100_000);
+        let mut value = serde_json::to_value(&state).unwrap();
+        value["reminders"]["authExpired"][DEFAULT_ACCOUNT_ID]["attempts"] = "broken".into();
+        let raw = serde_json::to_vec(&value).unwrap();
+        fs::write(&path, &raw).unwrap();
+        assert_eq!(load_state(&path), default_state());
+        let backup = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| entry.file_name().to_string_lossy().contains(".corrupt-"))
+            .unwrap();
+        assert_eq!(fs::read(backup.path()).unwrap(), raw);
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn unknown_state_version_is_backed_up_before_fallback() {
+        let path = temp_state_path("auth-future-schema");
+        let mut value = serde_json::to_value(default_state()).unwrap();
+        value["schemaVersion"] = (SCHEMA_VERSION + 1).into();
+        let raw = serde_json::to_vec(&value).unwrap();
+        fs::write(&path, &raw).unwrap();
+        assert_eq!(load_state(&path), default_state());
+        let backup = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|entry| entry.file_name().to_string_lossy().contains(".corrupt-"))
+            .unwrap();
+        assert_eq!(fs::read(backup.path()).unwrap(), raw);
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
     fn old_state_without_source_is_read_as_local_account() {
         let mut value = serde_json::to_value(default_state()).expect("serialize");
         let accounts = value["accounts"].as_array_mut().expect("accounts");
@@ -3809,12 +4119,40 @@ mod tests {
         }
     }
 
+    fn expired_bailian_readout() -> BailianReadout {
+        let mut readout = bailian_readout();
+        let error = BailianError {
+            code: "auth-expired".to_string(),
+            message: "会话已失效".to_string(),
+        };
+        readout.token_plan = Err(error.clone());
+        readout.coding_plan = Err(error);
+        readout.token_plan_subscription = None;
+        readout.identity = None;
+        readout
+    }
+
+    fn refresh_bailian_state(
+        state: &mut PersistedState,
+        account_id: &str,
+        readout: &BailianReadout,
+        now: i64,
+    ) -> Option<AuthExpiredNotice> {
+        // 与生产状态更新顺序一致：先写结果、同步提醒，再由调度器预留发送。
+        apply_bailian_readout(state, account_id, readout, now);
+        sync_auth_expired_marks(state);
+        reserve_auth_expired_notice(state, account_id, now)
+    }
+
     #[test]
     fn bailian_readout_populates_both_plan_products() {
         let mut state = default_state();
         state.accounts.push(bailian_account("bailian-1"));
 
-        apply_bailian_readout(&mut state, "bailian-1", &bailian_readout(), 1_790_000_100);
+        assert!(
+            refresh_bailian_state(&mut state, "bailian-1", &bailian_readout(), 1_790_000_100)
+                .is_none()
+        );
 
         let account = &state.accounts[1];
         assert_eq!(account.auth_state, AuthState::Ok);
@@ -3854,7 +4192,7 @@ mod tests {
             nick_name: Some("rainbow217".to_string()),
         });
 
-        apply_bailian_readout(&mut state, "bailian-1", &readout, 1_790_000_100);
+        assert!(refresh_bailian_state(&mut state, "bailian-1", &readout, 1_790_000_100).is_none());
 
         assert_eq!(state.accounts[1].display_name, "rainbow217");
     }
@@ -3869,7 +4207,7 @@ mod tests {
             nick_name: Some("rainbow217".to_string()),
         });
 
-        apply_bailian_readout(&mut state, "bailian-1", &readout, 1_790_000_100);
+        assert!(refresh_bailian_state(&mut state, "bailian-1", &readout, 1_790_000_100).is_none());
 
         assert_eq!(
             state.accounts[1].identity_hint.as_deref(),
@@ -3888,7 +4226,7 @@ mod tests {
             ..TokenPlanSubscription::default()
         });
 
-        apply_bailian_readout(&mut state, "bailian-1", &readout, 1_790_000_100);
+        assert!(refresh_bailian_state(&mut state, "bailian-1", &readout, 1_790_000_100).is_none());
 
         let token_plan = &state.accounts[1].products[0];
         assert_eq!(token_plan.active, Some(false));
@@ -3905,18 +4243,21 @@ mod tests {
     fn bailian_auth_error_marks_account_but_keeps_last_snapshot() {
         let mut state = default_state();
         state.accounts.push(bailian_account("bailian-1"));
-        apply_bailian_readout(&mut state, "bailian-1", &bailian_readout(), 1_790_000_100);
+        assert!(
+            refresh_bailian_state(&mut state, "bailian-1", &bailian_readout(), 1_790_000_100)
+                .is_none()
+        );
 
-        let mut readout = bailian_readout();
-        readout.token_plan = Err(BailianError {
-            code: "auth-expired".to_string(),
-            message: "会话已失效".to_string(),
-        });
-        readout.coding_plan = Err(BailianError {
-            code: "auth-expired".to_string(),
-            message: "会话已失效".to_string(),
-        });
-        apply_bailian_readout(&mut state, "bailian-1", &readout, 1_790_000_200);
+        let notice = refresh_bailian_state(
+            &mut state,
+            "bailian-1",
+            &expired_bailian_readout(),
+            1_790_000_200,
+        )
+        .expect("first console session expiry should notify");
+        assert_eq!(notice.account_name, "百炼测试账户");
+        assert_eq!(notice.platform, "bailian");
+        assert_eq!(notice.source, AccountSource::Managed);
 
         let account = &state.accounts[1];
         assert_eq!(account.auth_state, AuthState::NeedsReauth);
@@ -3925,6 +4266,82 @@ mod tests {
             account.products[0].query.last_error.as_ref().unwrap().code,
             "auth-expired"
         );
+    }
+
+    #[test]
+    fn bailian_auth_notice_deduplicates_across_restart_and_rearms_after_recovery() {
+        let mut state = default_state();
+        state.accounts.push(bailian_account("bailian-1"));
+        let readout = expired_bailian_readout();
+        let notice = refresh_bailian_state(&mut state, "bailian-1", &readout, 1_790_000_100)
+            .expect("first console expiry should notify");
+        complete_auth_expired_notice(&mut state, &notice);
+        assert!(refresh_bailian_state(&mut state, "bailian-1", &readout, 1_790_000_200).is_none());
+
+        let mut reloaded: PersistedState =
+            serde_json::from_str(&serde_json::to_string(&state).expect("serialize"))
+                .expect("deserialize");
+        assert!(
+            refresh_bailian_state(&mut reloaded, "bailian-1", &readout, 1_790_000_300).is_none()
+        );
+
+        // 授权恢复后读到正常数据，下一次失效应重新提醒。
+        assert!(refresh_bailian_state(
+            &mut reloaded,
+            "bailian-1",
+            &bailian_readout(),
+            1_790_000_400,
+        )
+        .is_none());
+        assert_eq!(reloaded.accounts[1].auth_state, AuthState::Ok);
+        assert!(
+            refresh_bailian_state(&mut reloaded, "bailian-1", &readout, 1_790_000_500).is_some()
+        );
+    }
+
+    #[test]
+    fn bailian_auth_notice_respects_disabled_switch() {
+        let mut state = default_state();
+        state.accounts.push(bailian_account("bailian-1"));
+        state.preferences.auth_expired_enabled = false;
+
+        assert!(refresh_bailian_state(
+            &mut state,
+            "bailian-1",
+            &expired_bailian_readout(),
+            1_790_000_100,
+        )
+        .is_none());
+        assert_eq!(state.accounts[1].auth_state, AuthState::NeedsReauth);
+    }
+
+    #[test]
+    fn bailian_network_errors_do_not_trigger_auth_notice() {
+        let mut state = default_state();
+        state.accounts.push(bailian_account("bailian-1"));
+        let mut readout = expired_bailian_readout();
+        let error = BailianError {
+            code: "network".to_string(),
+            message: "连接超时".to_string(),
+        };
+        readout.token_plan = Err(error.clone());
+        readout.coding_plan = Err(error);
+
+        assert!(refresh_bailian_state(&mut state, "bailian-1", &readout, 1_790_000_100).is_none());
+        assert_eq!(state.accounts[1].auth_state, AuthState::Unknown);
+    }
+
+    #[test]
+    fn bailian_removed_account_does_not_trigger_auth_notice() {
+        let mut state = default_state();
+        assert!(refresh_bailian_state(
+            &mut state,
+            "bailian-removed",
+            &expired_bailian_readout(),
+            1_790_000_100,
+        )
+        .is_none());
+        assert_eq!(state.accounts.len(), 1);
     }
 
     #[test]
@@ -3937,7 +4354,7 @@ mod tests {
             message: "该类套餐不可读".to_string(),
         });
 
-        apply_bailian_readout(&mut state, "bailian-1", &readout, 1_790_000_100);
+        assert!(refresh_bailian_state(&mut state, "bailian-1", &readout, 1_790_000_100).is_none());
 
         let account = &state.accounts[1];
         assert_eq!(account.auth_state, AuthState::Ok);
@@ -3952,7 +4369,10 @@ mod tests {
 
         let mut state = default_state();
         state.accounts.push(account);
-        apply_bailian_readout(&mut state, "bailian-1", &bailian_readout(), 1_790_000_000);
+        assert!(
+            refresh_bailian_state(&mut state, "bailian-1", &bailian_readout(), 1_790_000_000)
+                .is_none()
+        );
         let account = &state.accounts[1];
         assert!(!is_account_due(account, 5, 1_790_000_100));
         assert!(is_account_due(account, 5, 1_790_000_400));
@@ -3989,7 +4409,7 @@ mod tests {
         let mut readout = bailian_readout();
         readout.coding_plan = Ok(CodingPlanUsage::default());
 
-        apply_bailian_readout(&mut state, "bailian-1", &readout, 1_790_000_100);
+        assert!(refresh_bailian_state(&mut state, "bailian-1", &readout, 1_790_000_100).is_none());
 
         let coding_plan = &state.accounts[1].products[1];
         assert_eq!(coding_plan.active, Some(false));

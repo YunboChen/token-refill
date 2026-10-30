@@ -26,7 +26,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
 // 浏览器预览使用的占位状态；桌面端以 Rust 返回的完整状态为准。
 export function defaultAppState(): AppState {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     revision: 0,
     accounts: [
       {
