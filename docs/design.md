@@ -519,17 +519,22 @@ div.panel（透明窗口内的圆角面板）
 ├─ div.scroll
 │  ├─ p.notice（全局错误，可选）
 │  ├─ div.empty（没有任何账户时）
-│  └─ section.section × N
-│     ├─ button.sectionHead（平台徽标 + 名称 + 账户数 + 折叠箭头）
-│     └─ div.cards
-│        └─ article.account × N
-│           ├─ div.accountHead（账户名 + 重新授权标签 + 相对更新时间 + 单个账户刷新）
-│           ├─ span.accountHint（身份，如邮箱；可选）
-│           ├─ span.tier（套餐档位，主色小标题；可选）
-│           ├─ div.quotaGroup × N
-│           │  ├─ span.eyebrow（多套餐时的套餐名，主色小标题；可选）
-│           │  └─ div.quotaRow（标签 / 额度条 / 「剩余 X%」网格 + 条下重置时间）
-│           └─ p.errorLine（刷新失败，可选）
+│  ├─ div.sections（Reorder.Group，平台可拖动排序）
+│  │  └─ section.section × N（Reorder.Item）
+│  │     ├─ div.sectionHeadRow
+│  │     │  ├─ button.sectionHead（平台徽标 + 名称 + 账户数）
+│  │     │  ├─ ReorderHandle（多个平台时）
+│  │     │  └─ span.chevron（折叠箭头，点击同样切换）
+│  │     └─ div.cardsWrap > div.cards（账户 Reorder.Group）
+│  │        └─ article.account × N（Reorder.Item）
+│  │           ├─ div.accountHead（账户名 + 重新授权标签 + 相对更新时间 + 刷新 + 排序手柄）
+│  │           ├─ span.accountHint（身份，如邮箱；可选）
+│  │           ├─ span.tier（套餐档位，主色小标题；可选）
+│  │           ├─ div.quotaGroup × N
+│  │           │  ├─ span.eyebrow（多套餐时的套餐名，主色小标题；可选）
+│  │           │  └─ div.quotaRow（标签 / 额度条 / 「剩余 X%」网格 + 条下重置时间）
+│  │           └─ p.errorLine（刷新失败，可选）
+│  └─ section.section（中转站；同类标题行 + 卡片 Reorder.Group，固定排在平台分组之后）
 └─ footer
    ├─ span.version
    └─ button.openButton「打开主窗口」+ span.divider + button.quitButton「退出」
@@ -538,8 +543,9 @@ div.panel（透明窗口内的圆角面板）
 关键行为：
 
 - 订阅账户按平台分组，每个账户一张卡；平台分组可折叠（默认展开），折叠状态只存在组件内存里，不写进设置。
+- 面板内也能调整顺序：平台标题右侧、订阅账户与中转站账户的工具区各有与总览相同的排序手柄（共用 `useOverviewOrder` / `useRelayOrder`），拖动或聚焦后按上下方向键移动，写入同一份 `overviewOrder` / `relayOrder`，主窗口与面板随状态事件互相同步；只有一个平台分组或一个账户时不显示对应手柄。折叠按钮与箭头仍然只负责展开/收起。
 - 额度行是三列网格：左侧窗口名、中间额度条、右侧「剩余 X%」，重置时间（外加金额/次数）贴在额度条下方，因此同一张卡里的进度条始终对齐。多套餐账户在每类套餐第一行标注套餐名。
-- 账户头右侧显示相对更新时间（`刚刚更新` / `N 分钟前` / 钟点）与单个账户的刷新按钮；顶部「全部刷新」同时刷新订阅账户与中转站。额度条 6px，低于提醒阈值时条与百分比转为 `--warning` 琥珀色。
+- 账户头右侧显示相对更新时间（`刚刚更新` / `N 分钟前` / 钟点）、单个账户的刷新按钮，以及（同平台有多个账户时）排序手柄；顶部「全部刷新」同时刷新订阅账户与中转站。额度条 6px，低于提醒阈值时条与百分比转为 `--warning` 琥珀色。
 - 中转站账户与订阅账户同卡式排版：账户名 + 相对更新时间 + 刷新按钮，第二行是 `平台 · 主机名`，下面是密钥/账户金额摘要与一条剩余比例条；不复制管理页的两列大卡。
 - 页脚不做实色主按钮：左侧版本号，右侧是两个纯文字动作（主色「打开主窗口」、弱化色「退出」），中间用一根竖线分隔。头部「全部刷新」与「打开主窗口」同一套文字动作样式，只换图标与位置。
 - 面板打开事件由 Rust 广播（`tray-panel-shown`）；收到后先展示缓存，再按刷新间隔补查中转站。面板只在用户点开时才创建，挂载即视为首次打开，会自己补一次状态同步与过期检查；中转站列表读完前不会主动发请求。

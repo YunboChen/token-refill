@@ -10,7 +10,6 @@ import {
 } from 'motion/react';
 import type { KeyQuota, KeyQuotaWindow, RelayAccount } from '../lib/desktop';
 import { clockLabel, resetLabel } from '../lib/format';
-import { applySavedOrder, moveItemBy, savedOrderKey } from '../lib/order';
 import { useRelay } from '../lib/relay';
 import {
   RELAY_MODE_LABELS,
@@ -23,7 +22,7 @@ import {
   relayWindowLabel,
 } from '../lib/relayFormat';
 import { useAppState } from '../lib/store';
-import { useSavedOrder } from '../lib/useSavedOrder';
+import { useRelayOrder } from '../lib/useOrdering';
 import ChevronIcon from './ChevronIcon';
 import ReorderHandle from './ReorderHandle';
 import styles from '../App.module.css';
@@ -581,22 +580,17 @@ export default function RelayQuotaBoard({ desktop }: { desktop: boolean }) {
     refreshDue,
     ensureLoaded,
   } = useRelay();
-  const { state, saveRelayOrder } = useAppState();
+  const { state } = useAppState();
   const threshold = state.preferences.lowQuotaThreshold;
   const lowQuotaEnabled = state.preferences.lowQuotaEnabled;
   const refreshMinutes = state.preferences.refreshMinutes;
   // 默认全部展开；只记录被收起的账户，刷新列表时保留用户的折叠选择。
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
-  const [order, persistOrder] = useSavedOrder(
-    state.relayOrder,
-    savedOrderKey,
-    saveRelayOrder,
-  );
-  const orderedAccounts = applySavedOrder(
-    accounts,
-    order,
-    (account) => account.id,
-  );
+  const {
+    orderedAccounts,
+    commitAccounts,
+    moveAccount,
+  } = useRelayOrder(accounts);
 
   // 只在真正切到该标签页时扫描，避免启动或停留在订阅额度时额外查询中转站。
   useEffect(() => {
@@ -616,12 +610,6 @@ export default function RelayQuotaBoard({ desktop }: { desktop: boolean }) {
       else next.add(id);
       return next;
     });
-  };
-
-  const moveAccount = (id: string, delta: -1 | 1) => {
-    const ids = orderedAccounts.map((account) => account.id);
-    const next = moveItemBy(ids, ids.indexOf(id), delta);
-    if (next) persistOrder(next);
   };
 
   if (!desktop) {
@@ -695,7 +683,7 @@ export default function RelayQuotaBoard({ desktop }: { desktop: boolean }) {
             as="div"
             axis="y"
             values={orderedAccounts.map((account) => account.id)}
-            onReorder={(ids) => persistOrder(ids)}
+            onReorder={commitAccounts}
             className={styles.accountStack}
           >
             {orderedAccounts.map((account) => (

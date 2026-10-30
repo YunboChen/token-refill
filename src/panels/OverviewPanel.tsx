@@ -1,6 +1,5 @@
 import {
   Fragment,
-  useCallback,
   useState,
   type CSSProperties,
 } from 'react';
@@ -21,14 +20,12 @@ import {
 } from 'motion/react';
 import type {
   AccountState,
-  OverviewOrder,
   ProductState,
   QuotaGroup,
   QuotaWindow,
 } from '../lib/desktop';
-import { groupAccountsByPlatform, platformMeta } from '../lib/platforms';
-import { moveItemBy, savedOrderKey } from '../lib/order';
-import { useSavedOrder } from '../lib/useSavedOrder';
+import { platformMeta } from '../lib/platforms';
+import { useOverviewOrder } from '../lib/useOrdering';
 import {
   clockLabel,
   compactQuotaWindowLabel,
@@ -51,10 +48,6 @@ const OVERVIEW_TABS: { key: OverviewTab; label: string; Icon: Icon }[] = [
   { key: 'subscription', label: '订阅账户额度', Icon: UsersThree },
   { key: 'relay', label: '中转站账户额度', Icon: PlugsIcon },
 ];
-
-function overviewOrderKey(order: OverviewOrder): string {
-  return `${savedOrderKey(order.platforms)}\u0002${savedOrderKey(order.accounts)}`;
-}
 
 function amountLabel(window: QuotaWindow): string | null {
   if (window.unit === 'usd') {
@@ -788,61 +781,18 @@ function SortablePlatformBoard({
 }
 
 export default function OverviewPanel({ desktop }: { desktop: boolean }) {
-  const { state, ready, refresh, saveOverviewOrder } = useAppState();
+  const { state, ready, refresh } = useAppState();
   const [tab, setTab] = useState<OverviewTab>('subscription');
   const tabIndex = Math.max(0, OVERVIEW_TABS.findIndex(({ key }) => key === tab));
   const threshold = state.preferences.lowQuotaThreshold;
   const lowOn = state.preferences.lowQuotaEnabled;
-  const [order, persistOrder] = useSavedOrder(
-    state.overviewOrder,
-    overviewOrderKey,
-    saveOverviewOrder,
-  );
-
-  const groups = groupAccountsByPlatform(state.accounts, order);
-
-  const commitPlatforms = useCallback(
-    (platforms: string[]) => {
-      const accounts = groups.flatMap((group) =>
-        group.accounts.map((account) => account.accountId),
-      );
-      persistOrder({ platforms, accounts });
-    },
-    [groups, persistOrder],
-  );
-
-  const commitAccounts = useCallback(
-    (platform: string, accountIds: string[]) => {
-      const platforms = groups.map((group) => group.platform);
-      const accounts = groups.flatMap((group) =>
-        group.platform === platform
-          ? accountIds
-          : group.accounts.map((account) => account.accountId),
-      );
-      persistOrder({ platforms, accounts });
-    },
-    [groups, persistOrder],
-  );
-
-  const movePlatform = useCallback(
-    (platform: string, delta: -1 | 1) => {
-      const platforms = groups.map((group) => group.platform);
-      const next = moveItemBy(platforms, platforms.indexOf(platform), delta);
-      if (next) commitPlatforms(next);
-    },
-    [groups, commitPlatforms],
-  );
-
-  const moveAccount = useCallback(
-    (platform: string, accountId: string, delta: -1 | 1) => {
-      const group = groups.find((item) => item.platform === platform);
-      if (!group) return;
-      const accountIds = group.accounts.map((account) => account.accountId);
-      const next = moveItemBy(accountIds, accountIds.indexOf(accountId), delta);
-      if (next) commitAccounts(platform, next);
-    },
-    [groups, commitAccounts],
-  );
+  const {
+    groups,
+    commitPlatforms,
+    commitAccounts,
+    movePlatform,
+    moveAccount,
+  } = useOverviewOrder(state.accounts);
 
   return (
     <section>
