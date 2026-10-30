@@ -7,7 +7,7 @@
 //!
 //! 从 cc-switch、Claude Code / Codex 本地配置扫描到的密钥不复制到应用目录：
 //! 用户勾选导入后，只在 `relay-profiles/<relayId>/source.json` 记录来源引用
-//! （来源、provider id、地址等，不含密钥），下次启动时重新读取源配置取出密钥。
+//! （来源、provider id、地址等，不含密钥），启动与每次刷新时重新读取源配置取出密钥。
 //! 扫描只列出候选，用户勾选后才查询额度并登记。
 
 use std::collections::HashSet;
@@ -23,6 +23,7 @@ use crate::quota::{self, DetectedQuota, KeyQuota, QuotaProvider};
 
 /// 会话内最多保留的条目，避免误粘贴大量密钥后长期占用内存。
 const MAX_ENTRIES: usize = 20;
+const MAX_LABEL_CHARS: usize = 40;
 const CREDENTIALS_FILE: &str = "credentials.json";
 const SOURCE_FILE: &str = "source.json";
 const SNAPSHOT_FILE: &str = "snapshot.json";
@@ -63,7 +64,8 @@ impl RelayOrigin {
 pub struct RelayAccount {
     pub id: String,
     pub base_url: String,
-    /// 扫描到的 provider 名称（cc-switch）；手动或当前配置文件条目为空。
+    /// 账户标题：用户手动设置的标题，或扫描导入时的 provider 名称（cc-switch）。
+    /// 为空时界面回退到服务地址。
     pub label: Option<String>,
     pub origin: RelayOrigin,
     pub provider: QuotaProvider,
@@ -73,7 +75,7 @@ pub struct RelayAccount {
     pub last_error: Option<String>,
     /// 密钥是否已写入应用目录（仅手动填写的条目）。
     pub persisted: bool,
-    /// 是否已在应用目录保存来源引用；下次启动会重新读取源配置。
+    /// 是否已在应用目录保存来源引用；启动与刷新时会重新读取源配置。
     pub reference_saved: bool,
     /// 是否已配置 New API 访问令牌（只暴露存在性，不返回令牌本身）。
     pub has_account_token: bool,
@@ -123,7 +125,7 @@ struct UpsertInput<'a> {
     detected: DetectedQuota,
 }
 
-/// 扫描导入的条目不保存密钥，只保存来源引用；下次启动按引用重新读取源配置。
+/// 扫描导入的条目不保存密钥，只保存来源引用；启动与刷新时按引用重新读取源配置。
 /// 文件里可能含用户主动填写的 New API 访问令牌，因此同样按 0600 写入。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -222,6 +224,7 @@ impl RelayEntry {
             origin: self.origin,
             provider: self.provider,
             api_key: self.api_key.clone(),
+            label: self.label.clone(),
             account_token: self.account_token.clone(),
             new_api_user_id: self.account_user_id.clone(),
         }
@@ -243,6 +246,9 @@ struct StoredRelayCredential {
     origin: RelayOrigin,
     provider: QuotaProvider,
     api_key: String,
+    /// 界面标题；不是凭证，旧版本文件没有这一项时按空处理。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     account_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -370,7 +376,7 @@ impl RelayStore {
                         base_url,
                         api_key,
                         stored.origin,
-                        None,
+                        stored.label,
                         stored.account_token,
                         stored.new_api_user_id,
                         stored.provider,
@@ -398,7 +404,9 @@ impl RelayStore {
                         eprintln!("跳过来源密钥无效的中转站账户：{id}");
                         continue;
                     };
-                    let label = candidate.label.clone().or_else(|| reference.label.clone());
+                    // 用户设置的标题优先于源配置里的 provider 名称，
+                    // 避免下次启动把标题改回扫描结果。
+                    let label = reference.label.clone().or_else(|| candidate.label.clone());
                     (
                         base_url,
                         api_key,
@@ -450,7 +458,9 @@ impl RelayStore {
         api_key: &str,
         account_token: Option<&str>,
         new_api_user_id: Option<&str>,
+        label: Option<&str>,
     ) -> Result<RelayAccount, String> {
+        let label = label.map(normalize_label).transpose()?.flatten();
         let detected = quota::detect_and_fetch(base_url, api_key, account_token, new_api_user_id)?;
         self.upsert(UpsertInput {
             origin: RelayOrigin::Manual,
@@ -458,11 +468,77 @@ impl RelayStore {
             api_key,
             account_token,
             new_api_user_id,
-            label: None,
+            label: label.as_deref(),
             source_ref: None,
             detected,
         })
     }
+
+    /// 修改手动账户的服务地址与 API Key，并立即重新识别、查询额度。
+    /// `api_key` 为空表示沿用当前密钥。来源引用账户不接受修改：它的地址与密钥
+    /// 始终应来自本地配置，界面只允许改标题，避免把源配置里的密钥复制到应用目录，
+    /// 也避免应用内的值覆盖真实来源。
+    pub fn update(
+        &self,
+        id: &str,
+        base_url: &str,
+        api_key: Option<&str>,
+    ) -> Result<RelayAccount, String> {
+        let base_url = quota::normalize_base_url(base_url)?;
+        // 先读出当前条目；联网识别不能持有条目锁。
+        let (api_key, account_token, account_user_id) = {
+            let entries = self.lock();
+            let entry = entries
+                .iter()
+                .find(|entry| entry.id == id)
+                .ok_or_else(|| "找不到这条中转站账户，请重新添加。".to_string())?;
+            if entry.source_ref.is_some() {
+                return Err(Self::SOURCE_ENTRY_EDIT_ERROR.to_string());
+            }
+            let api_key = match api_key.map(str::trim).filter(|value| !value.is_empty()) {
+                Some(value) => quota::validate_api_key(value)?,
+                None => entry.api_key.clone(),
+            };
+            (
+                api_key,
+                entry.account_token.clone(),
+                entry.account_user_id.clone(),
+            )
+        };
+
+        let detected = quota::detect_and_fetch(
+            &base_url,
+            &api_key,
+            account_token.as_deref(),
+            account_user_id.as_deref(),
+        )?;
+        let checked_at_epoch = Some(detected.quota.checked_at_epoch);
+
+        let mut entries = self.lock();
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry.id == id)
+            .ok_or_else(|| "找不到这条中转站账户，请重新添加。".to_string())?;
+        entry.base_url = base_url;
+        entry.api_key = api_key;
+        entry.provider = detected.provider;
+        entry.quota = Some(detected.quota);
+        entry.checked_at_epoch = checked_at_epoch;
+        entry.last_error = None;
+        // 访问令牌只对 New API 有意义；换成其他平台时一并清除。
+        if entry.provider != QuotaProvider::NewApi {
+            entry.account_token = None;
+            entry.account_user_id = None;
+        }
+        self.persist_entry(entry)?;
+        self.persist_snapshot(entry);
+        self.bump_revision();
+        Ok(entry.view())
+    }
+
+    /// 来源账户只能改标题；地址与密钥由本地配置提供。
+    const SOURCE_ENTRY_EDIT_ERROR: &'static str =
+        "该账户由本地配置导入，服务地址与密钥始终从源配置读取，不能在这里修改；请修改源配置后点击刷新，或移除后重新导入。";
 
     /// 扫描 cc-switch、Claude Code / Codex 的本地配置，只列出候选，不发起网络请求。
     /// 密钥留在内存中，等用户勾选后由 [`Self::import`] 使用。
@@ -681,15 +757,26 @@ impl RelayStore {
         Ok(view)
     }
 
-    /// 使用已保存的密钥重新识别并查询；失败时保留旧额度并记录错误。
+    /// 使用最新配置重新识别并查询；失败时保留旧额度并记录错误。
+    /// 来源账户会先重新读取本地配置：cc-switch / Claude Code / Codex 里的地址或
+    /// 密钥变化后，刷新立即使用最新值，而不是启动时缓存的副本。
     pub fn refresh(&self, id: &str) -> Result<RelayAccount, String> {
-        let (base_url, api_key, account_token, account_user_id) = {
+        self.refresh_with(id, discovery::discover_candidates)
+    }
+
+    fn refresh_with(
+        &self,
+        id: &str,
+        mut discover: impl FnMut() -> Vec<discovery::ConfigCandidate>,
+    ) -> Result<RelayAccount, String> {
+        let (source_ref, base_url, api_key, account_token, account_user_id) = {
             let entries = self.lock();
             let entry = entries
                 .iter()
                 .find(|entry| entry.id == id)
                 .ok_or_else(|| "找不到这条中转站账户，请重新添加。".to_string())?;
             (
+                entry.source_ref.clone(),
                 entry.base_url.clone(),
                 entry.api_key.clone(),
                 entry.account_token.clone(),
@@ -697,12 +784,33 @@ impl RelayStore {
             )
         };
 
-        let result = quota::detect_and_fetch(
-            &base_url,
-            &api_key,
-            account_token.as_deref(),
-            account_user_id.as_deref(),
-        );
+        // 读取源配置不持有条目锁，网络查询之前先拿到最新地址与密钥。
+        let latest = match source_ref {
+            Some(reference) => discover()
+                .into_iter()
+                .find(|candidate| reference.matches(candidate))
+                .ok_or_else(|| {
+                    "本地配置中已找不到该账户的来源；请确认源配置仍在后重试，或移除后重新导入。"
+                        .to_string()
+                })
+                .and_then(|candidate| -> Result<(String, String), String> {
+                    Ok((
+                        quota::normalize_base_url(&candidate.base_url)?,
+                        quota::validate_api_key(&candidate.api_key)?,
+                    ))
+                }),
+            None => Ok((base_url, api_key)),
+        };
+
+        let result = latest.and_then(|(base_url, api_key)| {
+            quota::detect_and_fetch(
+                &base_url,
+                &api_key,
+                account_token.as_deref(),
+                account_user_id.as_deref(),
+            )
+            .map(|detected| (base_url, api_key, detected))
+        });
 
         let mut entries = self.lock();
         let entry = entries
@@ -710,7 +818,10 @@ impl RelayStore {
             .find(|entry| entry.id == id)
             .ok_or_else(|| "找不到这条中转站账户，请重新添加。".to_string())?;
         match result {
-            Ok(detected) => {
+            Ok((base_url, api_key, detected)) => {
+                // 来源配置可能已经更换地址或密钥，用本次读到的最新值更新内存副本。
+                entry.base_url = base_url;
+                entry.api_key = api_key;
                 let provider_changed = entry.provider != detected.provider;
                 entry.provider = detected.provider;
                 entry.checked_at_epoch = Some(detected.quota.checked_at_epoch);
@@ -777,6 +888,28 @@ impl RelayStore {
         self.refresh(id)
     }
 
+    /// 设置或清除账户标题。标题只用于界面区分账户，不属于凭证；空标题恢复
+    /// 显示服务地址。手动条目写入 credentials.json，来源引用条目写入 source.json。
+    pub fn set_label(&self, id: &str, label: &str) -> Result<RelayAccount, String> {
+        let label = normalize_label(label)?;
+        let mut entries = self.lock();
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry.id == id)
+            .ok_or_else(|| "找不到这条中转站账户，请重新添加。".to_string())?;
+        entry.label = label;
+        if let Some(reference) = entry.source_ref.as_mut() {
+            reference.label = entry.label.clone();
+        }
+        if entry.source_ref.is_some() {
+            self.persist_source_ref(entry)?;
+        } else if entry.origin.is_persisted() {
+            self.persist_entry(entry)?;
+        }
+        self.bump_revision();
+        Ok(entry.view())
+    }
+
     pub fn list(&self) -> Vec<RelayAccount> {
         self.lock().iter().map(RelayEntry::view).collect()
     }
@@ -822,7 +955,7 @@ impl RelayStore {
         Ok(())
     }
 
-    /// 保存来源引用（不含密钥）。下次启动按引用重新读取源配置。
+    /// 保存来源引用（不含密钥）。启动与刷新时按引用重新读取源配置。
     fn persist_source_ref(&self, entry: &RelayEntry) -> Result<(), String> {
         let (Some(dir), Some(reference)) = (self.entry_dir(&entry.id), entry.source_ref.as_ref())
         else {
@@ -843,6 +976,22 @@ impl RelayStore {
             eprintln!("保存中转站额度快照失败：{error}");
         }
     }
+}
+
+/// 标题上限按字符数计算；超长或含控制字符的标题容易破坏卡片布局，
+/// 也会让本地文件出现不可见内容。空字符串表示清除标题。
+fn normalize_label(label: &str) -> Result<Option<String>, String> {
+    let text = label.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    if text.chars().any(char::is_control) {
+        return Err("标题不能包含换行或控制字符。".to_string());
+    }
+    if text.chars().count() > MAX_LABEL_CHARS {
+        return Err(format!("标题最多 {MAX_LABEL_CHARS} 个字符。"));
+    }
+    Ok(Some(text.to_string()))
 }
 
 /// 标识会参与目录名拼接，只允许安全字符，避免路径逃逸。
@@ -965,6 +1114,40 @@ mod tests {
         base
     }
 
+    /// 与 [`serve`] 相同，但要求每个请求都携带指定的 API Key，用于验证刷新
+    /// 确实使用了重新读取到的最新密钥。
+    fn serve_expecting_auth(
+        steps: Vec<(&'static str, u16, &'static str)>,
+        expected_key: &'static str,
+    ) -> String {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("绑定回环端口");
+        let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        thread::spawn(move || {
+            for (path, status, body) in steps {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let mut buffer = [0u8; 8192];
+                let read = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                assert!(request.starts_with(&format!("GET {path} ")), "{request}");
+                assert!(
+                    request
+                        .to_ascii_lowercase()
+                        .contains(&format!("authorization: bearer {expected_key}")),
+                    "{request}"
+                );
+                let response = format!(
+                    "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        base
+    }
+
     fn temp_dir(label: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -988,11 +1171,11 @@ mod tests {
         ]);
         let store = RelayStore::default();
 
-        let first = store.query(&base, "sk-test", None, None).unwrap();
+        let first = store.query(&base, "sk-test", None, None, None).unwrap();
         assert_eq!(first.provider, QuotaProvider::Sub2Api);
         assert_eq!(first.quota.as_ref().unwrap().remaining_usd, Some(4.0));
 
-        let second = store.query(&base, "sk-test", None, None).unwrap();
+        let second = store.query(&base, "sk-test", None, None, None).unwrap();
         assert_eq!(first.id, second.id);
         assert_eq!(store.list().len(), 1);
     }
@@ -1013,7 +1196,7 @@ mod tests {
         assert_eq!(empty.revision, 0);
         assert!(empty.accounts.is_empty());
 
-        let account = store.query(&base, "sk-test", None, None).unwrap();
+        let account = store.query(&base, "sk-test", None, None, None).unwrap();
         let added = store.view_with_revision();
         assert_eq!(added.revision, 1);
         assert_eq!(added.accounts.len(), 1);
@@ -1041,7 +1224,7 @@ mod tests {
             ("/v1/usage", 401, "{}"),
         ]);
         let store = RelayStore::default();
-        let account = store.query(&base, "sk-test", None, None).unwrap();
+        let account = store.query(&base, "sk-test", None, None, None).unwrap();
 
         let refreshed = store.refresh(&account.id).unwrap();
         assert!(refreshed.last_error.is_some());
@@ -1057,7 +1240,7 @@ mod tests {
             ("/v1/usage", 200, body),
         ]);
         let store = RelayStore::default();
-        let account = store.query(&base, "sk-test", None, None).unwrap();
+        let account = store.query(&base, "sk-test", None, None, None).unwrap();
 
         store.remove(&account.id).unwrap();
         assert!(store.list().is_empty());
@@ -1076,7 +1259,7 @@ mod tests {
 
         let account = {
             let store = RelayStore::load(dir.clone());
-            store.query(&base, "sk-test", None, None).unwrap()
+            store.query(&base, "sk-test", None, None, None).unwrap()
         };
         assert!(dir.join(&account.id).join(CREDENTIALS_FILE).is_file());
 
@@ -1092,6 +1275,216 @@ mod tests {
 
         store.remove(&account.id).unwrap();
         assert!(!dir.join(&account.id).exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn title_is_saved_with_the_credential_and_can_be_cleared() {
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        let base = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        let dir = temp_dir("label");
+
+        let account = {
+            let store = RelayStore::load(dir.clone());
+            let account = store.query(&base, "sk-test", None, None, None).unwrap();
+            assert_eq!(account.label, None);
+            let renamed = store.set_label(&account.id, "  我的中转  ").unwrap();
+            assert_eq!(renamed.label.as_deref(), Some("我的中转"));
+            renamed
+        };
+        let stored = read_credentials(&dir.join(&account.id)).unwrap();
+        assert_eq!(stored.label.as_deref(), Some("我的中转"));
+
+        let store = RelayStore::load(dir.clone());
+        assert_eq!(store.list()[0].label.as_deref(), Some("我的中转"));
+
+        // 空白标题表示清除，重启后仍然显示服务地址。
+        let cleared = store.set_label(&account.id, "   ").unwrap();
+        assert_eq!(cleared.label, None);
+        let reloaded = RelayStore::load(dir.clone());
+        assert_eq!(reloaded.list()[0].label, None);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_changes_the_address_and_keeps_the_stored_key() {
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        let first = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        let second = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        let dir = temp_dir("update-address");
+        let store = RelayStore::load(dir.clone());
+        let account = store
+            .query(&first, "sk-old", None, None, Some("我的站"))
+            .unwrap();
+
+        // 留空密钥只改地址，密钥、标题与保存状态保持。
+        let updated = store.update(&account.id, &second, None).unwrap();
+        assert_eq!(updated.base_url, second);
+        assert_eq!(updated.label.as_deref(), Some("我的站"));
+        assert!(updated.persisted);
+        let stored = read_credentials(&dir.join(&account.id)).unwrap();
+        assert_eq!(stored.api_key, "sk-old");
+        assert_eq!(stored.base_url, second);
+
+        // 非法地址在联网前就被拒绝，已有条目不变。
+        assert!(store
+            .update(&account.id, "http://example.com", None)
+            .is_err());
+        assert_eq!(store.list()[0].base_url, second);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_rejects_an_imported_account_and_keeps_its_reference() {
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        let base = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        let dir = temp_dir("update-source");
+        let store = RelayStore::load(dir.clone());
+        let candidate =
+            config_candidate(RelayOrigin::CcSwitch, Some("来源账户"), &base, "sk-source");
+        let views = store.scan_candidates(vec![candidate]);
+        let account = store.import(&[views[0].id.clone()]).accounts[0].clone();
+        assert!(account.reference_saved);
+
+        // 来源账户的地址与密钥始终来自源配置，填写新密钥也不接受修改。
+        let error = store
+            .update(&account.id, &base, Some("sk-new"))
+            .unwrap_err();
+        assert!(error.contains("本地配置"), "{error}");
+        assert!(store.update(&account.id, &base, None).is_err());
+
+        let list = store.list();
+        assert_eq!(list.len(), 1);
+        assert!(list[0].reference_saved);
+        assert!(!list[0].persisted);
+        assert_eq!(list[0].base_url, account.base_url);
+        let profile = dir.join(&account.id);
+        assert!(!profile.join(CREDENTIALS_FILE).exists());
+        assert!(profile.join(SOURCE_FILE).exists());
+
+        // 标题仍然可以修改，且不会改变来源引用。
+        let renamed = store.set_label(&account.id, "我的来源账户").unwrap();
+        assert_eq!(renamed.label.as_deref(), Some("我的来源账户"));
+        assert!(renamed.reference_saved);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn title_can_be_set_when_adding_the_account() {
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        let base = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        let dir = temp_dir("label-add");
+        let store = RelayStore::load(dir.clone());
+
+        let account = store
+            .query(&base, "sk-test", None, None, Some("  添加时的标题  "))
+            .unwrap();
+        assert_eq!(account.label.as_deref(), Some("添加时的标题"));
+        let stored = read_credentials(&dir.join(&account.id)).unwrap();
+        assert_eq!(stored.label.as_deref(), Some("添加时的标题"));
+
+        // 非法标题在联网查询前就被拒绝，不会登记账户。
+        let error = store
+            .query(&base, "sk-test", None, None, Some("第一行\n第二行"))
+            .unwrap_err();
+        assert!(error.contains("控制字符"), "{error}");
+        assert_eq!(store.list().len(), 1);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn title_rejects_control_characters_and_overlong_text() {
+        let store = RelayStore::default();
+        let account = store
+            .upsert(UpsertInput {
+                origin: RelayOrigin::Manual,
+                base_url: "https://relay.example.com",
+                api_key: "sk-test",
+                account_token: None,
+                new_api_user_id: None,
+                label: None,
+                source_ref: None,
+                detected: quota::DetectedQuota {
+                    provider: QuotaProvider::Sub2Api,
+                    quota: crate::quota::KeyQuota {
+                        provider: QuotaProvider::Sub2Api,
+                        mode: crate::quota::QuotaMode::Key,
+                        key_name: None,
+                        plan_name: None,
+                        currency: None,
+                        valid: true,
+                        unlimited: false,
+                        limit_usd: Some(5.0),
+                        used_usd: Some(1.0),
+                        remaining_usd: Some(4.0),
+                        account: None,
+                        account_error: None,
+                        expires_at_epoch: None,
+                        windows: Vec::new(),
+                        checked_at_epoch: 0,
+                    },
+                },
+            })
+            .unwrap();
+
+        assert!(store.set_label(&account.id, "第一行\n第二行").is_err());
+        let long = "长".repeat(MAX_LABEL_CHARS + 1);
+        assert!(store.set_label(&account.id, &long).is_err());
+        assert_eq!(store.list()[0].label, None);
+        // 上限本身可以保存。
+        let at_limit = "长".repeat(MAX_LABEL_CHARS);
+        assert_eq!(
+            store.set_label(&account.id, &at_limit).unwrap().label,
+            Some(at_limit)
+        );
+    }
+
+    #[test]
+    fn imported_account_keeps_the_user_title_after_reload() {
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        let base = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        let dir = temp_dir("source-label");
+        let store = RelayStore::load(dir.clone());
+        let candidate =
+            config_candidate(RelayOrigin::CcSwitch, Some("来源账户"), &base, "sk-source");
+        let views = store.scan_candidates(vec![candidate.clone()]);
+        let report = store.import(&[views[0].id.clone()]);
+        let account = report.accounts[0].clone();
+        assert_eq!(account.label.as_deref(), Some("来源账户"));
+
+        let renamed = store.set_label(&account.id, "我的主力站").unwrap();
+        assert_eq!(renamed.label.as_deref(), Some("我的主力站"));
+
+        let reloaded = store_loaded_with(dir.clone(), vec![candidate]);
+        assert_eq!(reloaded.list()[0].label.as_deref(), Some("我的主力站"));
+
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1113,7 +1506,13 @@ mod tests {
         let account = {
             let store = RelayStore::load(dir.clone());
             store
-                .query(&base, "sk-test", Some("pat-test-token"), Some("20001"))
+                .query(
+                    &base,
+                    "sk-test",
+                    Some("pat-test-token"),
+                    Some("20001"),
+                    None,
+                )
                 .unwrap()
         };
         let quota = account.quota.as_ref().unwrap();
@@ -1221,7 +1620,7 @@ mod tests {
             ("/v1/usage", 200, body),
         ]);
         let store = RelayStore::default();
-        let account = store.query(&base, "sk-test", None, None).unwrap();
+        let account = store.query(&base, "sk-test", None, None, None).unwrap();
 
         let candidates = store.scan_candidates(vec![config_candidate(
             RelayOrigin::CcSwitch,
@@ -1374,6 +1773,81 @@ mod tests {
     }
 
     #[test]
+    fn refresh_reloads_the_source_config_before_querying() {
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        let old_base = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        // 刷新必须使用源配置里的新密钥，而不是导入时缓存的旧密钥。
+        let new_base = serve_expecting_auth(
+            vec![("/api/usage/token/", 404, "{}"), ("/v1/usage", 200, body)],
+            "sk-new",
+        );
+        let dir = temp_dir("refresh-source");
+        let store = RelayStore::load(dir.clone());
+        let source = |base_url: &str, api_key: &str| discovery::ConfigCandidate {
+            origin: RelayOrigin::CcSwitch,
+            app: Some("claude".to_string()),
+            // provider id 在源配置里保持稳定，地址与密钥可以变。
+            source_id: Some("provider-fixed".to_string()),
+            label: Some("来源账户".to_string()),
+            base_url: base_url.to_string(),
+            api_key: api_key.to_string(),
+        };
+        let views = store.scan_candidates(vec![source(&old_base, "sk-old")]);
+        let account = store.import(&[views[0].id.clone()]).accounts[0].clone();
+        assert_eq!(account.base_url, old_base);
+
+        let updated_source = source(&new_base, "sk-new");
+        let updated = store
+            .refresh_with(&account.id, move || vec![updated_source.clone()])
+            .unwrap();
+        assert_eq!(updated.base_url, new_base);
+        assert!(updated.last_error.is_none());
+        assert_eq!(updated.quota.as_ref().unwrap().remaining_usd, Some(4.0));
+        assert!(updated.reference_saved);
+        assert!(!updated.persisted);
+        assert!(!dir.join(&account.id).join(CREDENTIALS_FILE).exists());
+        // 内存条目也换成了最新地址，后续查询不会回到旧配置。
+        assert_eq!(store.list()[0].base_url, new_base);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refresh_reports_a_missing_source_and_keeps_the_snapshot() {
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        let base = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        let dir = temp_dir("refresh-source-missing");
+        let store = RelayStore::load(dir.clone());
+        let views = store.scan_candidates(vec![config_candidate(
+            RelayOrigin::CcSwitch,
+            Some("来源账户"),
+            &base,
+            "sk-source",
+        )]);
+        let account = store.import(&[views[0].id.clone()]).accounts[0].clone();
+
+        let refreshed = store.refresh_with(&account.id, Vec::new).unwrap();
+        let error = refreshed.last_error.expect("来源缺失应记录错误");
+        assert!(error.contains("本地配置"), "{error}");
+        assert_eq!(
+            refreshed.quota.as_ref().unwrap().remaining_usd,
+            Some(4.0),
+            "来源缺失时保留上次成功快照"
+        );
+        assert!(refreshed.reference_saved);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn manually_adding_a_sourced_account_switches_to_inline_credentials() {
         let body = r#"{"mode":"quota_limited","isValid":true,
             "quota":{"limit":5,"used":1,"remaining":4}}"#;
@@ -1391,7 +1865,7 @@ mod tests {
         let report = store.import(&[views[0].id.clone()]);
         let id = report.accounts[0].id.clone();
 
-        let updated = store.query(&base, "sk-source", None, None).unwrap();
+        let updated = store.query(&base, "sk-source", None, None, None).unwrap();
         assert_eq!(updated.id, id);
         assert!(updated.persisted);
         assert!(!updated.reference_saved);
@@ -1426,7 +1900,7 @@ mod tests {
         ]);
         let dir = temp_dir("mode");
         let store = RelayStore::load(dir.clone());
-        let account = store.query(&base, "sk-test", None, None).unwrap();
+        let account = store.query(&base, "sk-test", None, None, None).unwrap();
 
         let profile = dir.join(&account.id);
         let file_mode = fs::metadata(profile.join(CREDENTIALS_FILE))

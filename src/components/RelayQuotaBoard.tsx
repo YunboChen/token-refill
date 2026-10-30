@@ -376,13 +376,16 @@ function RelayQuotaCard({
 }) {
   const quota = account.quota;
   const host = relayHost(account.baseUrl);
+  // 设置过标题时以标题作为账户名，未设置时沿用服务地址。
+  const name = account.label ?? host;
   const reducedMotion = useReducedMotion();
   const bodyId = `relay-quota-${account.id}`;
   const summary = quota ? relayQuotaSummary(quota) : null;
   // 来源、额度口径、密钥名与套餐名可能重复（如站点把套餐名也写成「钱包余额」），
-  // 只保留第一次出现的文案。
+  // 只保留第一次出现的文案。设置了标题时补上服务地址，仍能认出站点。
   const metaParts = [
     RELAY_ORIGIN_LABELS[account.origin],
+    account.label ? host : null,
     quota && quota.mode !== 'key' ? RELAY_MODE_LABELS[quota.mode] : null,
     quota?.keyName ?? null,
     quota?.planName ?? null,
@@ -397,7 +400,7 @@ function RelayQuotaCard({
         <div className={styles.accountTitleBlock}>
           <div className={styles.accountNameRow}>
             <h3 className={styles.accountName} title={account.baseUrl}>
-              {host}
+              {name}
             </h3>
             {/* 平台类型用全局中性标签，和账户名同排；来源与额度口径留在下一行。 */}
             <span className={styles.planTag}>
@@ -443,7 +446,7 @@ function RelayQuotaCard({
             className={styles.refreshButton}
             onClick={onRefresh}
             disabled={!desktop || refreshing}
-            aria-label={`刷新 ${host} 的额度`}
+            aria-label={`刷新 ${name} 的额度`}
             title={desktop ? '重新识别并刷新额度' : '浏览器预览无法调用 Rust'}
           >
             <ArrowClockwiseIcon
@@ -459,7 +462,7 @@ function RelayQuotaCard({
               onClick={onToggle}
               aria-expanded={open}
               aria-controls={bodyId}
-              aria-label={open ? `收起 ${host} 的额度` : `展开 ${host} 的额度`}
+              aria-label={open ? `收起 ${name} 的额度` : `展开 ${name} 的额度`}
               title={open ? '收起额度' : '展开额度'}
             >
               <ChevronIcon direction={open ? 'down' : 'right'} />
