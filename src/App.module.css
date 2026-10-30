@@ -2642,6 +2642,20 @@
   font-weight: 600;
 }
 
+/* 只读字段的标签徽标：和可编辑字段的标签明确区分 */
+.fieldTag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.6;
+  vertical-align: 1px;
+}
+
 .textInput {
   min-height: 34px;
   padding: 7px 10px;
@@ -2651,6 +2665,32 @@
   background: var(--background);
   font: inherit;
   font-size: 13px;
+}
+
+.textInput:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+/* 只读值：虚线与透明底，和可输入的实线输入框区分，不响应焦点与编辑 */
+.readonlyValue {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 9px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  background: transparent;
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.readonlyValue svg {
+  flex: none;
 }
 
 .textInput:focus {

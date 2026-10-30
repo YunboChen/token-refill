@@ -17,7 +17,9 @@ import {
   refreshRelayAccount,
   removeRelayAccount,
   scanRelayCandidates,
+  setRelayAccountLabel,
   setRelayAccountToken,
+  updateRelayAccount,
   type DiscoveryReport,
   type RelayAccount,
   type RelayAccountsEvent,
@@ -67,9 +69,14 @@ interface RelayContextValue {
     apiKey: string,
     accountToken?: string,
     newApiUserId?: string,
+    label?: string,
   ) => Promise<RelayAccount | null>;
   refresh: (id: string) => Promise<void>;
   remove: (id: string) => Promise<boolean>;
+  /** 设置或清除账户标题；空标题恢复显示服务地址。 */
+  setLabel: (id: string, label: string) => Promise<boolean>;
+  /** 修改服务地址与 API Key；密钥留空表示沿用当前密钥。 */
+  update: (id: string, baseUrl: string, apiKey?: string) => Promise<boolean>;
   saveAccountToken: (
     id: string,
     accountToken: string,
@@ -203,6 +210,7 @@ export function RelayProvider({ children }: { children: ReactNode }) {
       apiKey: string,
       accountToken?: string,
       newApiUserId?: string,
+      label?: string,
     ) => {
       if (!desktop) {
         setError('浏览器预览无法调用桌面接口。');
@@ -215,6 +223,7 @@ export function RelayProvider({ children }: { children: ReactNode }) {
           apiKey,
           accountToken,
           newApiUserId,
+          label,
         );
         setAccounts((current) => [
           account,
@@ -295,6 +304,42 @@ export function RelayProvider({ children }: { children: ReactNode }) {
     [desktop],
   );
 
+  const setLabel = useCallback(
+    async (id: string, label: string) => {
+      if (!desktop) return false;
+      setError(null);
+      try {
+        const updated = await setRelayAccountLabel(id, label);
+        setAccounts((current) =>
+          current.map((account) => (account.id === id ? updated : account)),
+        );
+        return true;
+      } catch (err) {
+        setError(relayErrorText(err));
+        return false;
+      }
+    },
+    [desktop],
+  );
+
+  const update = useCallback(
+    async (id: string, baseUrl: string, apiKey?: string) => {
+      if (!desktop) return false;
+      setError(null);
+      try {
+        const updated = await updateRelayAccount(id, baseUrl, apiKey);
+        setAccounts((current) =>
+          current.map((account) => (account.id === id ? updated : account)),
+        );
+        return true;
+      } catch (err) {
+        setError(relayErrorText(err));
+        return false;
+      }
+    },
+    [desktop],
+  );
+
   const saveAccountToken = useCallback(
     async (id: string, accountToken: string, newApiUserId?: string) => {
       if (!desktop) return false;
@@ -336,6 +381,8 @@ export function RelayProvider({ children }: { children: ReactNode }) {
       addAccount,
       refresh,
       remove,
+      setLabel,
+      update,
       saveAccountToken,
     }),
     [
@@ -356,6 +403,8 @@ export function RelayProvider({ children }: { children: ReactNode }) {
       addAccount,
       refresh,
       remove,
+      setLabel,
+      update,
       saveAccountToken,
     ],
   );
