@@ -26,10 +26,13 @@ import {
   renameAccount as renameAccountCommand,
   replaceApiKey as replaceApiKeyCommand,
   setAutoLaunch as setAutoLaunchCommand,
+  setOverviewOrder as setOverviewOrderCommand,
+  setRelayOrder as setRelayOrderCommand,
   updatePreferences,
   type AppInfo,
   type AppState,
   type LoginStart,
+  type OverviewOrder,
   type Preferences,
   type UpdateStatus,
 } from './desktop';
@@ -70,6 +73,10 @@ interface AppStateContextValue {
   /** 用完整快照对齐一次；窗口重新显示时兜底隐藏期间漏掉的事件。 */
   resync: () => Promise<void>;
   savePreferences: (preferences: Preferences) => Promise<boolean>;
+  /** 保存总览的平台与账户排序；浏览器预览只在当前界面生效。 */
+  saveOverviewOrder: (order: OverviewOrder) => Promise<boolean>;
+  /** 保存总览中转站账户的排序；浏览器预览只在当前界面生效。 */
+  saveRelayOrder: (ids: string[]) => Promise<boolean>;
   beginLogin: (accountId?: string, displayName?: string) => Promise<LoginAttempt>;
   beginBailianLogin: (
     accountId?: string,
@@ -282,6 +289,44 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [desktop, applyState],
   );
 
+  // 排序是界面偏好：桌面端写入 Rust 状态并随事件同步到快速面板；
+  // 浏览器预览没有后端，界面内自行保留即可。
+  const saveOverviewOrder = useCallback(
+    async (order: OverviewOrder) => {
+      if (!desktop) return true;
+      try {
+        const next = await setOverviewOrderCommand(
+          order.platforms,
+          order.accounts,
+        );
+        applyState(next);
+        setError(null);
+        return true;
+      } catch (err) {
+        setError(errorMessage(err));
+        return false;
+      }
+    },
+    [desktop, applyState],
+  );
+
+  // 中转站排序同样只是界面偏好，写入 Rust 状态后随事件同步到快速面板。
+  const saveRelayOrder = useCallback(
+    async (ids: string[]) => {
+      if (!desktop) return true;
+      try {
+        const next = await setRelayOrderCommand(ids);
+        applyState(next);
+        setError(null);
+        return true;
+      } catch (err) {
+        setError(errorMessage(err));
+        return false;
+      }
+    },
+    [desktop, applyState],
+  );
+
   const beginLogin = useCallback(
     async (accountId?: string, displayName?: string): Promise<LoginAttempt> => {
       if (!desktop) return { start: null, error: '浏览器预览无法发起桌面授权。' };
@@ -443,6 +488,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       refresh,
       resync,
       savePreferences,
+      saveOverviewOrder,
+      saveRelayOrder,
       beginLogin,
       beginBailianLogin,
       addApiKeyAccount,
@@ -464,6 +511,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       refresh,
       resync,
       savePreferences,
+      saveOverviewOrder,
+      saveRelayOrder,
       beginLogin,
       beginBailianLogin,
       addApiKeyAccount,

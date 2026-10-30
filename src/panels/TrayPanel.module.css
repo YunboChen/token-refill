@@ -201,11 +201,26 @@
   flex-direction: column;
 }
 
-.sectionHead {
+/* 平台分组列表：每个分组是 Reorder.Item，间距与原先直接排列时一致。 */
+.sections {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 标题行由折叠按钮、排序手柄和箭头组成；按钮占满剩余宽度。 */
+.sectionHeadRow {
   display: flex;
   align-items: center;
+  gap: 2px;
+}
+
+.sectionHead {
+  display: flex;
+  flex: 1;
+  align-items: center;
   gap: 6px;
-  width: 100%;
+  min-width: 0;
   margin: 0;
   padding: 3px 4px;
   border: 0;
@@ -254,6 +269,8 @@
   flex-shrink: 0;
   margin-left: auto;
   color: var(--muted);
+  cursor: pointer;
+  user-select: none;
   transform: rotate(180deg);
   transition: transform 150ms ease-out;
 }

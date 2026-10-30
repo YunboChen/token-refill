@@ -982,6 +982,43 @@
   height: 13px;
 }
 
+/* 排序手柄：账户类型标题与账户行共用。默认低对比度，悬停或聚焦时才显眼，
+   避免和额度读数抢注意力；touch-action 交给 motion 的拖动指针。 */
+.reorderHandle {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  cursor: grab;
+  opacity: 0.6;
+  touch-action: none;
+  transition: color 150ms ease-out, background-color 150ms ease-out,
+    opacity 150ms ease-out;
+}
+
+.reorderHandle:hover,
+.reorderHandle:focus-visible {
+  color: var(--text);
+  background: var(--sunken);
+  opacity: 1;
+}
+
+.reorderHandle:active {
+  cursor: grabbing;
+}
+
+/* 有更新时间等文字时，图标组的第一项（刷新）与文字拉开一点距离，
+   避免文字和图标粘在一起；没有文字时图标自然贴齐右侧。 */
+.updatedAt + .refreshButton {
+  margin-left: 4px;
+}
+
 /* 展开后的身份说明：弱于账户名，和额度区留出呼吸 */
 .quotaAccountMeta {
   display: flex;

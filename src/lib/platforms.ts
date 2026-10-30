@@ -1,4 +1,5 @@
-import type { AccountState } from './desktop';
+import type { AccountState, OverviewOrder } from './desktop';
+import { applySavedOrder } from './order';
 
 /**
  * 平台是账户的上层分类：同一平台下的多个账户共享接入方式与额度口径，
@@ -90,6 +91,29 @@ export function pendingPlatforms(): PlatformMeta[] {
   );
 }
 
+/** 应用用户保存的平台与账户顺序；未列出的项沿用默认顺序。 */
+function applyOverviewOrder(
+  groups: AccountGroup[],
+  order: OverviewOrder | undefined,
+): AccountGroup[] {
+  if (
+    !order
+    || (order.platforms.length === 0 && order.accounts.length === 0)
+  ) {
+    return groups;
+  }
+  return applySavedOrder(groups, order.platforms, (group) => group.platform).map(
+    (group) => ({
+      ...group,
+      accounts: applySavedOrder(
+        group.accounts,
+        order.accounts,
+        (account) => account.accountId,
+      ),
+    }),
+  );
+}
+
 export interface AccountGroup {
   platform: string;
   meta: PlatformMeta;
@@ -123,9 +147,15 @@ function buildGroups(
   }));
 }
 
-/** 按平台归组，保持已知平台的固定顺序，避免账户增删导致分组跳动。 */
-export function groupAccountsByPlatform(accounts: AccountState[]): AccountGroup[] {
-  return buildGroups(accounts, false);
+/**
+ * 按平台归组，保持已知平台的固定顺序；传入用户排序时优先使用，
+ * 账户增删不会让未参与排序的分组跳动。
+ */
+export function groupAccountsByPlatform(
+  accounts: AccountState[],
+  order?: OverviewOrder,
+): AccountGroup[] {
+  return applyOverviewOrder(buildGroups(accounts, false), order);
 }
 
 /**

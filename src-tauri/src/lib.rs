@@ -91,6 +91,25 @@ fn update_preferences(
     store.update_preferences(preferences)
 }
 
+/// 保存总览的账户类型与账户排序；只接受标识列表，不涉及账户数据。
+#[tauri::command]
+fn set_overview_order(
+    store: tauri::State<'_, Arc<StateStore>>,
+    platforms: Vec<String>,
+    accounts: Vec<String>,
+) -> Result<PersistedState, String> {
+    store.set_overview_order(platforms, accounts)
+}
+
+/// 保存总览「中转站账户额度」里的账户顺序；只接受注册表中的标识。
+#[tauri::command]
+fn set_relay_order(
+    store: tauri::State<'_, Arc<StateStore>>,
+    ids: Vec<String>,
+) -> Result<PersistedState, String> {
+    store.set_relay_order(ids)
+}
+
 /// 在独立 CODEX_HOME 中发起官方浏览器授权；结果通过事件推送。
 #[tauri::command]
 fn begin_account_login(
@@ -521,6 +540,8 @@ pub fn run() {
             get_app_state,
             refresh_usage,
             update_preferences,
+            set_overview_order,
+            set_relay_order,
             begin_account_login,
             begin_bailian_login,
             cancel_account_login,
