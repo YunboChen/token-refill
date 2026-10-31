@@ -445,14 +445,22 @@
   font-weight: 500;
 }
 
+/*
+ * 说明文字跨「额度条 + 剩余比例」两列，右列下方的空白也用上，长日期不会被截断；
+ * 每一项内部不折行，只有装不下时才在「·」前换行。
+ */
 .meta {
-  grid-area: 2 / 2;
-  overflow: hidden;
+  display: flex;
+  flex-wrap: wrap;
+  grid-area: 2 / 2 / 3 / 4;
+  column-gap: 4px;
   color: var(--muted);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   line-height: 1.4;
-  text-overflow: ellipsis;
+}
+
+.metaPart {
   white-space: nowrap;
 }
 

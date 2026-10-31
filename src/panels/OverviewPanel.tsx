@@ -370,10 +370,6 @@ function AccountBody({
               window.usedPercent !== null
                 ? `已用 ${window.usedPercent}%`
                 : null;
-            // 多窗口并排时列宽有限，已用与重置时间统一分两行；
-            // Codex 这类两列布局仍保留一行，节省纵向空间。
-            const stackedMeta =
-              usedAmount !== null || metrics.entries.length > 2;
             const eyebrowParts = [
               entry.productLead ? product.displayName : null,
               entry.groupLead ? groupLabel(group.limitName) : null,
@@ -415,23 +411,11 @@ function AccountBody({
                     low={low}
                     label={`${account.displayName} ${product.displayName} ${label}剩余比例`}
                   />
-                  <span
-                    className={styles.metricMeta}
-                    data-stacked={stackedMeta || undefined}
-                  >
+                  <span className={styles.metricMeta}>
                     {usedAmount ? (
                       <span className={styles.metricMetaPart}>{usedAmount}</span>
                     ) : usedPercent ? (
-                      <>
-                        <span className={styles.metricMetaPart}>
-                          {usedPercent}
-                        </span>
-                        {!stackedMeta ? (
-                          <span className={styles.metricDot} aria-hidden="true">
-                            ·
-                          </span>
-                        ) : null}
-                      </>
+                      <span className={styles.metricMetaPart}>{usedPercent}</span>
                     ) : null}
                     <span className={styles.metricMetaPart}>
                       {resetLabel(window.resetsAtEpoch)}

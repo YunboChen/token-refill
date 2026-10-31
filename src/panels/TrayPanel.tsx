@@ -189,7 +189,12 @@ function QuotaMeter({
       </span>
       {row.meta.length > 0 ? (
         <span className={styles.meta} title={row.meta.join(' · ')}>
-          {row.meta.join(' · ')}
+          {row.meta.map((part, index) => (
+            <span className={styles.metaPart} key={`${index}-${part}`}>
+              {index > 0 ? '· ' : ''}
+              {part}
+            </span>
+          ))}
         </span>
       ) : null}
     </div>
