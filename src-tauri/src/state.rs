@@ -30,7 +30,11 @@ use crate::opencode::{self, OpencodeUsage};
 use crate::proxy::{self, ProxyMode};
 use crate::usage_api::ProviderError;
 
-pub const SCHEMA_VERSION: u32 = 2;
+/// 结构版本。新增字段一律走 `#[serde(default)]` 追加，不升版本号：
+/// 已发布的旧版本只认 `schemaVersion == 1`，升号会让它们把文件当成不兼容
+/// 而备份重置，用户降级后账户全部消失。真正不兼容的变更才允许升号，
+/// 且必须同时确认旧版本行为了解这一后果。
+pub const SCHEMA_VERSION: u32 = 1;
 pub const STATE_EVENT: &str = "app-state-changed";
 pub const LOGIN_EVENT: &str = "account-login-changed";
 pub const DEFAULT_ACCOUNT_ID: &str = "codex-local";
@@ -1632,10 +1636,9 @@ fn load_state(path: &Path) -> PersistedState {
     };
 
     match serde_json::from_str::<PersistedState>(&raw) {
-        Ok(mut state) if matches!(state.schema_version, 1 | SCHEMA_VERSION) => {
-            // v1 没有独立的授权提醒记录。保留账户、偏好与快照，为仍失效的账户
-            // 补建待提醒项；原文件直到下一次成功原子写入前保持不变。
-            state.schema_version = SCHEMA_VERSION;
+        Ok(mut state) if state.schema_version == SCHEMA_VERSION => {
+            // 旧文件没有独立的授权提醒记录。保留账户、偏好与快照，为仍失效的
+            // 账户补建待提醒项；新增字段由 serde 默认值补齐，版本号保持不变。
             clear_stale_refresh_flags(&mut state);
             sync_auth_expired_marks(&mut state);
             state
@@ -3937,8 +3940,8 @@ mod tests {
     }
 
     #[test]
-    fn version_one_state_migrates_without_losing_accounts_or_overwriting_the_original() {
-        let path = temp_state_path("auth-migrate-v1");
+    fn legacy_state_without_auth_marks_loads_and_creates_pending_notice() {
+        let path = temp_state_path("auth-legacy-without-marks");
         let mut state = default_state();
         apply_success(&mut state, DEFAULT_ACCOUNT_ID, synthetic_usage(), None);
         state.accounts[0].auth_state = AuthState::NeedsReauth;
@@ -3960,7 +3963,8 @@ mod tests {
         fs::write(&path, &raw).unwrap();
 
         let mut migrated = load_state(&path);
-        assert_eq!(migrated.schema_version, SCHEMA_VERSION);
+        // 追加字段不升结构版本号：旧版本必须仍能读写这份文件，否则降级会丢账户。
+        assert_eq!(migrated.schema_version, 1);
         assert_eq!(migrated.accounts, state.accounts);
         assert_eq!(migrated.preferences, state.preferences);
         assert_eq!(migrated.reminders.low_quota, state.reminders.low_quota);
