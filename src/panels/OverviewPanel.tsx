@@ -1,4 +1,8 @@
-import { Fragment, useState, type CSSProperties } from 'react';
+import {
+  Fragment,
+  useState,
+  type CSSProperties,
+} from 'react';
 import {
   ArrowClockwise,
   Gauge,
@@ -6,14 +10,22 @@ import {
   UsersThree,
   type Icon,
 } from '@phosphor-icons/react';
-import { AnimatePresence, m, useReducedMotion } from 'motion/react';
+import {
+  AnimatePresence,
+  m,
+  Reorder,
+  useDragControls,
+  useReducedMotion,
+  type DragControls,
+} from 'motion/react';
 import type {
   AccountState,
   ProductState,
   QuotaGroup,
   QuotaWindow,
 } from '../lib/desktop';
-import { groupAccountsByPlatform } from '../lib/platforms';
+import { platformMeta } from '../lib/platforms';
+import { useOverviewOrder } from '../lib/useOrdering';
 import {
   clockLabel,
   compactQuotaWindowLabel,
@@ -27,6 +39,7 @@ import { useAppState } from '../lib/store';
 import ChevronIcon from '../components/ChevronIcon';
 import PlatformHeading from '../components/PlatformHeading';
 import RelayQuotaBoard from '../components/RelayQuotaBoard';
+import ReorderHandle from '../components/ReorderHandle';
 import styles from '../App.module.css';
 
 type OverviewTab = 'subscription' | 'relay';
@@ -357,10 +370,6 @@ function AccountBody({
               window.usedPercent !== null
                 ? `已用 ${window.usedPercent}%`
                 : null;
-            // 多窗口并排时列宽有限，已用与重置时间统一分两行；
-            // Codex 这类两列布局仍保留一行，节省纵向空间。
-            const stackedMeta =
-              usedAmount !== null || metrics.entries.length > 2;
             const eyebrowParts = [
               entry.productLead ? product.displayName : null,
               entry.groupLead ? groupLabel(group.limitName) : null,
@@ -402,23 +411,11 @@ function AccountBody({
                     low={low}
                     label={`${account.displayName} ${product.displayName} ${label}剩余比例`}
                   />
-                  <span
-                    className={styles.metricMeta}
-                    data-stacked={stackedMeta || undefined}
-                  >
+                  <span className={styles.metricMeta}>
                     {usedAmount ? (
                       <span className={styles.metricMetaPart}>{usedAmount}</span>
                     ) : usedPercent ? (
-                      <>
-                        <span className={styles.metricMetaPart}>
-                          {usedPercent}
-                        </span>
-                        {!stackedMeta ? (
-                          <span className={styles.metricDot} aria-hidden="true">
-                            ·
-                          </span>
-                        ) : null}
-                      </>
+                      <span className={styles.metricMetaPart}>{usedPercent}</span>
                     ) : null}
                     <span className={styles.metricMetaPart}>
                       {resetLabel(window.resetsAtEpoch)}
@@ -473,6 +470,20 @@ function AccountIdentity({ account }: { account: AccountState }) {
   );
 }
 
+interface AccountPanelProps {
+  account: AccountState;
+  open: boolean;
+  onToggle: () => void;
+  desktop: boolean;
+  threshold: number;
+  lowQuotaEnabled: boolean;
+  refresh: (accountId?: string) => Promise<void>;
+  ready: boolean;
+  /** 只有同平台存在多个账户时才提供排序手柄。 */
+  showHandle: boolean;
+  onMove: (delta: -1 | 1) => void;
+}
+
 function AccountPanel({
   account,
   open,
@@ -482,16 +493,10 @@ function AccountPanel({
   lowQuotaEnabled,
   refresh,
   ready,
-}: {
-  account: AccountState;
-  open: boolean;
-  onToggle: () => void;
-  desktop: boolean;
-  threshold: number;
-  lowQuotaEnabled: boolean;
-  refresh: (accountId?: string) => Promise<void>;
-  ready: boolean;
-}) {
+  showHandle,
+  onMove,
+  dragControls,
+}: AccountPanelProps & { dragControls: DragControls }) {
   const reducedMotion = useReducedMotion();
   const busy = account.products.some((product) => product.query.refreshing);
   const updated = updatedAt(account);
@@ -500,7 +505,16 @@ function AccountPanel({
   const summary = accountSummary(account);
 
   return (
-    <article className={styles.quotaAccount} aria-live="polite">
+    <Reorder.Item
+      as="article"
+      value={account.accountId}
+      className={styles.quotaAccount}
+      dragListener={false}
+      dragControls={dragControls}
+      layout="position"
+      tabIndex={-1}
+      aria-live="polite"
+    >
       <header className={styles.quotaAccountHead}>
         <button
           type="button"
@@ -534,6 +548,7 @@ function AccountPanel({
               {updated !== null && busy ? ' · 刷新中' : ''}
             </span>
           ) : null}
+          {/* 更新时间等文字在前，刷新与排序图标统一靠右成组。 */}
           <button
             type="button"
             className={styles.refreshButton}
@@ -548,6 +563,13 @@ function AccountPanel({
               className={busy ? styles.spin : undefined}
             />
           </button>
+          {showHandle ? (
+            <ReorderHandle
+              label={`调整 ${account.displayName} 的显示顺序`}
+              controls={dragControls}
+              onMove={onMove}
+            />
+          ) : null}
           {/* 展开/收起已由左侧名称按钮承担；这里只是同一动作的视觉补充。 */}
           <span
             className={styles.chevronButton}
@@ -591,8 +613,14 @@ function AccountPanel({
           </m.div>
         ) : null}
       </AnimatePresence>
-    </article>
+    </Reorder.Item>
   );
+}
+
+/** 每个账户自持一套拖动控制，避免同卡片内多个手柄互相触发。 */
+function SortableAccountPanel(props: AccountPanelProps) {
+  const dragControls = useDragControls();
+  return <AccountPanel {...props} dragControls={dragControls} />;
 }
 
 /** 同一平台共用一个卡片；默认展开第一个账户，其余账户折叠为摘要行。 */
@@ -604,6 +632,10 @@ function PlatformBoard({
   lowQuotaEnabled,
   refresh,
   ready,
+  dragControls,
+  onMovePlatform,
+  onMoveAccount,
+  onReorderAccounts,
 }: {
   platform: string;
   accounts: AccountState[];
@@ -612,6 +644,10 @@ function PlatformBoard({
   lowQuotaEnabled: boolean;
   refresh: (accountId?: string) => Promise<void>;
   ready: boolean;
+  dragControls: DragControls;
+  onMovePlatform: (delta: -1 | 1) => void;
+  onMoveAccount: (accountId: string, delta: -1 | 1) => void;
+  onReorderAccounts: (accountIds: string[]) => void;
 }) {
   // undefined 表示沿用默认值（第一个账户展开）；null 表示全部收起。
   const [openAccountId, setOpenAccountId] = useState<string | null | undefined>(
@@ -624,9 +660,10 @@ function PlatformBoard({
       : accounts.some((account) => account.accountId === openAccountId)
         ? openAccountId
         : null;
+  const platformName = platformMeta(platform).name;
 
   return (
-    <section className={styles.platformGroup}>
+    <>
       {/* 与账户页共用同一套平台标题样式：小尺寸品牌图形、无底色，
           标题行与下方账户卡左缘对齐。 */}
       <div className={styles.platformSectionHead}>
@@ -634,11 +671,24 @@ function PlatformBoard({
           platform={platform}
           count={accounts.length}
           active
+          action={
+            <ReorderHandle
+              label={`调整 ${platformName} 账户类型的显示顺序`}
+              controls={dragControls}
+              onMove={onMovePlatform}
+            />
+          }
         />
       </div>
-      <div className={styles.quotaBoard}>
+      <Reorder.Group
+        as="div"
+        axis="y"
+        values={accounts.map((account) => account.accountId)}
+        onReorder={onReorderAccounts}
+        className={styles.quotaBoard}
+      >
         {accounts.map((account) => (
-          <AccountPanel
+          <SortableAccountPanel
             key={account.accountId}
             account={account}
             open={account.accountId === activeId}
@@ -652,10 +702,65 @@ function PlatformBoard({
             lowQuotaEnabled={lowQuotaEnabled}
             refresh={refresh}
             ready={ready}
+            showHandle={accounts.length > 1}
+            onMove={(delta) => onMoveAccount(account.accountId, delta)}
           />
         ))}
-      </div>
-    </section>
+      </Reorder.Group>
+    </>
+  );
+}
+
+/** 平台分组本身就是可拖动项；拖动只从标题右侧的手柄开始。 */
+function SortablePlatformBoard({
+  platform,
+  accounts,
+  desktop,
+  threshold,
+  lowQuotaEnabled,
+  refresh,
+  ready,
+  onMovePlatform,
+  onMoveAccount,
+  onReorderAccounts,
+}: {
+  platform: string;
+  accounts: AccountState[];
+  desktop: boolean;
+  threshold: number;
+  lowQuotaEnabled: boolean;
+  refresh: (accountId?: string) => Promise<void>;
+  ready: boolean;
+  onMovePlatform: (delta: -1 | 1) => void;
+  onMoveAccount: (accountId: string, delta: -1 | 1) => void;
+  onReorderAccounts: (accountIds: string[]) => void;
+}) {
+  const dragControls = useDragControls();
+
+  return (
+    <Reorder.Item
+      as="section"
+      value={platform}
+      className={styles.platformGroup}
+      dragListener={false}
+      dragControls={dragControls}
+      layout="position"
+      tabIndex={-1}
+    >
+      <PlatformBoard
+        platform={platform}
+        accounts={accounts}
+        desktop={desktop}
+        threshold={threshold}
+        lowQuotaEnabled={lowQuotaEnabled}
+        refresh={refresh}
+        ready={ready}
+        dragControls={dragControls}
+        onMovePlatform={onMovePlatform}
+        onMoveAccount={onMoveAccount}
+        onReorderAccounts={onReorderAccounts}
+      />
+    </Reorder.Item>
   );
 }
 
@@ -665,7 +770,13 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
   const tabIndex = Math.max(0, OVERVIEW_TABS.findIndex(({ key }) => key === tab));
   const threshold = state.preferences.lowQuotaThreshold;
   const lowOn = state.preferences.lowQuotaEnabled;
-  const groups = groupAccountsByPlatform(state.accounts);
+  const {
+    groups,
+    commitPlatforms,
+    commitAccounts,
+    movePlatform,
+    moveAccount,
+  } = useOverviewOrder(state.accounts);
 
   return (
     <section>
@@ -703,8 +814,8 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
           role="tabpanel"
           aria-labelledby="overview-tab-subscription"
         >
-          <div className={styles.overviewStack}>
-            {state.accounts.length === 0 ? (
+          {state.accounts.length === 0 ? (
+            <div className={styles.overviewStack}>
               <div className={styles.overviewEmpty}>
                 <span className={styles.emptyGlyph} aria-hidden="true">
                   <Gauge size={24} weight="duotone" />
@@ -714,9 +825,17 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
                   在“账户”页接入账户后，这里会显示每个账户的剩余额度、周期与重置时间。
                 </p>
               </div>
-            ) : (
-              groups.map((group) => (
-                <PlatformBoard
+            </div>
+          ) : (
+            <Reorder.Group
+              as="div"
+              axis="y"
+              values={groups.map((group) => group.platform)}
+              onReorder={(platforms) => commitPlatforms(platforms)}
+              className={styles.overviewStack}
+            >
+              {groups.map((group) => (
+                <SortablePlatformBoard
                   key={group.platform}
                   platform={group.platform}
                   accounts={group.accounts}
@@ -725,10 +844,19 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
                   lowQuotaEnabled={lowOn}
                   refresh={refresh}
                   ready={ready}
+                  onMovePlatform={(delta) =>
+                    movePlatform(group.platform, delta)
+                  }
+                  onMoveAccount={(accountId, delta) =>
+                    moveAccount(group.platform, accountId, delta)
+                  }
+                  onReorderAccounts={(accountIds) =>
+                    commitAccounts(group.platform, accountIds)
+                  }
                 />
-              ))
-            )}
-          </div>
+              ))}
+            </Reorder.Group>
+          )}
         </div>
       ) : (
         <div

@@ -982,6 +982,43 @@
   height: 13px;
 }
 
+/* 排序手柄：账户类型标题与账户行共用。默认低对比度，悬停或聚焦时才显眼，
+   避免和额度读数抢注意力；touch-action 交给 motion 的拖动指针。 */
+.reorderHandle {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  cursor: grab;
+  opacity: 0.6;
+  touch-action: none;
+  transition: color 150ms ease-out, background-color 150ms ease-out,
+    opacity 150ms ease-out;
+}
+
+.reorderHandle:hover,
+.reorderHandle:focus-visible {
+  color: var(--text);
+  background: var(--sunken);
+  opacity: 1;
+}
+
+.reorderHandle:active {
+  cursor: grabbing;
+}
+
+/* 有更新时间等文字时，图标组的第一项（刷新）与文字拉开一点距离，
+   避免文字和图标粘在一起；没有文字时图标自然贴齐右侧。 */
+.updatedAt + .refreshButton {
+  margin-left: 4px;
+}
+
 /* 展开后的身份说明：弱于账户名，和额度区留出呼吸 */
 .quotaAccountMeta {
   display: flex;
@@ -1143,21 +1180,14 @@
   background: var(--danger);
 }
 
+/* 已用与重置时间固定分两行：两列和多列布局的口径一致，重置时间不会挤在「已用」后面 */
 .metricMeta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px;
+  display: grid;
+  gap: 1px;
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   line-height: 1.5;
-}
-
-/* 绝对值窗口（次数）信息更长，固定分成两行，重置时间不会挤在「已用」后面 */
-.metricMeta[data-stacked] {
-  display: grid;
-  gap: 1px;
 }
 
 /* 日期时间不拆行，换行只发生在「已用」与「重置于」之间 */

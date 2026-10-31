@@ -16,7 +16,7 @@
 | 层次 | 现状 | 位置 |
 | --- | --- | --- |
 | 前端界面 | 总览（订阅账户额度 / 中转站账户额度）、账户、中转站账户管理、设置四页；读取统一状态并订阅变更事件 | `src/panels/` |
-| 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences`、账户授权/改名/移除命令、中转站查询/编辑/刷新/移除/访问令牌/标题命令与 `app-state-changed`、`account-login-changed` 事件；中转站账户由 `RelayProvider` 在总览与管理页之间共享 | `src/lib/desktop.ts`、`src/lib/store.tsx`、`src/lib/relay.tsx` |
+| 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences`、`set_overview_order`、`set_relay_order`、账户授权/改名/移除命令、中转站查询/编辑/刷新/移除/访问令牌/标题命令与 `app-state-changed`、`account-login-changed` 事件；中转站账户由 `RelayProvider` 在总览与管理页之间共享 | `src/lib/desktop.ts`、`src/lib/store.tsx`、`src/lib/relay.tsx` |
 | 本地后端 | Rust 状态存储、后台刷新调度、Codex/百炼/OpenCode Go/Command Code/Antigravity 适配器、中转网关密钥额度适配器、中转站凭证存储与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/bailian.rs`、`src-tauri/src/opencode.rs`、`src-tauri/src/commandcode.rs`、`src-tauri/src/antigravity.rs`、`src-tauri/src/quota/`、`src-tauri/src/relay.rs`、`src-tauri/src/discovery.rs` |
 | 桌面配置 | 窗口、构建、安全策略及打包配置 | `src-tauri/tauri.conf.json` |
 | 权限声明 | 窗口权限与事件监听权限 | `src-tauri/capabilities/` |
@@ -199,6 +199,8 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | QuotaSnapshot | 对应产品、额度窗口列表、最近成功获取时间、可选来源更新时间、能力缺口 | 只保留所需快照；来源更新时间未知时不能把本地查询时间冒充平台更新时间 |
 | QueryState | 当前是否刷新、最近尝试时间、脱敏错误、可选下次允许重试时间 | 与成功快照分开保存，失败不抹掉上次成功数据 |
 | Preferences | 刷新间隔、三类提醒开关、低额度阈值、自启意图 | 初始值采用已确认需求；OS 实际通知和自启状态另行查询，不能只信本地开关 |
+| OverviewOrder | 用户拖动后的平台键顺序与账户标识顺序 | 只保存标识与相对顺序，不含账户名、邮箱或凭证；未列出的标识保持默认顺序并排在已列出项之后；重复提交相同顺序不写盘；菜单栏面板的中转站分组以固定标识 `relay` 记在其中，总览只排列平台分组并保留该标识的原槽位 |
+| RelayOrder | 总览「中转站账户额度」中的账户标识顺序 | 只含中转站注册表标识，不含标题、地址、密钥或额度；不影响注册表本身与凭证；未列出的账户保持注册表顺序并排在后面 |
 | NotificationReceipt | 账户、产品、窗口、提醒类型、可靠周期标识或经确认的退化标识、已发送状态 | 支持重启去重；周期未知时不能构造虚假的周期身份 |
 
 ### 5.4 规范化与一致性规则
@@ -356,7 +358,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 
 ## 10. IPC 与平台适配契约草案
 
-下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_scan`、`relay_import`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`、`download_update`、`downloaded_update_version`、`install_update`。其余仍为计划名称。
+下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`set_overview_order`、`set_relay_order`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_scan`、`relay_import`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`、`download_update`、`downloaded_update_version`、`install_update`。其余仍为计划名称。
 
 ### 10.1 前端命令边界
 
@@ -372,6 +374,8 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | remove_account（已实现） | 本地账户标识 | 移除独立授权账户及其本应用目录；本机 Codex 账户不可移除；Antigravity 仅删除账户记录 | REQ-003 |
 | refresh_usage | 全部账户或指定本地账户 | 返回任务标识或已合并的在途任务，不等待全部查询才响应；后端执行去重与限流 | REQ-004 |
 | update_preferences | 经校验的设置变更 | 保存常规设置并协调系统操作；系统拒绝通知或自启时如实返回实际状态 | REQ-004、REQ-006、REQ-010 |
+| set_overview_order（已实现） | 平台键列表与账户标识列表 | 去重、去空白并限制条目数与单项长度后写入状态文件；只改变展示顺序，不改账户或额度数据，并向两个界面广播 | REQ-001、REQ-005 |
+| set_relay_order（已实现） | 中转站账户标识列表 | 同样清洗后写入状态文件；只改变总览与快速面板的展示顺序，不改注册表、凭证或额度 | REQ-001、REQ-005 |
 | get_system_permissions / request_notification_permission | 读取状态或用户明确触发的权限请求 | 区分应用设置与系统许可；不在额度查询失败时反复弹出权限申请 | REQ-006、REQ-010 |
 | open_management_window / quit_app | 用户明确操作 | 窗口复用或退出清理，不能把关闭管理窗口等同于退出 | REQ-005、REQ-009 |
 | check_for_update（已实现） | 无敏感输入 | 读取 GitHub Releases 最新正式版本的版本号与发布页地址；只比较与展示，不下载、不安装。测试渠道直接返回“无更新”，不发起网络请求 | REQ-012 |
