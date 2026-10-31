@@ -23,6 +23,31 @@ pub fn send(app: &tauri::AppHandle, title: &str, body: &str) -> Result<(), Strin
         }
     }
 
+    send_using_plugin(app, title, body)
+}
+
+/// 使用同一标识重试一条逻辑通知。macOS 可替换同标识的待投递请求，
+/// 但无法保证已投递通知不再展示；其他平台的插件不支持此标识。
+/// 标识只由 Rust 调度器生成，不应包含账户信息或凭证。
+pub fn send_with_identifier(
+    app: &tauri::AppHandle,
+    title: &str,
+    body: &str,
+    identifier: &str,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if macos::available() {
+            return macos::send_with_identifier(&app.package_info().name, title, body, identifier);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = identifier;
+
+    send_using_plugin(app, title, body)
+}
+
+fn send_using_plugin(app: &tauri::AppHandle, title: &str, body: &str) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
 
     app.notification()
