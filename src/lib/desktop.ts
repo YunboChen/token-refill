@@ -149,6 +149,11 @@ export function getAppState(): Promise<AppState> {
   return invoke<AppState>('get_app_state');
 }
 
+/** 状态文件由更高版本写入时返回只读提示；正常可读写时返回 null。 */
+export function getStateFileNotice(): Promise<string | null> {
+  return invoke<string | null>('get_state_file_notice');
+}
+
 /** 只提交刷新请求；查询在 Rust 后台执行，结果通过 app-state-changed 推送。 */
 export function refreshUsage(accountId?: string): Promise<void> {
   return invoke<void>('refresh_usage', { accountId: accountId ?? null });

@@ -30,7 +30,11 @@ use crate::opencode::{self, OpencodeUsage};
 use crate::proxy::{self, ProxyMode};
 use crate::usage_api::ProviderError;
 
-pub const SCHEMA_VERSION: u32 = 2;
+/// 结构版本。新增字段一律走 `#[serde(default)]` 追加，不升版本号：
+/// 已发布的旧版本只认 `schemaVersion == 1`，升号会让它们把文件当成不兼容
+/// 而备份重置，用户降级后账户全部消失。真正不兼容的变更才允许升号，
+/// 且必须同时确认旧版本行为了解这一后果。
+pub const SCHEMA_VERSION: u32 = 1;
 pub const STATE_EVENT: &str = "app-state-changed";
 pub const LOGIN_EVENT: &str = "account-login-changed";
 pub const DEFAULT_ACCOUNT_ID: &str = "codex-local";
@@ -1670,27 +1674,75 @@ fn apply_refresh_panic(state: &mut PersistedState, account_id: &str, now: i64) {
     }
 }
 
-fn load_state(path: &Path) -> PersistedState {
+/// 启动时读到的状态，以及文件是否由更高版本写入。
+///
+/// 更高版本写入的文件只读沿用：既不改名备份，也不回写，避免旧版本把
+/// 新版本才能识别的字段覆盖掉；用户升级后仍能读到完整内容。
+struct LoadedState {
+    state: PersistedState,
+    /// 文件里高于当前 `SCHEMA_VERSION` 的版本号；为 `Some` 时本次运行只读。
+    newer_schema_version: Option<u32>,
+}
+
+impl LoadedState {
+    fn writable(state: PersistedState) -> Self {
+        Self {
+            state,
+            newer_schema_version: None,
+        }
+    }
+
+    fn read_only(state: PersistedState, version: u32) -> Self {
+        Self {
+            state,
+            newer_schema_version: Some(version),
+        }
+    }
+}
+
+fn load_state(path: &Path) -> LoadedState {
     let raw = match fs::read_to_string(path) {
         Ok(raw) => raw,
         // 文件不存在或暂时不可读时都从默认状态启动；
         // 后续成功写入前不会覆盖原文件。
-        Err(_) => return default_state(),
+        Err(_) => return LoadedState::writable(default_state()),
     };
 
-    match serde_json::from_str::<PersistedState>(&raw) {
-        Ok(mut state) if matches!(state.schema_version, 1 | SCHEMA_VERSION) => {
-            // v1 没有独立的授权提醒记录。保留账户、偏好与快照，为仍失效的账户
-            // 补建待提醒项；原文件直到下一次成功原子写入前保持不变。
-            state.schema_version = SCHEMA_VERSION;
+    // 先只看版本号：更高版本写入的文件不能当成损坏文件改名备份，
+    // 否则用户会看到账户全部消失（升级回新版本后才发现文件已被移走）。
+    let value: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(value) => value,
+        Err(_) => {
+            backup_unreadable(path);
+            return LoadedState::writable(default_state());
+        }
+    };
+    let file_version = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|version| u32::try_from(version).ok());
+    if let Some(version) = file_version.filter(|version| *version > SCHEMA_VERSION) {
+        // 旧代码能识别的字段继续沿用（serde 忽略未知字段）；字段组合确实
+        // 解析不了时退回空状态。两种情况下都保留原文件，等待用户升级。
+        let mut state =
+            serde_json::from_value::<PersistedState>(value).unwrap_or_else(|_| default_state());
+        clear_stale_refresh_flags(&mut state);
+        sync_auth_expired_marks(&mut state);
+        return LoadedState::read_only(state, version);
+    }
+
+    match serde_json::from_value::<PersistedState>(value) {
+        Ok(mut state) if state.schema_version == SCHEMA_VERSION => {
+            // 旧文件没有独立的授权提醒记录：保留账户、偏好与快照，为仍失效的
+            // 账户补建待提醒项；新增字段由 serde 默认值补齐，版本号保持不变。
             clear_stale_refresh_flags(&mut state);
             sync_auth_expired_marks(&mut state);
-            state
+            LoadedState::writable(state)
         }
-        Ok(_) | Err(_) => {
+        _ => {
             // 版本不兼容或内容损坏：先备份原文件，避免静默覆盖后无法恢复。
             backup_unreadable(path);
-            default_state()
+            LoadedState::writable(default_state())
         }
     }
 }
@@ -1726,13 +1778,17 @@ pub struct StateStore {
     in_flight: Mutex<HashSet<String>>,
     logins: Mutex<HashMap<String, PendingLogin>>,
     shutdown: AtomicBool,
+    /// 状态文件由更高版本写入时为 `Some(版本号)`：本次运行不落盘，
+    /// 只保留内存中的查看与查询结果，避免旧版本覆盖较新的文件。
+    newer_schema_version: Option<u32>,
 }
 
 impl StateStore {
     pub fn load(app: AppHandle, path: PathBuf) -> Self {
         // 本机没有 Codex 客户端时，不保留必然失败的“本机 Codex”占位账户；
         // 有客户端但状态里缺少该账户时补回，避免卸载/重装后账户消失。
-        let mut state = reconcile_local_codex(load_state(&path), codex::local_available());
+        let loaded = load_state(&path);
+        let mut state = reconcile_local_codex(loaded.state, codex::local_available());
         sync_auth_expired_marks(&mut state);
         proxy::configure(
             state.preferences.proxy_mode,
@@ -1758,11 +1814,24 @@ impl StateStore {
             in_flight: Mutex::new(HashSet::new()),
             logins: Mutex::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
+            newer_schema_version: loaded.newer_schema_version,
         }
     }
 
     pub fn snapshot(&self) -> PersistedState {
         lock(&self.inner).clone()
+    }
+
+    /// 状态文件由更高版本写入时，返回面向用户的只读提示；正常读写返回 `None`。
+    pub fn state_file_notice(&self) -> Option<String> {
+        self.newer_schema_version.map(|version| {
+            format!(
+                "状态文件由更新版本的 {} 写入（状态版本 {version}，当前版本支持 {SCHEMA_VERSION}）。\
+                 为避免覆盖较新的数据，本次运行只读：账户与额度仍可查看，但设置、账户和授权的修改不会保存。\
+                 请升级到最新版本后再操作。",
+                self.app.package_info().name
+            )
+        })
     }
 
     fn emit(&self, state: &PersistedState) {
@@ -1886,6 +1955,12 @@ impl StateStore {
     where
         F: FnOnce(&mut PersistedState),
     {
+        if self.newer_schema_version.is_some() {
+            return Err(
+                "状态文件由更新版本的应用写入，本次运行只读，修改不会保存；请升级应用后重试。"
+                    .to_string(),
+            );
+        }
         let mut guard = lock(&self.inner);
         let mut next = guard.clone();
         change(&mut next);
@@ -1908,8 +1983,12 @@ impl StateStore {
         change(&mut next);
         sync_auth_expired_marks(&mut next);
         next.revision = next.revision.saturating_add(1);
-        if let Err(err) = write_state(&self.path, &next) {
-            eprintln!("保存应用状态失败：{err}");
+        // 更高版本写入的文件不回写：查询结果只在内存中展示，避免旧版本
+        // 把新版本才能识别的字段降级覆盖掉。
+        if self.newer_schema_version.is_none() {
+            if let Err(err) = write_state(&self.path, &next) {
+                eprintln!("保存应用状态失败：{err}");
+            }
         }
         *guard = next.clone();
         drop(guard);
@@ -3438,7 +3517,7 @@ mod tests {
         expire_codex_state(&mut state, DEFAULT_ACCOUNT_ID, now + 60);
         assert!(reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, now + 60).is_none());
         write_state(&path, &state).expect("persist delivered mark");
-        let mut reloaded = load_state(&path);
+        let mut reloaded = load_state(&path).state;
         expire_codex_state(&mut reloaded, DEFAULT_ACCOUNT_ID, now + 7200);
         assert!(
             reserve_auth_expired_notice(&mut reloaded, DEFAULT_ACCOUNT_ID, now + 7200).is_none()
@@ -3458,7 +3537,7 @@ mod tests {
         expire_codex_state(&mut state, DEFAULT_ACCOUNT_ID, now + 5);
         assert!(reserve_auth_expired_notice(&mut state, DEFAULT_ACCOUNT_ID, now + 59).is_none());
         write_state(&path, &state).expect("persist retry deadline");
-        let mut reloaded = load_state(&path);
+        let mut reloaded = load_state(&path).state;
         assert!(reserve_auth_expired_notice(&mut reloaded, DEFAULT_ACCOUNT_ID, now + 59).is_none());
         let second = reserve_auth_expired_notice(&mut reloaded, DEFAULT_ACCOUNT_ID, now + 60)
             .expect("failed notice should retry");
@@ -3915,7 +3994,8 @@ mod tests {
         }
         let loaded = load_state(&path);
 
-        assert_eq!(loaded, state);
+        assert_eq!(loaded.state, state);
+        assert_eq!(loaded.newer_schema_version, None);
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
@@ -4032,7 +4112,7 @@ mod tests {
         let raw = serde_json::to_vec(&legacy).unwrap();
         fs::write(&path, &raw).unwrap();
 
-        let mut migrated = load_state(&path);
+        let mut migrated = load_state(&path).state;
         assert_eq!(migrated.schema_version, SCHEMA_VERSION);
         assert_eq!(migrated.accounts, state.accounts);
         assert_eq!(migrated.preferences, state.preferences);
@@ -4047,7 +4127,7 @@ mod tests {
             reserve_auth_expired_notice(&mut migrated, DEFAULT_ACCOUNT_ID, 1_790_100_000).unwrap();
         complete_auth_expired_notice(&mut migrated, &notice);
         write_state(&path, &migrated).unwrap();
-        let mut reloaded = load_state(&path);
+        let mut reloaded = load_state(&path).state;
         assert!(
             reserve_auth_expired_notice(&mut reloaded, DEFAULT_ACCOUNT_ID, 1_790_200_000).is_none()
         );
@@ -4063,24 +4143,7 @@ mod tests {
         value["reminders"]["authExpired"][DEFAULT_ACCOUNT_ID]["attempts"] = "broken".into();
         let raw = serde_json::to_vec(&value).unwrap();
         fs::write(&path, &raw).unwrap();
-        assert_eq!(load_state(&path), default_state());
-        let backup = fs::read_dir(path.parent().unwrap())
-            .unwrap()
-            .filter_map(Result::ok)
-            .find(|entry| entry.file_name().to_string_lossy().contains(".corrupt-"))
-            .unwrap();
-        assert_eq!(fs::read(backup.path()).unwrap(), raw);
-        fs::remove_dir_all(path.parent().unwrap()).ok();
-    }
-
-    #[test]
-    fn unknown_state_version_is_backed_up_before_fallback() {
-        let path = temp_state_path("auth-future-schema");
-        let mut value = serde_json::to_value(default_state()).unwrap();
-        value["schemaVersion"] = (SCHEMA_VERSION + 1).into();
-        let raw = serde_json::to_vec(&value).unwrap();
-        fs::write(&path, &raw).unwrap();
-        assert_eq!(load_state(&path), default_state());
+        assert_eq!(load_state(&path).state, default_state());
         let backup = fs::read_dir(path.parent().unwrap())
             .unwrap()
             .filter_map(Result::ok)
@@ -4151,8 +4214,8 @@ mod tests {
         write_state(&path, &state).expect("write state");
         let loaded = load_state(&path);
 
-        assert_eq!(loaded.overview_order, state.overview_order);
-        assert_eq!(loaded.relay_order, state.relay_order);
+        assert_eq!(loaded.state.overview_order, state.overview_order);
+        assert_eq!(loaded.state.relay_order, state.relay_order);
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
@@ -4167,13 +4230,15 @@ mod tests {
         write_state(&path, &state).expect("write state");
 
         let loaded = load_state(&path);
-        assert!(!loaded.accounts[0].products[0].query.refreshing);
+        assert!(!loaded.state.accounts[0].products[0].query.refreshing);
         // 被打断的那次尝试不能继续压制调度；启动后应立即重试。
         assert_eq!(
-            loaded.accounts[0].products[0].query.last_attempt_epoch,
+            loaded.state.accounts[0].products[0]
+                .query
+                .last_attempt_epoch,
             None
         );
-        assert!(is_account_due(&loaded.accounts[0], 15, 1_790_000_100));
+        assert!(is_account_due(&loaded.state.accounts[0], 15, 1_790_000_100));
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
@@ -4184,12 +4249,68 @@ mod tests {
 
         let loaded = load_state(&path);
 
-        assert_eq!(loaded, default_state());
+        assert_eq!(loaded.state, default_state());
+        assert_eq!(loaded.newer_schema_version, None);
         let backup_exists = fs::read_dir(path.parent().unwrap())
             .expect("read temp dir")
             .filter_map(Result::ok)
             .any(|entry| entry.file_name().to_string_lossy().contains(".corrupt-"));
         assert!(backup_exists);
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn newer_schema_state_is_kept_and_read_only() {
+        // 模拟先跑到新版本（schema 更高），再用旧版本启动：账户必须还在，
+        // 原文件不能被改名备份，本次运行也不能回写。
+        let path = temp_state_path("newer-schema");
+        let mut state = default_state();
+        apply_success(&mut state, DEFAULT_ACCOUNT_ID, synthetic_usage(), None);
+        let newer = SCHEMA_VERSION + 1;
+        let mut value = serde_json::to_value(&state).expect("serialize state");
+        value["schemaVersion"] = newer.into();
+        value["unrecognizedField"] = "由新版本写入".into();
+        fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).expect("write newer state");
+
+        let loaded = load_state(&path);
+
+        assert_eq!(loaded.newer_schema_version, Some(newer));
+        assert_eq!(loaded.state.accounts, state.accounts);
+        // 原文件保留，且没有生成 .corrupt- 备份。
+        assert!(path.exists());
+        let corrupt_backup = fs::read_dir(path.parent().unwrap())
+            .expect("read temp dir")
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().contains(".corrupt-"));
+        assert!(!corrupt_backup);
+        let on_disk: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).expect("file unchanged");
+        assert_eq!(on_disk["schemaVersion"].as_u64(), Some(u64::from(newer)));
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn newer_schema_state_that_cannot_be_read_is_not_moved() {
+        // 新版本改动的字段旧代码解析不了时，同样保留原文件：升级后还能恢复，
+        // 不能像损坏文件那样改名为 .corrupt- 再启动空状态。
+        let path = temp_state_path("newer-schema-unreadable");
+        let newer = SCHEMA_VERSION + 1;
+        fs::write(
+            &path,
+            format!("{{\"schemaVersion\":{newer},\"accounts\":\"未知结构\"}}"),
+        )
+        .expect("write newer state");
+
+        let loaded = load_state(&path);
+
+        assert_eq!(loaded.newer_schema_version, Some(newer));
+        assert_eq!(loaded.state, default_state());
+        assert!(path.exists());
+        let corrupt_backup = fs::read_dir(path.parent().unwrap())
+            .expect("read temp dir")
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().contains(".corrupt-"));
+        assert!(!corrupt_backup);
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 

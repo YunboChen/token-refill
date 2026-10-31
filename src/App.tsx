@@ -70,7 +70,7 @@ function platformHint(): string | null {
 export default function App() {
   const [active, setActive] = useState<PanelKey>('overview');
   const [isMaximized, setIsMaximized] = useState(false);
-  const { error, update, openExternal, appInfo } = useAppState();
+  const { error, stateFileNotice, update, openExternal, appInfo } = useAppState();
   const desktop = isTauri();
   // 应用信息（名称、版本、渠道、平台）统一来自 Rust 合并后的配置；首帧先用 UA
   // 兜底平台，避免 Windows 自绘标题栏与关闭装饰的窗口在首帧错位。
@@ -195,6 +195,11 @@ export default function App() {
           </header>
 
           <div className={styles.mainScroll}>
+            {stateFileNotice ? (
+              <p className={`${styles.noticeDanger} ${styles.globalNotice}`} role="alert">
+                {stateFileNotice}
+              </p>
+            ) : null}
             {error ? (
               <p className={`${styles.noticeDanger} ${styles.globalNotice}`} role="alert">
                 {error}

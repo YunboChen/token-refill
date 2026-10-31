@@ -73,6 +73,12 @@ fn get_app_state(store: tauri::State<'_, Arc<StateStore>>) -> PersistedState {
     store.snapshot()
 }
 
+/// 状态文件由更高版本写入时返回只读提示；正常可读写时返回 null。
+#[tauri::command]
+fn get_state_file_notice(store: tauri::State<'_, Arc<StateStore>>) -> Option<String> {
+    store.state_file_notice()
+}
+
 /// 接受刷新请求后立即返回；实际查询在后台线程执行，结果通过事件广播。
 #[tauri::command]
 fn refresh_usage(
@@ -579,6 +585,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_info,
             get_app_state,
+            get_state_file_notice,
             refresh_usage,
             update_preferences,
             set_overview_order,

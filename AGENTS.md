@@ -40,7 +40,7 @@
 - 不新增 filesystem / shell / http 类 Tauri 插件；**禁止**把任意路径、命令行或 URL 交给系统 shell 拼接执行。更新器插件只从 Rust 侧调用，前端不获得它的 IPC 权限，不属于上述插件类别。
 - `open_external_url` 只接受 `https://`、长度受限且无控制字符的地址；Windows 用 `ShellExecuteW`，不得改回 `cmd /C start`（URL 中的 `&` 会被当作命令分隔符）。
 - capabilities 保持最小：`core:default`、`core:event:default`、`core:window:allow-start-dragging`；Windows 自绘标题栏另需 `core:window:allow-minimize`、`allow-toggle-maximize`、`allow-maximize`、`allow-unmaximize`、`allow-close`、`allow-is-maximized`，仅服务于 `TitleBar` 的最小化/最大化/关闭与状态同步，不得再扩大。新增能力必须说明理由并验证。
-- 状态持久化：带 `schemaVersion` 的 JSON；先写临时文件再原子替换；Unix 权限 0600/0700，Windows 依赖 `%APPDATA%` 的按用户 ACL。改动 schema 必须处理旧文件与损坏文件（备份后回退），不能静默覆盖。
+- 状态持久化：带 `schemaVersion` 的 JSON；先写临时文件再原子替换；Unix 权限 0600/0700，Windows 依赖 `%APPDATA%` 的按用户 ACL。改动 schema 必须处理旧文件与损坏文件（备份后回退），不能静默覆盖；文件由更高版本写入时只读沿用、提示升级，不得改名备份或回写。
 - 不引入遥测、云同步、远程配置；版本检查与更新清单只请求 GitHub Releases 的公开数据，固定 User-Agent，不携带账户或本机信息。
 - 应用内更新由 Rust 侧 `tauri-plugin-updater` 完成，前端不授予 `updater:*` 能力，也没有下载/安装的自动入口：下载与安装是两个独立命令，必须由用户点击触发。更新包必须带 minisign 签名，客户端校验通过才允许安装；私钥只存在于 GitHub Secrets，公钥写在 `plugins.updater.pubkey`。
 
