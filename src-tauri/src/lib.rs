@@ -73,6 +73,12 @@ fn get_app_state(store: tauri::State<'_, Arc<StateStore>>) -> PersistedState {
     store.snapshot()
 }
 
+/// 状态文件由更高版本写入时返回只读提示；正常可读写时返回 null。
+#[tauri::command]
+fn get_state_file_notice(store: tauri::State<'_, Arc<StateStore>>) -> Option<String> {
+    store.state_file_notice()
+}
+
 /// 接受刷新请求后立即返回；实际查询在后台线程执行，结果通过事件广播。
 #[tauri::command]
 fn refresh_usage(
@@ -321,6 +327,7 @@ async fn relay_query(
     api_key: String,
     account_token: Option<String>,
     new_api_user_id: Option<String>,
+    label: Option<String>,
 ) -> Result<relay::RelayAccount, String> {
     let store = Arc::clone(&store);
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -329,6 +336,7 @@ async fn relay_query(
             &api_key,
             account_token.as_deref(),
             new_api_user_id.as_deref(),
+            label.as_deref(),
         )
     })
     .await
@@ -354,6 +362,45 @@ async fn relay_set_account_token(
     })
     .await
     .map_err(|err| format!("保存访问令牌失败：{err}"))?;
+    if result.is_ok() {
+        broadcast_relay_accounts(&app);
+    }
+    result
+}
+
+/// 修改中转站账户的服务地址与 API Key；密钥留空表示沿用当前密钥。
+#[tauri::command]
+async fn relay_update(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, Arc<relay::RelayStore>>,
+    id: String,
+    base_url: String,
+    api_key: Option<String>,
+) -> Result<relay::RelayAccount, String> {
+    let store = Arc::clone(&store);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        store.update(&id, &base_url, api_key.as_deref())
+    })
+    .await
+    .map_err(|err| format!("更新中转站账户失败：{err}"))?;
+    if result.is_ok() {
+        broadcast_relay_accounts(&app);
+    }
+    result
+}
+
+/// 设置中转站账户标题；标题只影响界面展示，空标题恢复显示服务地址。
+#[tauri::command]
+async fn relay_set_label(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, Arc<relay::RelayStore>>,
+    id: String,
+    label: String,
+) -> Result<relay::RelayAccount, String> {
+    let store = Arc::clone(&store);
+    let result = tauri::async_runtime::spawn_blocking(move || store.set_label(&id, &label))
+        .await
+        .map_err(|err| format!("保存标题失败：{err}"))?;
     if result.is_ok() {
         broadcast_relay_accounts(&app);
     }
@@ -538,6 +585,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_info,
             get_app_state,
+            get_state_file_notice,
             refresh_usage,
             update_preferences,
             set_overview_order,
@@ -558,6 +606,8 @@ pub fn run() {
             update::downloaded_update_version,
             update::install_update,
             relay_query,
+            relay_update,
+            relay_set_label,
             relay_set_account_token,
             relay_scan,
             relay_import,

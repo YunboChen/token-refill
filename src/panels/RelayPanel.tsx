@@ -12,6 +12,7 @@ import {
   InfoIcon,
   KeyIcon,
   LockSimple,
+  PencilSimpleIcon,
   PlugsIcon,
   Plus,
   TrashIcon,
@@ -39,6 +40,14 @@ type RelayNotice = { message: string; tone: 'success' | 'danger' };
 type RelayDialog =
   | { kind: 'add' }
   | { kind: 'scan' }
+  | {
+      kind: 'edit';
+      accountId: string;
+      host: string;
+      baseUrl: string;
+      label: string | null;
+      referenceSaved: boolean;
+    }
   | { kind: 'token'; accountId: string; host: string; userId: string | null }
   | { kind: 'remove'; accountId: string; host: string };
 
@@ -48,6 +57,7 @@ function RelayAccountTile({
   desktop,
   refreshing,
   onRefresh,
+  onBeginEdit,
   onBeginTokenEdit,
   onAskRemove,
 }: {
@@ -55,14 +65,18 @@ function RelayAccountTile({
   desktop: boolean;
   refreshing: boolean;
   onRefresh: () => void;
+  onBeginEdit: (trigger: HTMLElement) => void;
   onBeginTokenEdit: (trigger: HTMLElement) => void;
   onAskRemove: (trigger: HTMLElement) => void;
 }) {
   const host = relayHost(account.baseUrl);
+  // 设置过标题时以标题作为账户名，未设置时沿用服务地址。
+  const name = account.label ?? host;
   const quota = account.quota;
-  // 第二行只留名称与来源；凭证保存状态收成一个图标，全文放进悬浮提示，
-  // 避免「来源已保存 · 启动时重新读取」这类说明把整行撑到截断。
-  const meta = [account.label, RELAY_ORIGIN_LABELS[account.origin]]
+  // 第二行只留名称与来源；设置了标题时补上服务地址，仍能一眼认出站点。
+  // 凭证保存状态收成一个图标，全文放进悬浮提示，
+  // 避免「来源已保存 · 启动与刷新时重新读取」这类说明把整行撑到截断。
+  const meta = [RELAY_ORIGIN_LABELS[account.origin], account.label ? host : null]
     .filter(
       (part, index, list): part is string =>
         Boolean(part) && list.indexOf(part) === index,
@@ -80,7 +94,7 @@ function RelayAccountTile({
     : account.referenceSaved
       ? {
           title: '来源引用已保存',
-          detail: `启动时按「${RELAY_ORIGIN_LABELS[account.origin]}」重新读取密钥`,
+          detail: `启动与刷新时按「${RELAY_ORIGIN_LABELS[account.origin]}」重新读取密钥`,
           icon: <InfoIcon size={13} aria-hidden />,
         }
       : {
@@ -114,7 +128,7 @@ function RelayAccountTile({
         <div className={styles.accountIdentity}>
           <div className={styles.accountNameRow}>
             <h3 className={styles.accountName} title={account.baseUrl}>
-              {host}
+              {name}
             </h3>
             <span className={styles.planTag}>
               {RELAY_PROVIDER_LABELS[account.provider]}
@@ -181,7 +195,7 @@ function RelayAccountTile({
           className={styles.accountRefresh}
           onClick={onRefresh}
           disabled={!desktop || refreshing}
-          aria-label={`刷新 ${host} 的额度`}
+          aria-label={`刷新 ${name} 的额度`}
           title={desktop ? '重新识别并刷新额度' : '浏览器预览无法调用 Rust'}
         >
           <ArrowClockwiseIcon
@@ -192,6 +206,16 @@ function RelayAccountTile({
           刷新
         </button>
         <div className={styles.accountActions}>
+          <button
+            type="button"
+            className={styles.miniButton}
+            onClick={(event) => onBeginEdit(event.currentTarget)}
+            disabled={!desktop}
+            aria-label={`编辑 ${name}`}
+            title="编辑账户"
+          >
+            <PencilSimpleIcon size={14} aria-hidden />
+          </button>
           {account.provider === 'new-api' ? (
             <button
               type="button"
@@ -253,14 +277,19 @@ export default function RelayPanel() {
     addAccount,
     refresh,
     remove,
+    setLabel,
+    update,
     saveAccountToken,
     clearError,
   } = useRelay();
   const [dialog, setDialog] = useState<RelayDialog | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
+  // 标题不是凭证，可以放在组件状态里。
+  const [label, setLabelValue] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [formNotice, setFormNotice] = useState<RelayNotice | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [savingEdit, setSavingEdit] = useState(false);
   const [savingToken, setSavingToken] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [skippedOpen, setSkippedOpen] = useState(false);
@@ -329,6 +358,7 @@ export default function RelayPanel() {
   const openAddDialog = (trigger?: HTMLElement | null) => {
     prepareDialog(trigger);
     setBaseUrl('');
+    setLabelValue('');
     if (keyInput.current) keyInput.current.value = '';
     if (accountTokenInput.current) accountTokenInput.current.value = '';
     if (userIdInput.current) userIdInput.current.value = '';
@@ -390,6 +420,21 @@ export default function RelayPanel() {
     });
   };
 
+  const openEditDialog = (account: RelayAccount, trigger: HTMLElement) => {
+    prepareDialog(trigger);
+    setBaseUrl(account.baseUrl);
+    setLabelValue(account.label ?? '');
+    if (keyInput.current) keyInput.current.value = '';
+    setDialog({
+      kind: 'edit',
+      accountId: account.id,
+      host: relayHost(account.baseUrl),
+      baseUrl: account.baseUrl,
+      label: account.label,
+      referenceSaved: account.referenceSaved,
+    });
+  };
+
   const openTokenDialog = (account: RelayAccount, trigger: HTMLElement) => {
     prepareDialog(trigger);
     setDialog({
@@ -431,6 +476,7 @@ export default function RelayPanel() {
         apiKey,
         accountToken || undefined,
         userId || undefined,
+        label.trim() || undefined,
       );
       if (!account) return;
       if (accountToken && account.provider !== 'new-api') {
@@ -444,10 +490,46 @@ export default function RelayPanel() {
       if (accountTokenInput.current) accountTokenInput.current.value = '';
       if (userIdInput.current) userIdInput.current.value = '';
       setBaseUrl('');
+      setLabelValue('');
       setDialog(null);
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const submitEdit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (dialog?.kind !== 'edit' || savingEdit) return;
+    const titleChanged = label.trim() !== (dialog.label ?? '');
+    setSavingEdit(true);
+    setFormError(null);
+    // 来源账户只允许改标题：地址与密钥始终应来自本地配置。
+    if (dialog.referenceSaved) {
+      const ok = !titleChanged || (await setLabel(dialog.accountId, label.trim()));
+      setSavingEdit(false);
+      if (ok) setDialog(null);
+      return;
+    }
+    const url = baseUrl.trim();
+    if (!url) {
+      setSavingEdit(false);
+      setFormError('请填写服务地址。');
+      return;
+    }
+    // 密钥输入用 ref 读取，不进入组件状态、日志或持久化数据。
+    const key = keyInput.current?.value.trim() ?? '';
+    const credentialsChanged = url !== dialog.baseUrl || key !== '';
+    if (!credentialsChanged) {
+      // 只改标题时不必联网重新识别。
+      const ok = !titleChanged || (await setLabel(dialog.accountId, label.trim()));
+      setSavingEdit(false);
+      if (ok) setDialog(null);
+      return;
+    }
+    const ok = await update(dialog.accountId, url, key || undefined);
+    if (ok && titleChanged) await setLabel(dialog.accountId, label.trim());
+    setSavingEdit(false);
+    if (ok) setDialog(null);
   };
 
   const submitToken = async (event: FormEvent<HTMLFormElement>) => {
@@ -552,6 +634,7 @@ export default function RelayPanel() {
               desktop={desktop}
               refreshing={refreshingIds.has(account.id)}
               onRefresh={() => void refresh(account.id)}
+              onBeginEdit={(trigger) => openEditDialog(account, trigger)}
               onBeginTokenEdit={(trigger) => openTokenDialog(account, trigger)}
               onAskRemove={(trigger) => openRemoveDialog(account, trigger)}
             />
@@ -701,6 +784,20 @@ export default function RelayPanel() {
                     </header>
                     <div className={styles.dialogFieldGroup}>
                       <label className={styles.field}>
+                        <span className={styles.fieldLabel}>标题（可选）</span>
+                        <input
+                          className={styles.textInput}
+                          type="text"
+                          value={label}
+                          onChange={(event) => setLabelValue(event.target.value)}
+                          placeholder="例如：主力中转 / 团队账户"
+                          maxLength={40}
+                          disabled={submitting}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </label>
+                      <label className={styles.field}>
                         <span className={styles.fieldLabel}>服务地址</span>
                         <input
                           className={styles.textInput}
@@ -784,6 +881,106 @@ export default function RelayPanel() {
                         disabled={submitting}
                       >
                         {submitting ? '识别中…' : '识别并添加'}
+                      </button>
+                    </div>
+                  </form>
+                ) : dialog.kind === 'edit' ? (
+                  <form className={styles.dialogForm} onSubmit={submitEdit}>
+                    <header className={styles.dialogHeader}>
+                      <h2 id="relay-dialog-title">编辑中转站账户</h2>
+                      <p className={styles.dialogSubtitle}>{dialog.host}</p>
+                    </header>
+                    <div className={styles.dialogFieldGroup}>
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabel}>标题（可选）</span>
+                        <input
+                          className={styles.textInput}
+                          type="text"
+                          value={label}
+                          onChange={(event) => setLabelValue(event.target.value)}
+                          placeholder="例如：主力中转 / 团队账户"
+                          maxLength={40}
+                          disabled={savingEdit}
+                          autoComplete="off"
+                          spellCheck={false}
+                          autoFocus
+                        />
+                      </label>
+                      <div className={styles.field}>
+                        <span className={styles.fieldLabel}>
+                          服务地址
+                          {dialog.referenceSaved ? (
+                            <span className={styles.fieldTag}>只读</span>
+                          ) : null}
+                        </span>
+                        {dialog.referenceSaved ? (
+                          <span
+                            className={styles.readonlyValue}
+                            title={baseUrl}
+                          >
+                            {baseUrl}
+                          </span>
+                        ) : (
+                          <input
+                            className={styles.textInput}
+                            type="url"
+                            inputMode="url"
+                            placeholder="https://api.example.com"
+                            value={baseUrl}
+                            onChange={(event) => setBaseUrl(event.target.value)}
+                            disabled={savingEdit}
+                            autoComplete="off"
+                            spellCheck={false}
+                          />
+                        )}
+                      </div>
+                      {!dialog.referenceSaved ? (
+                        <label className={styles.field}>
+                          <span className={styles.fieldLabel}>API Key</span>
+                          <input
+                            ref={keyInput}
+                            className={styles.textInput}
+                            type="password"
+                            placeholder="留空则保持当前密钥"
+                            disabled={savingEdit}
+                            autoComplete="off"
+                            spellCheck={false}
+                          />
+                        </label>
+                      ) : null}
+                      <p className={styles.dialogNote}>
+                        {dialog.referenceSaved ? null : (
+                          <LockSimple size={13} aria-hidden />
+                        )}
+                        {dialog.referenceSaved
+                          ? '该账户由本地配置导入：服务地址与密钥在每次刷新前从源配置读取，这里只能修改标题。如需更换，请修改源配置后点击刷新。'
+                          : 'API Key 留空则保持当前密钥；保存后立即重新识别并刷新额度。'}
+                      </p>
+                    </div>
+                    {dialogMessage ? (
+                      <p className={styles.noticeDanger} role="alert">
+                        {dialogMessage}
+                      </p>
+                    ) : null}
+                    <div className={styles.dialogActions}>
+                      <button
+                        type="button"
+                        className={styles.buttonGhost}
+                        onClick={closeDialog}
+                        disabled={savingEdit}
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="submit"
+                        className={styles.button}
+                        disabled={savingEdit}
+                      >
+                        {savingEdit
+                          ? '保存中…'
+                          : dialog.referenceSaved
+                            ? '保存标题'
+                            : '保存并刷新'}
                       </button>
                     </div>
                   </form>
@@ -948,7 +1145,7 @@ export default function RelayPanel() {
                     <p className={styles.dialogNote}>
                       <LockSimple size={13} aria-hidden />
                       扫描只读取 provider 地址与密钥，不发起网络请求；导入后才查询额度。
-                      密钥不会写入 relay-profiles/，界面只保存来源引用，下次启动重新读取源配置。
+                      密钥不会写入 relay-profiles/，界面只保存来源引用，启动与刷新时重新读取源配置。
                     </p>
                     <div className={styles.dialogActions}>
                       <button

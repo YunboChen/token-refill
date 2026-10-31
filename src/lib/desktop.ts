@@ -149,6 +149,11 @@ export function getAppState(): Promise<AppState> {
   return invoke<AppState>('get_app_state');
 }
 
+/** 状态文件由更高版本写入时返回只读提示；正常可读写时返回 null。 */
+export function getStateFileNotice(): Promise<string | null> {
+  return invoke<string | null>('get_state_file_notice');
+}
+
 /** 只提交刷新请求；查询在 Rust 后台执行，结果通过 app-state-changed 推送。 */
 export function refreshUsage(accountId?: string): Promise<void> {
   return invoke<void>('refresh_usage', { accountId: accountId ?? null });
@@ -392,7 +397,7 @@ export type RelayOrigin = 'manual' | 'cc-switch' | 'claude-code' | 'codex';
 export interface RelayAccount {
   id: string;
   baseUrl: string;
-  /** 扫描到的 provider 名称（cc-switch）；手动或当前配置文件条目为空。 */
+  /** 账户标题：用户手动设置的标题，或扫描导入时的 provider 名称；为空时显示服务地址。 */
   label: string | null;
   origin: RelayOrigin;
   provider: QuotaProvider;
@@ -447,12 +452,14 @@ export function queryRelayAccount(
   apiKey: string,
   accountToken?: string,
   newApiUserId?: string,
+  label?: string,
 ): Promise<RelayAccount> {
   return invoke<RelayAccount>('relay_query', {
     baseUrl,
     apiKey,
     accountToken: accountToken?.trim() || null,
     newApiUserId: newApiUserId?.trim() || null,
+    label: label?.trim() || null,
   });
 }
 
@@ -467,6 +474,27 @@ export function setRelayAccountToken(
     accountToken,
     newApiUserId: newApiUserId?.trim() || null,
   });
+}
+
+/** 修改服务地址与 API Key；`apiKey` 留空表示沿用当前密钥并立即重新查询。 */
+export function updateRelayAccount(
+  id: string,
+  baseUrl: string,
+  apiKey?: string,
+): Promise<RelayAccount> {
+  return invoke<RelayAccount>('relay_update', {
+    id,
+    baseUrl,
+    apiKey: apiKey?.trim() || null,
+  });
+}
+
+/** 设置中转站账户标题；空字符串表示恢复显示服务地址。 */
+export function setRelayAccountLabel(
+  id: string,
+  label: string,
+): Promise<RelayAccount> {
+  return invoke<RelayAccount>('relay_set_label', { id, label });
 }
 
 export function refreshRelayAccount(id: string): Promise<RelayAccount> {
