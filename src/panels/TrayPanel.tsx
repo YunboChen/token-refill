@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -36,7 +37,11 @@ import {
   stampLabel,
 } from '../lib/format';
 import { platformMeta, type AccountGroup } from '../lib/platforms';
-import { useOverviewOrder, useRelayOrder } from '../lib/useOrdering';
+import {
+  RELAY_SECTION_KEY,
+  useOverviewOrder,
+  useRelayOrder,
+} from '../lib/useOrdering';
 import { useRelay } from '../lib/relay';
 import {
   RELAY_PROVIDER_LABELS,
@@ -466,6 +471,111 @@ function SortableRelayCard(props: RelayCardProps) {
 }
 
 /**
+ * 中转站分组和平台分组并列，同样可以整组拖动；
+ * 分组标识 `relay` 与平台键一起写进保存顺序。
+ */
+function RelaySection({
+  accounts,
+  open,
+  onToggle,
+  sortable,
+  threshold,
+  lowQuotaEnabled,
+  refreshingIds,
+  canRefresh,
+  onRefresh,
+  onMoveSection,
+  onMoveAccount,
+  onReorderAccounts,
+}: {
+  accounts: RelayAccount[];
+  open: boolean;
+  onToggle: () => void;
+  /** 与平台分组并列时才提供分组排序手柄。 */
+  sortable: boolean;
+  threshold: number;
+  lowQuotaEnabled: boolean;
+  refreshingIds: ReadonlySet<string>;
+  canRefresh: boolean;
+  onRefresh: (id: string) => void;
+  onMoveSection: (delta: -1 | 1) => void;
+  onMoveAccount: (id: string, delta: -1 | 1) => void;
+  onReorderAccounts: (ids: string[]) => void;
+}) {
+  const dragControls = useDragControls();
+  const bodyId = 'tray-section-relay';
+
+  return (
+    <Reorder.Item
+      as="section"
+      value={RELAY_SECTION_KEY}
+      className={styles.section}
+      dragListener={false}
+      dragControls={dragControls}
+      layout="position"
+      tabIndex={-1}
+    >
+      <div className={styles.sectionHeadRow}>
+        <button
+          type="button"
+          className={styles.sectionHead}
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-controls={bodyId}
+        >
+          <span className={styles.platformBadge} aria-hidden="true">
+            <PlugsIcon size={15} />
+          </span>
+          <span className={styles.sectionName}>中转站</span>
+          <span className={styles.sectionCount}>
+            · {accounts.length} 个账户
+          </span>
+        </button>
+        {sortable ? (
+          <ReorderHandle
+            label="调整 中转站 分组的显示顺序"
+            controls={dragControls}
+            onMove={onMoveSection}
+          />
+        ) : null}
+        <span
+          className={styles.chevron}
+          data-collapsed={!open || undefined}
+          onClick={onToggle}
+          aria-hidden="true"
+          title={open ? '收起分组' : '展开分组'}
+        >
+          <ChevronIcon direction="down" />
+        </span>
+      </div>
+      <SectionBody id={bodyId} open={open}>
+        <Reorder.Group
+          as="div"
+          axis="y"
+          values={accounts.map((account) => account.id)}
+          onReorder={onReorderAccounts}
+          className={styles.cards}
+        >
+          {accounts.map((account) => (
+            <SortableRelayCard
+              key={account.id}
+              account={account}
+              threshold={threshold}
+              lowQuotaEnabled={lowQuotaEnabled}
+              refreshing={refreshingIds.has(account.id)}
+              canRefresh={canRefresh}
+              onRefresh={onRefresh}
+              showHandle={accounts.length > 1}
+              onMove={(delta) => onMoveAccount(account.id, delta)}
+            />
+          ))}
+        </Reorder.Group>
+      </SectionBody>
+    </Reorder.Item>
+  );
+}
+
+/**
  * 分组内容始终挂载，靠 grid-template-rows 0fr ↔ 1fr 做展开/收起过渡。
  * 收起后由 visibility: hidden 移出 Tab 顺序与读屏树，不依赖 inert 的支持情况。
  */
@@ -498,7 +608,7 @@ function SortableSection({
   lowQuotaEnabled,
   canRefresh,
   onRefresh,
-  onMovePlatform,
+  onMoveSection,
   onMoveAccount,
   onReorderAccounts,
 }: {
@@ -511,7 +621,7 @@ function SortableSection({
   lowQuotaEnabled: boolean;
   canRefresh: boolean;
   onRefresh: (accountId: string) => void;
-  onMovePlatform: (delta: -1 | 1) => void;
+  onMoveSection: (delta: -1 | 1) => void;
   onMoveAccount: (accountId: string, delta: -1 | 1) => void;
   onReorderAccounts: (accountIds: string[]) => void;
 }) {
@@ -550,7 +660,7 @@ function SortableSection({
           <ReorderHandle
             label={`调整 ${platformName} 账户类型的显示顺序`}
             controls={dragControls}
-            onMove={onMovePlatform}
+            onMove={onMoveSection}
           />
         ) : null}
         <span
@@ -630,19 +740,30 @@ export default function TrayPanel() {
   const threshold = state.preferences.lowQuotaThreshold;
   const lowQuotaEnabled = state.preferences.lowQuotaEnabled;
   const refreshMinutes = state.preferences.refreshMinutes;
+  // 中转站分组与平台分组并列，读完后才参与分组排序。
+  const relayVisible = relayLoaded && relayAccounts.length > 0;
+  const extraSections = useMemo(
+    () => (relayVisible ? [RELAY_SECTION_KEY] : []),
+    [relayVisible],
+  );
   // 与主窗口共用同一份保存顺序；在面板里调整会立即写回 Rust 状态。
   const {
     groups,
-    commitPlatforms,
+    sectionKeys,
+    commitSections,
     commitAccounts,
-    movePlatform,
+    moveSection,
     moveAccount,
-  } = useOverviewOrder(state.accounts);
+  } = useOverviewOrder(state.accounts, extraSections);
   const {
     orderedAccounts: orderedRelayAccounts,
     commitAccounts: commitRelayAccounts,
     moveAccount: moveRelayAccount,
   } = useRelayOrder(relayAccounts);
+  const groupsByPlatform = useMemo(
+    () => new Map(groups.map((group) => [group.platform, group])),
+    [groups],
+  );
   const updated = latestUpdate(state.accounts, relayAccounts);
   const accountCount = state.accounts.length + relayAccounts.length;
   const busy =
@@ -828,96 +949,58 @@ export default function TrayPanel() {
           </div>
         ) : (
           <>
-            {groups.length > 0 ? (
+            {sectionKeys.length > 0 ? (
               <Reorder.Group
                 as="div"
                 axis="y"
-                values={groups.map((group) => group.platform)}
-                onReorder={commitPlatforms}
+                values={sectionKeys}
+                onReorder={commitSections}
                 className={styles.sections}
               >
-                {groups.map((group) => (
-                  <SortableSection
-                    key={group.platform}
-                    group={group}
-                    open={!collapsed.has(group.platform)}
-                    onToggle={() => toggleSection(group.platform)}
-                    sortable={groups.length > 1}
-                    threshold={threshold}
-                    lowQuotaEnabled={lowQuotaEnabled}
-                    canRefresh={desktop}
-                    onRefresh={refreshAccount}
-                    onMovePlatform={(delta) =>
-                      movePlatform(group.platform, delta)
-                    }
-                    onMoveAccount={(accountId, delta) =>
-                      moveAccount(group.platform, accountId, delta)
-                    }
-                    onReorderAccounts={(accountIds) =>
-                      commitAccounts(group.platform, accountIds)
-                    }
-                  />
-                ))}
-              </Reorder.Group>
-            ) : null}
-
-            {relayLoaded && relayAccounts.length > 0 ? (
-              <section className={styles.section}>
-                <div className={styles.sectionHeadRow}>
-                  <button
-                    type="button"
-                    className={styles.sectionHead}
-                    onClick={() => toggleSection('relay')}
-                    aria-expanded={!collapsed.has('relay')}
-                    aria-controls="tray-section-relay"
-                  >
-                    <span className={styles.platformBadge} aria-hidden="true">
-                      <PlugsIcon size={15} />
-                    </span>
-                    <span className={styles.sectionName}>中转站</span>
-                    <span className={styles.sectionCount}>
-                      · {relayAccounts.length} 个账户
-                    </span>
-                  </button>
-                  <span
-                    className={styles.chevron}
-                    data-collapsed={collapsed.has('relay') || undefined}
-                    onClick={() => toggleSection('relay')}
-                    aria-hidden="true"
-                    title={
-                      collapsed.has('relay') ? '展开分组' : '收起分组'
-                    }
-                  >
-                    <ChevronIcon direction="down" />
-                  </span>
-                </div>
-                <SectionBody
-                  id="tray-section-relay"
-                  open={!collapsed.has('relay')}
-                >
-                  <Reorder.Group
-                    as="div"
-                    axis="y"
-                    values={orderedRelayAccounts.map((account) => account.id)}
-                    onReorder={commitRelayAccounts}
-                    className={styles.cards}
-                  >
-                    {orderedRelayAccounts.map((account) => (
-                      <SortableRelayCard
-                        key={account.id}
-                        account={account}
+                {sectionKeys.map((key) => {
+                  if (key === RELAY_SECTION_KEY) {
+                    return (
+                      <RelaySection
+                        key={key}
+                        accounts={orderedRelayAccounts}
+                        open={!collapsed.has(key)}
+                        onToggle={() => toggleSection(key)}
+                        sortable={sectionKeys.length > 1}
                         threshold={threshold}
                         lowQuotaEnabled={lowQuotaEnabled}
-                        refreshing={refreshingIds.has(account.id)}
+                        refreshingIds={refreshingIds}
                         canRefresh={desktop}
                         onRefresh={refreshRelayAccount}
-                        showHandle={orderedRelayAccounts.length > 1}
-                        onMove={(delta) => moveRelayAccount(account.id, delta)}
+                        onMoveSection={(delta) => moveSection(key, delta)}
+                        onMoveAccount={moveRelayAccount}
+                        onReorderAccounts={commitRelayAccounts}
                       />
-                    ))}
-                  </Reorder.Group>
-                </SectionBody>
-              </section>
+                    );
+                  }
+                  const group = groupsByPlatform.get(key);
+                  if (!group) return null;
+                  return (
+                    <SortableSection
+                      key={key}
+                      group={group}
+                      open={!collapsed.has(key)}
+                      onToggle={() => toggleSection(key)}
+                      sortable={sectionKeys.length > 1}
+                      threshold={threshold}
+                      lowQuotaEnabled={lowQuotaEnabled}
+                      canRefresh={desktop}
+                      onRefresh={refreshAccount}
+                      onMoveSection={(delta) => moveSection(key, delta)}
+                      onMoveAccount={(accountId, delta) =>
+                        moveAccount(key, accountId, delta)
+                      }
+                      onReorderAccounts={(accountIds) =>
+                        commitAccounts(key, accountIds)
+                      }
+                    />
+                  );
+                })}
+              </Reorder.Group>
             ) : null}
           </>
         )}
