@@ -19,6 +19,7 @@ import {
   checkForUpdate,
   getAppInfo,
   getAppState,
+  getStateFileNotice,
   onAppStateChanged,
   openExternalUrl,
   refreshUsage,
@@ -65,6 +66,8 @@ interface AppStateContextValue {
   ready: boolean;
   desktop: boolean;
   error: string | null;
+  /** 状态文件来自更高版本时的只读提示；正常为 null。 */
+  stateFileNotice: string | null;
   update: UpdateStatus | null;
   refresh: (accountId?: string) => Promise<void>;
   /** 用完整快照对齐一次；窗口重新显示时兜底隐藏期间漏掉的事件。 */
@@ -107,7 +110,26 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   );
   const [ready, setReady] = useState(!desktop);
   const [error, setError] = useState<string | null>(null);
+  const [stateFileNotice, setStateFileNotice] = useState<string | null>(null);
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
+
+  // 状态文件由更高版本写入时，Rust 侧只读运行；提示一次即可，不进入 error，
+  // 避免覆盖掉真正来自操作的失败原因。
+  useEffect(() => {
+    if (!desktop) return;
+    let disposed = false;
+    void getStateFileNotice().then(
+      (notice) => {
+        if (!disposed) setStateFileNotice(notice);
+      },
+      () => {
+        // 读取失败按正常读写处理，不阻塞其余状态加载。
+      },
+    );
+    return () => {
+      disposed = true;
+    };
+  }, [desktop]);
 
   // 应用名、版本与渠道以 Rust 合并后的配置为准；浏览器预览沿用 package.json 回退值。
   useEffect(() => {
@@ -439,6 +461,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       ready,
       desktop,
       error,
+      stateFileNotice,
       update,
       refresh,
       resync,
@@ -460,6 +483,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       ready,
       desktop,
       error,
+      stateFileNotice,
       update,
       refresh,
       resync,
