@@ -1,9 +1,9 @@
 # Windows 授权失效提醒验收清单
 
 本文件用于在 Windows 10/11 x64 上验收「授权失效提醒可靠性」这一改动。对应的设计说明见
-[软件设计](./software-design.md) 的「提醒判断与去重」一节；macOS 侧已完成的验证记录见
-[开发计划](./development-plan.md) 的 2026-10-30 条目。Windows 兼容层背景见
-[Windows 兼容设计](./windows-support.md)。
+[软件设计](./software-design.md) 的「提醒判断与去重」一节；macOS 侧目前只有单元测试覆盖，
+真实通知与权限切换验收仍待补（见[开发计划](./development-plan.md) 的 DEV-009）。Windows
+兼容层背景见 [Windows 兼容设计](./windows-support.md)。
 
 ## 1. 改动摘要（需要验证的行为）
 
@@ -35,7 +35,7 @@
 
 - Windows 10/11 x64，已安装 WebView2 Runtime（Win11 自带；Win10 通常随 Edge 安装）。
 - Rust 使用 MSVC 目标：`rustup default stable-x86_64-pc-windows-msvc`。
-- Node.js ≥ 22.12，pnpm 12；分支 `fix/bailian-auth-expired-notice`。
+- Node.js ≥ 22.12，pnpm 12；分支 `fix/auth-expired-notification-delivery`。
 
 使用**测试标识**构建，数据目录为 `%APPDATA%\dev.tokenrefill.desktop.test\`，与正式版隔离：
 
@@ -182,8 +182,8 @@ if ($m.nextAttemptEpoch) {
 3. 预期：`attempts` 不变，没有新的通知；开关状态正确写入 `preferences.authExpiredEnabled`。
 
 **N-06 关闭时暂停、开启后补发（未成功的提醒）**
-1. 重新写入第 4 节的 v1 状态（形成一条新的待发送记录），先关闭系统通知（或先关闭应用内开关）。
-2. 关闭应用内开关，等 2 分钟。
+1. 重新写入第 4 节的 v1 状态（形成一条新的待发送记录）。
+2. 关闭应用内「授权失效提醒」开关，等 2 分钟。
 3. 预期：`attempts` 不增加，`delivered = false`。
 4. 开启应用内开关，等待到期。
 5. 预期：按当前系统通知状态继续尝试；成功则 `delivered = true`，失败则 `attempts` 递增。

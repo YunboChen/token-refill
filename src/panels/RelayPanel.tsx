@@ -918,7 +918,6 @@ export default function RelayPanel() {
                             className={styles.readonlyValue}
                             title={baseUrl}
                           >
-                            <LockSimple size={13} aria-hidden />
                             {baseUrl}
                           </span>
                         ) : (
@@ -950,7 +949,9 @@ export default function RelayPanel() {
                         </label>
                       ) : null}
                       <p className={styles.dialogNote}>
-                        <LockSimple size={13} aria-hidden />
+                        {dialog.referenceSaved ? null : (
+                          <LockSimple size={13} aria-hidden />
+                        )}
                         {dialog.referenceSaved
                           ? '该账户由本地配置导入：服务地址与密钥在每次刷新前从源配置读取，这里只能修改标题。如需更换，请修改源配置后点击刷新。'
                           : 'API Key 留空则保持当前密钥；保存后立即重新识别并刷新额度。'}

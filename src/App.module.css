@@ -1180,21 +1180,14 @@
   background: var(--danger);
 }
 
+/* 已用与重置时间固定分两行：两列和多列布局的口径一致，重置时间不会挤在「已用」后面 */
 .metricMeta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px;
+  display: grid;
+  gap: 1px;
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   line-height: 1.5;
-}
-
-/* 绝对值窗口（次数）信息更长，固定分成两行，重置时间不会挤在「已用」后面 */
-.metricMeta[data-stacked] {
-  display: grid;
-  gap: 1px;
 }
 
 /* 日期时间不拆行，换行只发生在「已用」与「重置于」之间 */
