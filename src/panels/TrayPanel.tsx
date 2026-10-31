@@ -442,7 +442,8 @@ function latestUpdate(
 }
 
 export default function TrayPanel() {
-  const { state, appInfo, ready, desktop, error, refresh, resync } = useAppState();
+  const { state, appInfo, ready, desktop, error, stateFileNotice, refresh, resync } =
+    useAppState();
   const {
     accounts: relayAccounts,
     loaded: relayLoaded,
@@ -618,6 +619,11 @@ export default function TrayPanel() {
       </header>
 
       <div className={styles.scroll}>
+        {stateFileNotice ? (
+          <p className={styles.notice} role="alert">
+            {stateFileNotice}
+          </p>
+        ) : null}
         {error ? (
           <p className={styles.notice} role="alert">
             {error}
