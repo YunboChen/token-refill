@@ -4090,8 +4090,8 @@ mod tests {
     }
 
     #[test]
-    fn version_one_state_migrates_without_losing_accounts_or_overwriting_the_original() {
-        let path = temp_state_path("auth-migrate-v1");
+    fn legacy_state_without_auth_marks_loads_and_creates_pending_notice() {
+        let path = temp_state_path("auth-legacy-without-marks");
         let mut state = default_state();
         apply_success(&mut state, DEFAULT_ACCOUNT_ID, synthetic_usage(), None);
         state.accounts[0].auth_state = AuthState::NeedsReauth;
@@ -4113,7 +4113,8 @@ mod tests {
         fs::write(&path, &raw).unwrap();
 
         let mut migrated = load_state(&path).state;
-        assert_eq!(migrated.schema_version, SCHEMA_VERSION);
+        // 追加字段不升结构版本号：旧版本必须仍能读写这份文件，否则降级会丢账户。
+        assert_eq!(migrated.schema_version, 1);
         assert_eq!(migrated.accounts, state.accounts);
         assert_eq!(migrated.preferences, state.preferences);
         assert_eq!(migrated.reminders.low_quota, state.reminders.low_quota);
