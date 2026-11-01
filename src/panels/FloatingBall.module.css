@@ -1,5 +1,5 @@
 /* 悬浮球：60×60 的置顶小窗口。
-   球体使用固定的深色 HUD 外观，不跟随应用主题，保证在任意桌面背景上都清晰；
+   球体跟随应用外观（浅色/深色/跟随系统），通过 --ball-* token 取色；
    弹层沿用应用主题 token，与菜单栏面板保持一致。 */
 
 :global(html[data-view='float']),
@@ -47,11 +47,15 @@
   left: 0;
   width: 60px;
   height: 60px;
-  border: 1px solid rgb(148 180 220 / 0.16);
+  border: 1px solid var(--ball-border);
   border-radius: 50%;
-  background: radial-gradient(circle at 32% 22%, #1c2a3c 0%, #0c121b 68%);
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07);
-  color: #eef4ff;
+  background: radial-gradient(
+    circle at 32% 22%,
+    var(--ball-fill-start) 0%,
+    var(--ball-fill-end) 68%
+  );
+  box-shadow: var(--ball-shadow);
+  color: var(--ball-text);
   cursor: grab;
   touch-action: none;
   outline: none;
@@ -103,7 +107,7 @@
 
 .track {
   fill: none;
-  stroke: rgb(255 255 255 / 0.13);
+  stroke: var(--ball-track);
   stroke-width: 3.5;
 }
 
@@ -117,7 +121,7 @@
 
 .spinner {
   fill: none;
-  stroke: rgb(255 255 255 / 0.42);
+  stroke: var(--ball-spinner);
   stroke-dasharray: 14 137;
   stroke-linecap: round;
   stroke-width: 1.5;
@@ -193,7 +197,7 @@
   align-items: center;
   justify-content: center;
   height: 12px;
-  color: #dbe8fb;
+  color: var(--ball-logo);
 }
 
 .logo svg {
@@ -227,7 +231,7 @@
 }
 
 .detail {
-  color: #93a4ba;
+  color: var(--ball-detail);
   font-size: 8px;
   font-weight: 600;
   line-height: 1;

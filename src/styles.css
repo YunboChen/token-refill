@@ -43,12 +43,23 @@
   --focus: #0b63ce;
   --accent-ring: rgb(11 99 206 / 0.14);
   --wordmark-filter: none;
-  /* 悬浮球固定深色 HUD，不跟随主题；色值取深色主题的语义色，
-     保证球体与主窗口、菜单栏面板共用同一套额度颜色层级。 */
-  --hud-accent: #3f8ff5;
-  --hud-warning: #f0b429;
-  --hud-danger: #ff8b9c;
-  --hud-muted: #8d98a7;
+  /* 悬浮球跟随应用外观：浅色下用白底深字，深色下保留原来的深色球体。
+     额度颜色直接引用语义色，与主窗口、菜单栏面板共用同一套层级。 */
+  --hud-accent: var(--accent-strong);
+  --hud-warning: var(--warning);
+  --hud-danger: var(--danger);
+  --hud-muted: var(--muted);
+  --ball-fill-start: #ffffff;
+  --ball-fill-end: #e3e8ef;
+  --ball-border: rgb(15 23 42 / 0.22);
+  --ball-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.9),
+    inset 0 -8px 16px rgb(15 23 42 / 0.05);
+  --ball-text: #14181f;
+  --ball-logo: #2b3440;
+  --ball-detail: #5a6472;
+  --ball-track: rgb(15 23 42 / 0.14);
+  --ball-spinner: rgb(15 23 42 / 0.42);
 }
 
 /* 外观偏好写在 <html data-theme> 上：light / dark 显式覆盖，
@@ -77,6 +88,15 @@
   --focus: #79b8ff;
   --accent-ring: rgb(121 184 255 / 0.18);
   --wordmark-filter: brightness(1.12) saturate(1.02);
+  --ball-fill-start: #1c2a3c;
+  --ball-fill-end: #0c121b;
+  --ball-border: rgb(148 180 220 / 0.16);
+  --ball-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07);
+  --ball-text: #eef4ff;
+  --ball-logo: #dbe8fb;
+  --ball-detail: #93a4ba;
+  --ball-track: rgb(255 255 255 / 0.13);
+  --ball-spinner: rgb(255 255 255 / 0.42);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -104,6 +124,15 @@
     --focus: #79b8ff;
     --accent-ring: rgb(121 184 255 / 0.18);
     --wordmark-filter: brightness(1.12) saturate(1.02);
+    --ball-fill-start: #1c2a3c;
+    --ball-fill-end: #0c121b;
+    --ball-border: rgb(148 180 220 / 0.16);
+    --ball-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07);
+    --ball-text: #eef4ff;
+    --ball-logo: #dbe8fb;
+    --ball-detail: #93a4ba;
+    --ball-track: rgb(255 255 255 / 0.13);
+    --ball-spinner: rgb(255 255 255 / 0.42);
   }
 }
 

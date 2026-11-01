@@ -17,7 +17,6 @@ import { Reorder, useDragControls, type DragControls } from 'motion/react';
 import wordmark from '../assets/logo-text.png';
 import {
   hideTrayPanel,
-  onThemeChanged,
   onTrayPanelShown,
   openMainWindow,
   quitApp,
@@ -26,8 +25,6 @@ import {
   type QuotaWindow,
   type RelayAccount,
 } from '../lib/desktop';
-import { THEME_OPTIONS, type ThemePref } from '../lib/prefs';
-import { applyTheme } from '../lib/theme';
 import {
   groupLabel,
   planTierLabel,
@@ -830,25 +827,6 @@ export default function TrayPanel() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
-
-  // 主题是前端本地偏好；主窗口切换后通过事件同步到面板。
-  useEffect(() => {
-    if (!desktop) return;
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void onThemeChanged((theme) => {
-      if (THEME_OPTIONS.includes(theme as ThemePref)) {
-        applyTheme(theme as ThemePref);
-      }
-    }).then((stop) => {
-      if (disposed) stop();
-      else unlisten = stop;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [desktop]);
 
   const refreshAll = useCallback(async () => {
     if (!desktop || refreshingAll) return;

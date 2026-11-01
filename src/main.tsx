@@ -8,7 +8,7 @@ import FloatingBallPopover from './panels/FloatingBallPopover';
 import { AppStateProvider } from './lib/store';
 import { RelayProvider } from './lib/relay';
 import { loadTheme, saveTheme } from './lib/prefs';
-import { applyTheme } from './lib/theme';
+import { applyTheme, useThemeSync } from './lib/theme';
 import { WINDOW_VIEW } from './lib/view';
 import './styles.css';
 
@@ -36,17 +36,23 @@ function renderView() {
   }
 }
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <LazyMotion features={domAnimation} strict>
-      <MotionConfig
-        reducedMotion="user"
-        transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-      >
-        <AppStateProvider>
-          <RelayProvider>{renderView()}</RelayProvider>
-        </AppStateProvider>
-      </MotionConfig>
-    </LazyMotion>
-  </StrictMode>,
-);
+function Root() {
+  // 主窗口切换外观后，菜单栏面板、悬浮球与弹层都要跟着换色。
+  useThemeSync();
+  return (
+    <StrictMode>
+      <LazyMotion features={domAnimation} strict>
+        <MotionConfig
+          reducedMotion="user"
+          transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+        >
+          <AppStateProvider>
+            <RelayProvider>{renderView()}</RelayProvider>
+          </AppStateProvider>
+        </MotionConfig>
+      </LazyMotion>
+    </StrictMode>
+  );
+}
+
+createRoot(document.getElementById('root')!).render(<Root />);
