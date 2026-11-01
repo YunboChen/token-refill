@@ -43,6 +43,12 @@
   --focus: #0b63ce;
   --accent-ring: rgb(11 99 206 / 0.14);
   --wordmark-filter: none;
+  /* 悬浮球固定深色 HUD，不跟随主题；色值取深色主题的语义色，
+     保证球体与主窗口、菜单栏面板共用同一套额度颜色层级。 */
+  --hud-accent: #3f8ff5;
+  --hud-warning: #f0b429;
+  --hud-danger: #ff8b9c;
+  --hud-muted: #8d98a7;
 }
 
 /* 外观偏好写在 <html data-theme> 上：light / dark 显式覆盖，

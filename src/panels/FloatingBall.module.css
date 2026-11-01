@@ -19,7 +19,7 @@
 }
 
 .stage {
-  --ball-accent: #4b9cff;
+  --ball-accent: var(--hud-accent);
   position: relative;
   display: block;
   width: 100%;
@@ -30,15 +30,15 @@
 }
 
 .stage[data-severity='warning'] {
-  --ball-accent: #f0b429;
+  --ball-accent: var(--hud-warning);
 }
 
 .stage[data-severity='danger'] {
-  --ball-accent: #ff6b6b;
+  --ball-accent: var(--hud-danger);
 }
 
-.stage[data-severity='muted'] {
-  --ball-accent: #64748b;
+.stage[data-severity='unknown'] {
+  --ball-accent: var(--hud-muted);
 }
 
 .ball {
@@ -343,8 +343,17 @@
   font-variant-numeric: tabular-nums;
 }
 
-.rowValue[data-low] {
+.rowValue[data-level='warning'] {
   color: var(--warning);
+}
+
+.rowValue[data-level='danger'] {
+  color: var(--danger);
+}
+
+.rowValue[data-level='unknown'] {
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .bar {
@@ -364,8 +373,12 @@
   transition: width 450ms ease;
 }
 
-.barFill[data-low] {
+.barFill[data-level='warning'] {
   background: var(--warning);
+}
+
+.barFill[data-level='danger'] {
+  background: var(--danger);
 }
 
 .rowMeta {

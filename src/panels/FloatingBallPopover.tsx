@@ -64,7 +64,7 @@ function QuotaRows({ rows }: { rows: FloatWindowRow[] }) {
               {row.group ? `${row.group} · ` : ''}
               {row.label}
             </span>
-            <span className={styles.rowValue} data-low={row.low || undefined}>
+            <span className={styles.rowValue} data-level={row.level}>
               {row.percent !== null ? `${row.percent}%` : '—'}
             </span>
           </div>
@@ -72,7 +72,7 @@ function QuotaRows({ rows }: { rows: FloatWindowRow[] }) {
             <span className={styles.bar} aria-hidden="true">
               <span
                 className={styles.barFill}
-                data-low={row.low || undefined}
+                data-level={row.level}
                 style={{ width: `${Math.max(0, Math.min(100, row.percent))}%` }}
               />
             </span>
@@ -96,7 +96,7 @@ function HoverCard({ onSwitch }: { onSwitch: () => void }) {
   const rows = selection?.kind === 'product'
     ? productRows(selection.product, threshold, lowEnabled)
     : selection?.kind === 'relay'
-      ? relayRows(selection.account)
+      ? relayRows(selection.account, threshold, lowEnabled)
       : [];
 
   if (!option || !selection) {

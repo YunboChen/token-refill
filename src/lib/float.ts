@@ -14,14 +14,13 @@ import {
   resetLabel,
 } from './format';
 import { platformMeta } from './platforms';
+import { quotaLevel, type QuotaLevel } from './quotaLevel';
 import { RELAY_MODE_LABELS, RELAY_PROVIDER_LABELS, relayHost, relayPercent } from './relayFormat';
 
 /**
  * 悬浮球的数据推导：把账户套餐与中转站账户统一成可展示的“套餐选项”。
  * 这里只处理脱敏状态；密钥与令牌始终留在 Rust 侧。
  */
-
-export type FloatSeverity = 'normal' | 'warning' | 'danger' | 'muted';
 
 export interface FloatResolvedProduct {
   kind: 'product';
@@ -63,7 +62,7 @@ export interface FloatWindowRow {
   group: string | null;
   percent: number | null;
   meta: string[];
-  low: boolean;
+  level: QuotaLevel;
 }
 
 export function productWindows(product: ProductState): QuotaWindow[] {
@@ -273,13 +272,11 @@ export function severityFor(
   option: FloatPlanOption | null,
   threshold: number,
   lowQuotaEnabled: boolean,
-): FloatSeverity {
+): QuotaLevel {
   if (!option || !option.available || option.percent === null) {
-    return option?.refreshing ? 'normal' : 'muted';
+    return option?.refreshing ? 'normal' : 'unknown';
   }
-  if (option.percent <= 0) return 'danger';
-  if (lowQuotaEnabled && option.percent <= threshold) return 'warning';
-  return 'normal';
+  return quotaLevel(option.percent, threshold, lowQuotaEnabled);
 }
 
 /* ---------- 悬停详情 ---------- */
@@ -322,14 +319,18 @@ export function productRows(
           amountText(window),
           resetLabel(window.resetsAtEpoch),
         ].filter((part): part is string => part !== null),
-        low: lowQuotaEnabled && percent !== null && percent <= threshold,
+        level: quotaLevel(percent, threshold, lowQuotaEnabled),
       });
     });
   });
   return rows;
 }
 
-export function relayRows(account: RelayAccount): FloatWindowRow[] {
+export function relayRows(
+  account: RelayAccount,
+  threshold: number,
+  lowQuotaEnabled: boolean,
+): FloatWindowRow[] {
   const quota = account.quota;
   if (!quota) return [];
   const rows: FloatWindowRow[] = [];
@@ -337,11 +338,14 @@ export function relayRows(account: RelayAccount): FloatWindowRow[] {
     ? relayPercent(quota.account.remainingUsd, quota.account.totalUsd)
     : null;
   const amount = relayAmount(quota);
+  const summaryPercent = accountPercent !== null && quota.account
+    ? accountPercent
+    : relayMeter(quota);
   rows.push({
     key: 'relay-summary',
     label: RELAY_MODE_LABELS[quota.mode] ?? '额度',
     group: null,
-    percent: relayMeter(quota),
+    percent: summaryPercent,
     meta: [
       amount,
       quota.account ? '账户余额' : null,
@@ -349,11 +353,8 @@ export function relayRows(account: RelayAccount): FloatWindowRow[] {
         ? `到期 ${new Date(quota.expiresAtEpoch * 1000).toLocaleDateString()}`
         : null,
     ].filter((part): part is string => part !== null),
-    low: false,
+    level: quotaLevel(summaryPercent, threshold, lowQuotaEnabled),
   });
-  if (accountPercent !== null && quota.account) {
-    rows[0].percent = accountPercent;
-  }
   for (const window of quota.windows) {
     rows.push({
       key: `relay-window-${window.windowId}`,
@@ -366,7 +367,7 @@ export function relayRows(account: RelayAccount): FloatWindowRow[] {
           ? resetLabel(window.resetsAtEpoch)
           : null,
       ].filter((part): part is string => part !== null),
-      low: false,
+      level: quotaLevel(window.remainingPercent, threshold, lowQuotaEnabled),
     });
   }
   return rows;
