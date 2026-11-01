@@ -19,6 +19,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   authExpiredEnabled: true,
   resetNoticeEnabled: false,
   autoLaunchEnabled: false,
+  floatingBallEnabled: false,
   proxyMode: 'system',
   proxyUrl: null,
 };
@@ -56,6 +57,7 @@ export function defaultAppState(): AppState {
     preferences: DEFAULT_PREFERENCES,
     overviewOrder: { platforms: [], accounts: [] },
     relayOrder: [],
+    floatingBall: { selected: null, position: null },
   };
 }
 
@@ -135,6 +137,8 @@ export function readLegacyPreferences(): Preferences | null {
     autoLaunchEnabled: typeof legacy.autoLaunchEnabled === 'boolean'
       ? legacy.autoLaunchEnabled
       : DEFAULT_PREFERENCES.autoLaunchEnabled,
+    // 悬浮球是新增功能，旧草稿里没有对应值，一律保持默认关闭。
+    floatingBallEnabled: false,
     proxyMode:
       legacy.proxyMode === 'system'
       || legacy.proxyMode === 'none'

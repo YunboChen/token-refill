@@ -1,8 +1,8 @@
 # Token Refill 软件设计文档
 
-- 文档版本：0.16
-- 状态：已实现 Codex、百炼、OpenCode Go、Command Code 与 Antigravity 额度查询、多账户接入、统一状态层、后台刷新调度、菜单栏快速查看与应用内更新
-- 最近更新：2026-10-27
+- 文档版本：0.17
+- 状态：已实现 Codex、百炼、OpenCode Go、Command Code 与 Antigravity 额度查询、多账户接入、统一状态层、后台刷新调度、菜单栏快速查看、桌面悬浮球与应用内更新
+- 最近更新：2026-11-01
 - 需求来源：[需求文档](./requirements.md)
 
 ## 1. 设计边界
@@ -81,8 +81,15 @@ Windows 安装包与界面运行验收尚未完成，最低 Windows 版本待确
 - 关闭主窗口只隐藏，隐藏满 60 秒后销毁 WebView（有登录流程或更新下载在进行时跳过），再次打开时按配置重建并等待页面加载；应用继续在菜单栏驻留并刷新。销毁最后一个窗口会让 Tauri 请求退出，`RunEvent::ExitRequested` 在“没有窗口且非程序化退出”时调用 `prevent_exit`，避免空闲销毁把常驻应用结束掉。只有菜单或面板中的退出入口会结束进程并停止调度。macOS 关闭主窗口时把激活策略切到 `Accessory`，Dock 图标、Cmd+Tab 与应用菜单栏一并消失；显示主窗口前先切回 `Regular` 再显示并聚焦，否则窗口拿不到 key 焦点，也没有应用菜单栏。
 - 面板打开时先展示现有额度与更新时间，再按刷新间隔补查中转站账户；订阅账户继续由 Rust 调度器后台刷新。版本检查只由主窗口发起，面板不重复请求 GitHub。
 
-## 4. 平台接入验证
+### 3.3 桌面悬浮球（已实现）
 
+- 开关与状态：`Preferences.floating_ball_enabled` 默认关闭，只能通过设置页的 `set_floating_ball_enabled` 切换；`PersistedState.floating_ball` 保存当前套餐键（`product:<accountId>:<productId>` 或 `relay:<relayId>`）与位置。位置使用物理像素并记录显示器名称；旧状态文件由 serde 默认值补齐，不升 `schemaVersion`。
+- 窗口：`floating-ball` 为 60×60 透明无边框置顶窗口，加载 `index.html?view=float`；`float-popover` 为 340 点宽、按内容高度自适应的弹层，加载 `index.html?view=float-popover`。两者都在 `tauri.conf.json` 中 `create: false`，开启时创建、关闭开关时销毁。球在启用期间不参与 60 秒空闲销毁；弹层在启用期间保留，以便悬停/点击时立即复用。macOS 上两者都转换为非激活 `NSPanel`（`NonactivatingPanel` + `CanJoinAllSpaces | FullScreenAuxiliary`），球不取 key 焦点，菜单调用 `make_key_window` 以接收 Esc 和失焦事件；Windows 上两者加 `WS_EX_TOOLWINDOW`，球再加 `WS_EX_NOACTIVATE`。
+- 数据：前端复用 `AppStateProvider` 与 `RelayProvider`，把订阅套餐与中转站账户统一成套餐选项；球内多周期取最低 `remainingPercent`，周期标签取该窗口的短名称。金额型中转站没有可靠比例时不显示百分比，直接在球内显示剩余金额。状态、额度与凭证边界不变，新增窗口不接触凭证。
+- 交互：球窗口的前端指针事件在移动超过 4 点时调用 `floating_ball_drag_start`，Rust 轮询光标移动窗口，`floating_ball_drag_end` 时按完整屏幕（不是工作区）判定左右吸附。虚拟桌面最外侧边缘通过把 60 点窗口移出屏幕实现 24 点可见；两块显示器之间的内部边界改为把窗口缩到 24×60 点，球始终不跨屏。两种吸附的收起状态都由前端重排内容：平台标识移到露出 D 形的视觉中心、百分比与周期淡出、额度环只保留露出侧的弧，进度按这段弧重新归一化。窗口的位置/宽度由 Rust 按 220ms 缓动逐帧过渡，前端内容用相同时长的 CSS 过渡，两者同步；过渡期间弹层按最近一次布局目标定位，不跟随窗口抖动。两种吸附都支持悬停展开（离边缘 12 点，鼠标已贴边时不留间隙）和移出 1 秒后收回。悬停/点击由 Rust 控制弹层模式：悬停显示详情卡，点击显示套餐切换菜单，菜单失焦、Esc 或再次点击球收起。非激活 `NSPanel` 收不到鼠标移动/悬停事件（macOS 只派发给 key 窗口），所以悬停的进入与离开都由 Rust 的 150ms 光标看门狗按窗口矩形判定：进入时补发悬停并展开，离开超过宽限期后收起；拖动与菜单打开期间暂停判定，结束后要求指针先移出再移入。吸附球展开期间只播放窗口过渡，详情卡挂起到过渡结束、且指针仍在完整球体上才显示。弹层前端用 `ResizeObserver` 上报内容高度，Rust 据此调整窗口尺寸并重新定位；球窗口通过 `floating-ball-layout` 事件与 `floating_ball_layout` 命令同步 `edge` / `collapsed` / `clipped`，决定内容重排与裁剪方向。
+- 一致性：新增的 `floating.json` capability 只包含 `core:default` 与 `core:event:default`，不给悬浮球文件、shell、窗口控制等权限；摆放与尺寸都按目标显示器的缩放计算，避免 Retina / 普通屏混排时偏移。
+
+## 4. 平台接入验证
 每个平台在进入详细设计前，需要记录：
 
 1. 具体产品与套餐，区分订阅额度、API 余额及其他计量方式。

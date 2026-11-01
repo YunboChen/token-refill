@@ -1,8 +1,8 @@
 # Token Refill 开发计划文档
 
 - 文档版本：0.16
-- 状态：Codex 本机查询、官方授权多账户、百炼 Token Plan 个人版与 Coding Plan 中国站查询、统一状态层、菜单栏快速查看、Windows 兼容层、版本检查与应用内更新已实现
-- 最近更新：2026-10-27
+- 状态：Codex 本机查询、官方授权多账户、百炼 Token Plan 个人版与 Coding Plan 中国站查询、统一状态层、菜单栏快速查看、桌面悬浮球、Windows 兼容层、版本检查与应用内更新已实现
+- 最近更新：2026-11-01
 - 关联文档：[需求文档](./requirements.md)、[软件设计文档](./software-design.md)
 
 ## 1. 计划原则
@@ -41,6 +41,7 @@
 | 后台刷新调度 | 基础能力已实现 | 默认 5 分钟可调、单账户/全部手动刷新、在途去重、缓存优先、失败保留上次成功数据；平台限流参数与休眠唤醒策略待定 |
 | Codex 多账户授权 | 已实现 | 每账户独立 `CODEX_HOME`，官方 `account/login/start` 浏览器授权；支持添加、取消、改名、重新授权、移除；不复制本机默认凭证 |
 | 菜单栏常驻 | 已实现 | 菜单栏图标左键打开快速查看面板，右键菜单提供打开主窗口、查看额度与退出；关闭管理窗口只隐藏，应用继续后台刷新；macOS 同时隐藏 Dock 图标与 Cmd+Tab 条目，打开主窗口时恢复；面板按屏幕与鼠标位置定位，失焦自动收起 |
+| 桌面悬浮球 | 已实现（macOS 已本机验证） | 设置页默认关闭；60×60 置顶窗口显示当前套餐最低剩余比例，悬停详情、点击切换订阅套餐或中转站；可拖动并按屏幕边缘吸附，位置与选择持久化；macOS 用非激活 NSPanel，Windows 用 `WS_EX_NOACTIVATE` / `WS_EX_TOOLWINDOW`，Windows 实机验收待执行 |
 | 业务实现 | 进行中 | Codex 本机与独立账户链路已跑通；百炼控制台授权、Token Plan 与 Coding Plan 查询、多产品展示与刷新已接入；凭证系统级存储与限流退避仍待实现 |
 
 ## 3. 候选阶段
@@ -253,3 +254,11 @@
 2026-10-28 修复 Windows 启动时露出系统标题栏：实机验收「冷启动无原生标题栏闪烁」一项不通过，逐帧录像显示启动后约 1 秒内仍是系统标题栏，React 首绘后才切成自绘栏——`setup()` 里 `set_decorations(false)` 执行时窗口已可见。主窗口改为在 `tauri.conf.json` 中以 `visible: false` 创建：macOS 在 `setup()` 中直接 `show()`（行为不变）；Windows 先关装饰，等前端 `TitleBar` 首帧 emit `main-ui-ready` 后再显示并聚焦，另起 5 秒兜底线程，避免前端异常时窗口一直隐藏只能从托盘找回。验证：`tsc` 类型检查与 `vite build`、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`（macOS 主机）、`cargo check --target x86_64-pc-windows-msvc` 通过；Windows 实机需重跑冷启动检查，并确认隐藏启动不影响托盘、单实例与最小化恢复。
 
 2026-10-29 修复 Windows「放置一段时间后托盘菜单与主窗口都打不开」：上一轮的窗口空闲销毁把应用带进“零 WebView”状态，再创建窗口时是 WebView2 冷启动，长度可达数百毫秒到数秒，而创建被放在托盘/窗口事件回调里就地执行（`run_on_main_thread` 在主线程会内联执行），期间消息循环被占用、重入的点击还会走进创建分支。现在 `show_panel` / `show_main_window` 先转到后台线程再回主线程，事件回调立即返回；`PANEL_LOADING` / `MAIN_LOADING` 提前到创建入口判断，创建期间再点一次左键视为取消，不再重复创建（重复创建会自增代次，让真正在加载的那一代永远等不到显示回调）。面板失焦收起改为必须“确实获得过焦点且距上次显示超过 400 ms”，未拿到激活态时补一次聚焦，补焦失败也不隐藏；兜底显示后再补一次可见性重试，重试受“期望可见”标志约束，用户手动收起后不会被重新弹出。新增 `logging` 模块，把 `[app]` / `[tray]` / `[window]` 生命周期事件同时写入 `<数据目录>/logs/window.log`（256 KiB 轮转，不含凭证）——GUI 子系统的发布包没有控制台，原来的 `eprintln!` 在 Windows 上全部被丢弃。验证：`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked`（190 项单元测试 + 12 项集成测试，新增失焦判定用例）、`pnpm build` 通过；macOS 测试渠道实机冒烟：启动后主窗口 `visible=true`，左键打开面板创建耗时 77–208 ms，失焦收起后 60 秒销毁成功，销毁后再次点开可正常重建，日志文件按预期写入。Windows 实机仍需按 [Windows 内存优化验证](./windows-memory-validation.md) 的 W-17 复现验证。
+
+2026-11-01 新增桌面悬浮球（默认关闭）：设置页「通用」新增开关，开启后创建 60×60 的 `floating-ball` 置顶透明窗口与按需复用的 `float-popover` 弹层；两者都复用同一份前端产物，通过 `?view=float` / `?view=float-popover` 区分。状态层新增 `Preferences.floating_ball_enabled` 与 `PersistedState.floating_ball`（当前套餐键 + 物理位置 + 显示器名称），旧状态文件由 serde 默认值补齐，不升 `schemaVersion`；位置与选择随状态文件持久化，重启恢复。球内显示订阅套餐或中转站账户的最低剩余比例与周期，金额型中转站没有可靠比例时显示剩余金额；悬停显示详情卡，点击打开套餐切换菜单，再次点击/失焦/Esc 收起。拖动由前端指针事件触发，Rust 轮询光标移动窗口，按完整屏幕边缘吸附（不是工作区），吸附后保留 24 点可见，悬停展开到 12 点间距，移出 1 秒收回。macOS 上球与弹层转换为非激活 `NSPanel`，球不取 key 焦点、菜单取 key 以接收 Esc 与失焦；Windows 上两者加 `WS_EX_TOOLWINDOW`，球再加 `WS_EX_NOACTIVATE`。新增 `capabilities/floating.json`，只授予 `core:default` 与 `core:event:default`。修复了全局 `body { min-width: 320px }` 把 60px 球窗口内容撑宽、球被居中到窗口外的问题。验证：`pnpm build`、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked`（230 项单元测试 + 12 项集成测试，新增悬浮球默认值、旧状态兼容、位置往返与吸附几何用例）通过；macOS 测试渠道实机确认设置开关、60×60 球显示、悬停详情、点击菜单、选择持久化、拖动到左边缘吸附（x=-36，保留 24 点）与 Esc 收起正常。Windows 目标本机缺少 MSVC SDK 头文件，未能完成交叉 `cargo check`，Windows 实机未验证；中转站金额型显示与多显示器/不同缩放场景未用真实账户逐项验证。
+
+2026-11-01 修复多显示器下的悬浮球吸附越界：原先统一按“屏幕边缘保留 24 点可见”计算，右屏左边缘或左屏右边缘这类内部边界会把球推出当前屏幕，露出的部分直接显示在相邻显示器上。现在 `monitor_has_neighbor` 检查“球被藏起来的那一段”是否与任意其他显示器相交（按球的垂直范围计算，覆盖左右排列、上下错位与留缝）；虚拟桌面最外侧边缘继续把 60 点窗口移出屏幕，内部边界则把窗口缩到 24×60 点，由前端按 `floating-ball-layout` 事件的 `edge` / `clipped` 只绘制球的一侧，仍然保留 D 形收起与悬停展开，但不会跨屏。恢复位置时用球的可见部分探测显示器；运行期间接入/移除显示器时在悬停/收回路径重新判定；悬停展开会优先避免把球从鼠标下移走。验证：`cargo test --locked`（231 项，新增内部边界用例）、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`pnpm build` 通过；macOS 双屏实例实测，主屏右边缘的球从 60×60、x=1896（36 点溢到相邻屏幕）变为 24×60、x=1896（完整在主屏内，只渲染左侧 D 形）。Windows 与其他多屏排列（上下排列、不同缩放、显示器热插拔）尚未实机验证。
+
+2026-11-01 悬浮球收起态按设计稿重排并加入过渡：收起时不再简单裁掉 60 点球的一侧，而是把露出部分重排成 D 形——平台标识移到露出 D 形的视觉中心，百分比与周期淡出，额度环只保留露出侧的弧、把进度重新归一化到这段弧并沿用低额度颜色；布局事件新增 `collapsed` 字段，两种吸附（移出屏幕与缩到 24×60）共用同一套前端状态。Rust 侧新增 `animate_ball`，按 220ms ease-out 逐帧过渡窗口位置与宽度，前端 logo/数值用相同时长和缓动的 CSS 过渡衔接；拖动开始与窗口销毁会取消进行中的动画，弹层改用最近一次布局目标定位，避免跟随动画抖动。悬停展开的贴边判定改为包含边界，防止鼠标停在 12 点间隙边缘时反复展开/收起。另加悬停看门狗：非 key 的 NSPanel 在菜单取得焦点后可能收不到 `pointerleave`，每 150ms 核对光标是否还在球或详情卡上，离开超过 1 秒就清掉过期标记并收回，修复菜单操作后球停在展开状态的问题。验证：`pnpm build`、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked`（233 项单元测试 + 12 项集成测试，新增收起宽度与缓动用例）通过；macOS 实机吸附态截图确认 logo 居中、额度环只露外弧，窗口宽度采样 24→60 约 184ms 平滑变化；Windows 透明窗口的逐帧缩放与多显示器表现仍需实机验证。
+
+2026-11-01 修复悬浮球悬停不灵敏（需要先点击才响应）：macOS 只向 key 窗口派发鼠标移动/悬停事件，而球与详情卡都是非激活 `NSPanel`，球在点击取得 key 之前收不到前端的 `pointerenter`，表现为“悬停没反应、点一下之后才正常”。悬停看门狗（每 150ms 轮询光标）原来只兜底 `pointerleave` 丢失导致的滞留，现在同时兜底进入：光标进入球或详情卡矩形时按位置补发悬停，未显示/拖动中/菜单打开时跳过；轮询只在“从外到内”的跨越时触发一次，拖动或菜单结束后要求指针先移出再移入，避免松手或松开菜单时立刻重新展开。前端指针事件保留，作为窗口取得 key 后的补充。吸附收起态的详情卡改为等展开过渡结束再显示：`set_hover` 发现球处于“吸附 + 收起”时只展开窗口，另挂起一次显示请求（`hover_show_pending`），220ms 过渡完成后再核对光标仍在完整球体上才调用 `show_popover`；同时到达的 `pointerenter` 与看门狗通知共用同一个请求，指针提前离开、菜单接管或窗口销毁都会取消，自由位置与已展开的球仍然立即显示。验证：`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked`（236 项单元测试 + 12 项集成测试，新增悬停进入去重与显示时机用例）通过；macOS 实机 dev 实例重启后，光标尚未点击球就出现 `float-popover 已显示 mode=hover`（修复前 `mode=hover` 总在 `mode=menu` 之后），确认悬停可直接触发详情卡。Windows 上 WebView2 悬停本就无需焦点，同一套轮询同样生效但未实机复测。

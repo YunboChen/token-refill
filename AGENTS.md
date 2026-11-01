@@ -10,7 +10,7 @@
 - 应用标识 `dev.tokenrefill.desktop`；数据目录由 Tauri `app_data_dir()` 决定：
   - macOS `~/Library/Application Support/dev.tokenrefill.desktop/`
   - Windows `%APPDATA%\dev.tokenrefill.desktop\`
-  - 目录内：`state.json`（设置、账户、额度快照、提醒去重）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
+  - 目录内：`state.json`（设置、账户、额度快照、提醒去重、悬浮球当前套餐与位置）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
   - `logs/` 只写固定文案、窗口标签与耗时，用途是排查发布包没有控制台（Windows GUI 子系统丢弃 `eprintln!`）时的“点了没反应”。令牌、Cookie、邮箱、密钥、请求内容一律不得写入。
 - 分发渠道分正式版（pro）与测试版（test），共用代码、靠 `src-tauri/tauri.test.conf.json` 覆盖身份：
   - 正式版：`productName` `Token Refill`、identifier `dev.tokenrefill.desktop`、版本 `X.Y.Z`，由 `release.yml` 发布并参与应用内更新。
@@ -18,10 +18,11 @@
   - 渠道由 Rust `channel.rs` 按 identifier 是否以 `.test` 结尾判定；前端只消费 `get_app_info().channel`。测试配置不得自带 `version`，正式配置不得使用测试 identifier 或 prerelease 版本（CI 两侧都有断言）。
   - 本地 `pnpm tauri:dev:test` 使用测试标识，可与已安装的正式版同时运行；它与 CI 测试包共用测试数据目录和单实例锁，不要同时启动。
   - 两个版本共用上游 Codex OAuth 的固定回调端口 1455/1457，不要同时发起 Codex 授权；百炼回调使用临时端口，无此限制。
-- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 / OpenCode Go / Command Code / Antigravity 额度查询、中转站（New API / Sub2API）密钥与账户额度查询、从 cc-switch 与 Claude Code / Codex 当前配置手动扫描并勾选导入中转站候选、菜单栏常驻与快速查看面板、系统提醒、开机自启、版本检查、应用内下载与安装更新（仅 NSIS 安装版，下载与安装两段确认）。
+- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 / OpenCode Go / Command Code / Antigravity 额度查询、中转站（New API / Sub2API）密钥与账户额度查询、从 cc-switch 与 Claude Code / Codex 当前配置手动扫描并勾选导入中转站候选、菜单栏常驻与快速查看面板、桌面悬浮球（默认关闭，设置中开启）、系统提醒、开机自启、版本检查、应用内下载与安装更新（仅 NSIS 安装版，下载与安装两段确认）。
 - 尚未实现：系统级凭证存储、Windows 免安装 exe 的原地更新。
 - 菜单栏行为是产品约定：关闭主窗口只隐藏，应用继续常驻并后台刷新；退出只通过菜单栏菜单或面板中的退出入口。菜单栏面板是独立窗口 `tray-panel`（380×560 点、无边框、透明、置顶），与主窗口共用同一份状态与事件；不要把它扩展成第二个带侧栏的管理窗口。面板在配置里是 `create: false`，第一次点开才创建；面板与主窗口隐藏 60 秒后销毁 WebView 以释放内存，重新打开时重建并等待页面加载。登录流程或更新下载进行期间不得销毁主窗口（前端弹窗与进度只存在于该窗口）。销毁最后一个窗口会让系统请求退出，必须在 `RunEvent::ExitRequested` 里拦截（仅拦截“没有窗口且非程序化退出”的情况），否则应用会在空闲销毁后自行结束。
 - 窗口创建不得在托盘 / 窗口事件回调里就地执行：这些回调本身在主线程，`run_on_main_thread` 会内联执行，而创建窗口要等 WebView2 初始化（零 WebView 状态下冷启动更慢，内部还会自行泵消息），会卡住托盘菜单并让重入的点击走进创建分支。显示请求一律先转到后台线程再回主线程。
+- 桌面悬浮球同样是独立窗口：`floating-ball`（60×60 点透明置顶，内部边界收起时缩为 24×60）与 `float-popover`（340 点宽、按内容自适应高度），都 `create: false`，只在设置开启时创建，关闭开关或球窗口被关闭时一起销毁。球启用期间不参与 60 秒空闲销毁；弹层在启用期间保留以便复用。球只响应鼠标、不抢键盘焦点；菜单弹层需要焦点以接收 Esc 与失焦。macOS 两者都用非激活 `NSPanel`；Windows 两者加 `WS_EX_TOOLWINDOW`，球再加 `WS_EX_NOACTIVATE`。吸附按完整屏幕边缘计算，工作区只用于上下夹取和自由位置；虚拟桌面最外侧边缘把 60 点窗口移出屏幕，两块显示器之间的内部边界必须把窗口缩到 24 点宽，两种方式都由前端把露出部分重排成「居中平台标识 + 归一化额度环弧」的 D 形（不是简单裁掉一侧），展开/收起时窗口尺寸与内容用同一时长平滑过渡，任何收缩都不得让球跨到相邻显示器。不要把它扩成第二个管理窗口或增加任意前端窗口控制权限。
 - 面板“失焦自动收起”必须以“窗口确实获得过焦点且已过宽限期”为前提：Windows 前台锁会让托盘点击唤出的窗口停在未激活状态，此时收到失焦就收起，用户看到的就是“点了没反应 / 一闪而过”。
 
 ## 2. 数据与凭证边界
@@ -39,7 +40,7 @@
 - 网络请求放在 Rust 侧（目前是版本检查的 ureq 请求）；前端不直连第三方接口，不为了方便放宽 CSP 的 `connect-src`。
 - 不新增 filesystem / shell / http 类 Tauri 插件；**禁止**把任意路径、命令行或 URL 交给系统 shell 拼接执行。更新器插件只从 Rust 侧调用，前端不获得它的 IPC 权限，不属于上述插件类别。
 - `open_external_url` 只接受 `https://`、长度受限且无控制字符的地址；Windows 用 `ShellExecuteW`，不得改回 `cmd /C start`（URL 中的 `&` 会被当作命令分隔符）。
-- capabilities 保持最小：`core:default`、`core:event:default`、`core:window:allow-start-dragging`；Windows 自绘标题栏另需 `core:window:allow-minimize`、`allow-toggle-maximize`、`allow-maximize`、`allow-unmaximize`、`allow-close`、`allow-is-maximized`，仅服务于 `TitleBar` 的最小化/最大化/关闭与状态同步，不得再扩大。新增能力必须说明理由并验证。
+- capabilities 保持最小：管理窗口与菜单栏面板使用 `core:default`、`core:event:default`、`core:window:allow-start-dragging`；Windows 自绘标题栏另需 `core:window:allow-minimize`、`allow-toggle-maximize`、`allow-maximize`、`allow-unmaximize`、`allow-close`、`allow-is-maximized`，仅服务于 `TitleBar` 的最小化/最大化/关闭与状态同步，不得再扩大。悬浮球与弹层使用独立的 `floating.json`，只有 `core:default` 与 `core:event:default`。新增能力必须说明理由并验证。
 - 状态持久化：带 `schemaVersion` 的 JSON；先写临时文件再原子替换；Unix 权限 0600/0700，Windows 依赖 `%APPDATA%` 的按用户 ACL。改动 schema 必须处理旧文件与损坏文件（备份后回退），不能静默覆盖；文件由更高版本写入时只读沿用、提示升级，不得改名备份或回写。
 - 不引入遥测、云同步、远程配置；版本检查与更新清单只请求 GitHub Releases 的公开数据，固定 User-Agent，不携带账户或本机信息。
 - 应用内更新由 Rust 侧 `tauri-plugin-updater` 完成，前端不授予 `updater:*` 能力，也没有下载/安装的自动入口：下载与安装是两个独立命令，必须由用户点击触发。更新包必须带 minisign 签名，客户端校验通过才允许安装；私钥只存在于 GitHub Secrets，公钥写在 `plugins.updater.pubkey`。
@@ -54,6 +55,7 @@
 - 主窗口关闭系统装饰，由前端 `TitleBar` 自绘标题栏（拖拽、最小化、最大化、关闭）；关闭按钮仍走既有的「隐藏不退出」逻辑。平台差异在 Rust `setup()` 里用 `#[cfg(windows)]` 调 `set_decorations(false)`，不要在 `tauri.windows.conf.json` 覆盖 `app.windows`——平台配置走 JSON Merge Patch，数组会被整体替换。主窗口在 `tauri.conf.json` 中以 `visible: false` 创建：Windows 等前端画出标题栏后 emit `main-ui-ready`、Rust 侧再 `show()`（另有 5 秒兜底），避免 React 首绘前露出约 1 秒的系统标题栏；macOS 在 `setup()` 中直接显示，行为与之前一致。前端通过 `get_app_info().platform` 切换标题栏布局。菜单栏快速面板在 Windows 上按托盘矩形与显示器可用区域定位到任务栏上方，不使用 macOS 的 `NSScreen` 定位分支。
 - 打包只产出：免安装单文件 exe（`--no-bundle`）与 NSIS 安装器（`tauri.windows.conf.json` 把 `bundle.targets` 固定为 `["nsis"]`）。**不产出、不发布 MSI**。
 - Codex 登录回调端口由上游固定为 1455（1457 仅在占用时回退），本应用不能改；遇到 `os error 10013` 只提示用户释放端口，不要尝试修改 CLI 行为。
+- 悬浮球与弹层在 Windows 上通过 `GetWindowLongPtrW` / `SetWindowLongPtrW` 加 `WS_EX_TOOLWINDOW`，球再加 `WS_EX_NOACTIVATE`；弹层需要 `set_focus` 才能收到 Esc 与失焦。透明窗口的渲染、拖动与多显示器吸附必须在 Windows 实机验证。
 
 ### macOS
 
@@ -63,6 +65,7 @@
 - 不引入需要关闭 Gatekeeper 或降低系统安全设置的常规安装步骤。
 - 应用内更新替换 `.app` 后仍是 ad-hoc 签名，cdhash 会变化，通知权限、开机自启可能需要用户重新授权；在实机验证前不得把它描述成无感更新。
 - 菜单栏面板用 Cocoa 坐标定位（`NSScreen` / `NSEvent` / `NSWindow`），因为 Tauri 在 Retina 与普通屏混排时的物理坐标不可靠。定位与显示必须经 `run_on_main_thread` 执行；不要改成直接调用 `set_position(PhysicalPosition)`。
+- 悬浮球与套餐弹层同样转换为非激活 `NSPanel`：球不调用 `make_key_window`，菜单弹层调用它；空间属性使用 `CanJoinAllSpaces | FullScreenAuxiliary`。吸附位置按完整屏幕计算，不按工作区，否则左侧 Dock 会让球停在 Dock 外侧。
 - 菜单栏图标使用单色模板图 `src-tauri/icons/tray-template.png` 并开启 `icon_as_template`；不要再改回彩色应用图标或依赖图标文字标题。
 
 ### 开发服务器

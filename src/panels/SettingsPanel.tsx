@@ -95,7 +95,14 @@ type UpdateState =
   | 'error';
 
 export default function SettingsPanel() {
-  const { state, appInfo, savePreferences, setAutoLaunch, desktop } = useAppState();
+  const {
+    state,
+    appInfo,
+    savePreferences,
+    setAutoLaunch,
+    setFloatingBall,
+    desktop,
+  } = useAppState();
   const isTestBuild = appInfo?.channel === 'test';
   const appName = appInfo?.name ?? 'Token Refill';
   const [prefs, setPrefs] = useState<Preferences>(state.preferences);
@@ -111,6 +118,8 @@ export default function SettingsPanel() {
   const [openingRelease, setOpeningRelease] = useState(false);
   const [autoLaunchBusy, setAutoLaunchBusy] = useState(false);
   const [autoLaunchError, setAutoLaunchError] = useState<string | null>(null);
+  const [floatingBallBusy, setFloatingBallBusy] = useState(false);
+  const [floatingBallError, setFloatingBallError] = useState<string | null>(null);
   const dirty = useRef(false);
   const latestPrefs = useRef(prefs);
   latestPrefs.current = prefs;
@@ -178,6 +187,19 @@ export default function SettingsPanel() {
     }
     // 立即反映系统实际状态；这不是普通偏好改动，不标记 dirty。
     setPrefs((prev) => ({ ...prev, autoLaunchEnabled: next }));
+  }
+
+  async function changeFloatingBall(next: boolean) {
+    if (!desktop || floatingBallBusy) return;
+    setFloatingBallBusy(true);
+    setFloatingBallError(null);
+    const ok = await setFloatingBall(next);
+    setFloatingBallBusy(false);
+    if (!ok) {
+      setFloatingBallError('悬浮球设置保存失败，请重试。');
+      return;
+    }
+    setPrefs((prev) => ({ ...prev, floatingBallEnabled: next }));
   }
 
   function testNotification() {
@@ -391,6 +413,28 @@ export default function SettingsPanel() {
             role="status"
           >
             {autoLaunchError}
+          </p>
+        ) : null}
+        <Toggle
+          checked={prefs.floatingBallEnabled}
+          onChange={(next) => void changeFloatingBall(next)}
+          label="桌面悬浮球"
+          hint={
+            !desktop
+              ? '浏览器预览无法创建桌面悬浮窗口。'
+              : floatingBallBusy
+                ? '正在应用悬浮球设置…'
+                : '默认关闭；开启后在桌面显示当前套餐的剩余额度，可拖动并吸附屏幕边缘。'
+          }
+          disabled={!desktop || floatingBallBusy}
+        />
+        {floatingBallError ? (
+          <p
+            className={`${styles.settingHint} ${styles.groupNote}`}
+            data-danger="true"
+            role="status"
+          >
+            {floatingBallError}
           </p>
         ) : null}
       </section>

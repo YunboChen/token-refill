@@ -1,9 +1,9 @@
 # Token Refill 界面设计规范
 
-- 文档版本：0.2
-- 最近更新：2026-10-27
-- 适用范围：管理窗口与菜单栏快速查看面板前端（React + TypeScript）
-- 事实来源：`src/App.module.css`、`src/styles.css`、`src/App.tsx`、`src/panels/`、`src/panels/TrayPanel.module.css`、`src/components/`、`src/lib/format.ts`、`src/lib/useDialogA11y.ts`
+- 文档版本：0.3
+- 最近更新：2026-11-01
+- 适用范围：管理窗口、菜单栏快速查看面板与桌面悬浮球前端（React + TypeScript）
+- 事实来源：`src/App.module.css`、`src/styles.css`、`src/App.tsx`、`src/panels/`、`src/panels/TrayPanel.module.css`、`src/panels/FloatingBall.module.css`、`src/components/`、`src/lib/format.ts`、`src/lib/useDialogA11y.ts`
 - 关联文档：[软件设计文档](./software-design.md)、[需求文档](./requirements.md)、[开发计划文档](./development-plan.md)
 
 本文从现有实现提炼界面结构、组件用法与改造步骤，目标是让新增页面或重做相似页面时**先复用、再新增**，避免每次重画一套卡片、状态和弹窗。产品范围与业务规则以需求文档为准，本文只描述界面层。
@@ -553,6 +553,48 @@ div.panel（透明窗口内的圆角面板）
 - 面板打开事件由 Rust 广播（`tray-panel-shown`）；收到后先展示缓存，再按刷新间隔补查中转站。面板只在用户点开时才创建，挂载即视为首次打开，会自己补一次状态同步与过期检查；中转站列表读完前不会主动发请求。
 - 面板内按 Esc 收起；点击面板外部由 Rust 的失焦监听收起。主题切换通过 `storage` 事件从主窗口同步。
 - 文案与数字遵循与主窗口相同的字号/字重级别，但整体缩小一档：面板正文 10–13px，行距更紧，避免在 380px 宽度内换行撑高。时间文案统一走 `src/lib/format.ts` 的 `stampLabel` / `relativeUpdateLabel`。
+
+### 5.6 桌面悬浮球（`FloatingBall.tsx` / `FloatingBallPopover.tsx`）
+
+悬浮球是独立的置顶窗口（`floating-ball`，60×60 点），样式集中在 `src/panels/FloatingBall.module.css`。球体使用固定的深色 HUD 外观，不跟随应用主题，保证在任意桌面背景上都清晰；弹层沿用 `--surface` / `--border-strong` 等主题 token。两个窗口都通过 `?view=float` / `?view=float-popover` 复用同一份前端产物。
+
+```
+div.stage（60×60；内部边界收起时为 24×60）
+└─ div.ball[role=button]（圆形、深色径向渐变）
+   ├─ svg.ring（viewBox 0 0 60 60，旋转 -90°；展开时的整圈进度）
+   │  ├─ circle.track（轨道）
+   │  ├─ circle.progress（剩余比例，按严重程度变蓝/琥珀/红）
+   │  └─ circle.spinner（刷新中，虚线圆旋转）
+   ├─ svg.peekRing（不旋转；只画露出侧的一段弧，进度按这段弧归一化）
+   │  ├─ path.track（露出侧的轨道）
+   │  ├─ path.progress（归一化后的剩余比例）
+   │  └─ circle.spinner（刷新中）
+   └─ div.center
+      ├─ span.logo（PlatformLogo 12px / 中转站插头图标；收起时移到露出条带正中）
+      ├─ span.value（百分比 16px；金额型中转站显示 10px 金额；收起时淡出）
+      └─ span.detail（周期：周/月/5小时；或「余额」「选择」「异常」「刷新中」；收起时淡出）
+
+div.popover（340 宽，按内容高度）
+├─ 悬停：eyebrow「正在使用」+ 套餐标题 + 套餐档位徽标 + 账户/身份
+│  ├─ div.rows > div.row × N（窗口名 / 剩余百分比 / 额度条 / 已用量与重置时间）
+│  ├─ p.hoverError（可选）
+│  └─ button.footerButton「切换套餐 ›」
+└─ 菜单：eyebrow「当前套餐」+ 提示
+   └─ div.menuList[role=listbox] > button.item × N
+      ├─ span.itemCheck（选中勾）
+      ├─ span.planLogo（28px 品牌徽标）
+      ├─ span.itemText（套餐名 + 账户/来源）
+      └─ span.itemValue（百分比或金额 + 周期）
+```
+
+关键行为：
+
+- 球内多周期取最低剩余比例；周期标签取该窗口的短名称（`compactQuotaWindowLabel`，例如「周」「月」「5小时」）。金额型中转站没有可靠比例时不显示百分比，直接在球内显示剩余金额。
+- 悬停显示详情卡，移出球与卡片后收起；点击球打开套餐切换菜单，再次点击、失焦或按 Esc 收起。弹层打开期间球保持展开。macOS 的悬停事件只派发给 key 窗口，而球是非激活 `NSPanel`，因此“进入”改由 Rust 侧每 150ms 的光标看门狗按窗口矩形补发（不能依赖 `pointerenter`，否则点击取得焦点前悬停完全没反应）；离开仍由前端事件与看门狗宽限期兜底，拖动或菜单结束后要求指针先移出再移入，不会在松手/关闭菜单时立刻重新展开。吸附收起态被悬停时先只展开球，详情卡等 220ms 窗口过渡结束、且指针仍停在完整球体上才显示，避免卡片跟着展开动作一起滑出；自由位置或已经展开的球没有过渡，悬停立即显示。
+- 拖动由指针事件判定（移动超过 4 点才开始拖动），靠近左右屏幕边缘吸附并收起成 24 点宽：在虚拟桌面最外侧边缘通过窗口移出屏幕实现；如果该边缘紧接着另一块显示器，则窗口缩到 24×60 点。收起时前端把露出部分重排成 D 形：平台标识移到露出 D 形的视觉中心，百分比与周期淡出，额度环只保留露出侧的那段弧并把进度归一化到这段弧上；两种吸附方式都不会跨屏。悬停展开到完整 60 点（鼠标已贴边时不留 12 点间隙），移出 1 秒后收回。窗口的位置/宽度与内容的位移/淡入淡出使用同一时长（220ms）过渡，吸附和展开不会瞬移。位置与当前套餐写入状态文件，重启恢复。
+- 未选择或所选套餐已不存在时显示加号与「选择」，点击打开菜单；查询失败且没有快照时显示「异常」，保留旧快照时不伪装成失败。
+- 菜单里订阅套餐与中转站账户并列；中转站标题优先用用户设置的标题，其次主机名，副标题显示提供方与地址。没有可选项时显示空态文案。
+- 球窗口只响应鼠标，不进入键盘焦点；弹层按内容高度自适应，宽度固定 340 点。
 
 ## 6. 跨页交互约定
 
