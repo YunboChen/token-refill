@@ -71,6 +71,8 @@
 .ring,
 .peekRing {
   position: absolute;
+  /* 相对于球体（60×60）定位，不随窗口/舞台宽度变化；
+     内部边界收起时窗口只有 24 点宽，由窗口把球裁成 D 形。 */
   inset: 0;
   width: 100%;
   height: 100%;
@@ -140,8 +142,8 @@
   pointer-events: none;
 }
 
-/* 收起时中心内容让位给 logo：logo 移到露出条带的正中，百分比与周期淡出。
-   与 Rust 侧窗口过渡时长（220ms）保持一致，展开/收起时两者同步变形。 */
+/* 展开时内容跟着窗口一起弹出；收起时 Rust 侧先滑到边缘、贴边后才切换
+   布局，所以这里的形变只会发生在贴边之后，可以用带一点回弹的曲线收进 D 形。 */
 .stage[data-transitions] .logo,
 .stage[data-transitions] .value,
 .stage[data-transitions] .detail {
@@ -150,9 +152,18 @@
     opacity 160ms ease;
 }
 
+.stage[data-transitions][data-collapsed] .logo,
+.stage[data-transitions][data-collapsed] .value,
+.stage[data-transitions][data-collapsed] .detail {
+  transition:
+    transform 180ms cubic-bezier(0.34, 1.32, 0.64, 1),
+    opacity 140ms ease;
+}
+
 /* 收起时把 logo 移到露出 D 形的视觉中心：左侧以额度环内沿为界、
    右侧以屏幕边缘为界（球体贴着边缘的那 3.5 点会融进桌面背景，
-   按几何中心放会明显偏左）；垂直移到球心 30。 */
+   按几何中心放会明显偏左）；垂直移到球心 30。
+   两种吸附方式都相对球体定位，内部边界缩窗口时偏移量不变。 */
 .stage[data-collapsed][data-edge='right'] .logo {
   transform: translate(-15px, 13px);
 }
@@ -169,7 +180,10 @@
 @media (prefers-reduced-motion: reduce) {
   .stage[data-transitions] .logo,
   .stage[data-transitions] .value,
-  .stage[data-transitions] .detail {
+  .stage[data-transitions] .detail,
+  .stage[data-transitions][data-collapsed] .logo,
+  .stage[data-transitions][data-collapsed] .value,
+  .stage[data-transitions][data-collapsed] .detail {
     transition: none;
   }
 }

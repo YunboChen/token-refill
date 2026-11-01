@@ -98,7 +98,7 @@ Windows 目标目录：
 - 单实例由 `tauri-plugin-single-instance` 保证，标识来自应用 `identifier`：免安装 exe 与 NSIS 安装版同时启动也只会保留一个进程，第二次启动把已有窗口从最小化恢复并置顶。正式版与测试版的 identifier 不同，可以各自保留一个实例。
 - 前端启动后调用 `get_app_info` 取 `platform`，写到根节点 `data-platform`；首次渲染先用 UA 同步判断，避免 Windows 自绘标题栏首帧缺失。Windows 渲染 `TitleBar`，macOS 使用 44px 红绿灯安全区，页面头仍作为拖拽区。
 - 主窗口在 `tauri.conf.json` 中以 `visible: false` 创建，避免 React 首绘前露出约 1 秒的系统标题栏：Windows 的 `TitleBar` 首帧 emit `main-ui-ready`，Rust 侧收到后显示并聚焦窗口（5 秒兜底，前端异常时也能出现）；macOS 在 `setup()` 中直接显示。
-- 桌面悬浮球（默认关闭）在 Windows 上使用与 macOS 相同的 `floating-ball` / `float-popover` 透明置顶窗口。创建后通过 `GetWindowLongPtrW` / `SetWindowLongPtrW` 给两个窗口加 `WS_EX_TOOLWINDOW`（不出现在任务栏与 Alt+Tab），球再加 `WS_EX_NOACTIVATE`，点击球不抢当前应用焦点；菜单弹层仍会 `set_focus`，以便接收 Esc 与失焦收起。吸附与拖动使用物理像素和完整屏幕区域，工作区只用于上下夹取与自由位置，避免任务栏导致球停在任务栏外侧；虚拟桌面最外侧边缘把球藏到屏幕外，显示器之间的内部边界把窗口缩到 24×60 点，两种收起状态都由前端把露出部分重排成「居中平台标识 + 归一化额度环弧」的 D 形，展开/收起时窗口尺寸与内容同步过渡，两者都不跨屏。球启用期间不参与 60 秒空闲销毁，关闭开关时与弹层一起销毁。
+- 桌面悬浮球（默认关闭）在 Windows 上使用与 macOS 相同的 `floating-ball` / `float-popover` 透明置顶窗口。创建后通过 `GetWindowLongPtrW` / `SetWindowLongPtrW` 给两个窗口加 `WS_EX_TOOLWINDOW`（不出现在任务栏与 Alt+Tab），球再加 `WS_EX_NOACTIVATE`，点击球不抢当前应用焦点；菜单弹层仍会 `set_focus`，以便接收 Esc 与失焦收起。吸附与拖动使用物理像素和完整屏幕区域，工作区只用于上下夹取与自由位置，避免任务栏导致球停在任务栏外侧；虚拟桌面最外侧边缘把球藏到屏幕外，显示器之间的内部边界把窗口缩到 24×60 点，两种收起状态都由前端把露出部分重排成「居中平台标识 + 归一化额度环弧」的 D 形，收起时先把完整球体滑到边缘、贴边后再收成 D 形，两者都不跨屏。球启用期间不参与 60 秒空闲销毁，关闭开关时与弹层一起销毁。
 - 取不到平台信息时保持 macOS 布局；浏览器预览不请求平台信息。
 
 ## 8. 打包

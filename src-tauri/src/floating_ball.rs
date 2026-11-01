@@ -63,8 +63,16 @@ const COLLAPSE_DELAY: Duration = Duration::from_secs(1);
 const HOVER_WATCH_TICK: Duration = Duration::from_millis(150);
 /// 拖动轮询间隔。
 const DRAG_TICK: Duration = Duration::from_millis(16);
-/// 吸附展开/收起的窗口过渡时长与帧间隔。
-const BALL_ANIMATION: Duration = Duration::from_millis(220);
+/// 展开：从贴边弹出到间隙位置，末段带一点回弹。
+const BALL_EXPAND: Duration = Duration::from_millis(220);
+/// 收起分两段：先保持完整外观滑到边缘，贴边后再收成 D 形。
+/// 位移与形变同时进行时，球在半路上就已经是 D 形，看起来像“还没贴边就吸附了”。
+const BALL_SNAP_SLIDE: Duration = Duration::from_millis(160);
+const BALL_SNAP_MORPH: Duration = Duration::from_millis(180);
+/// 布局事件发出后多久开始收窄窗口：让前端先落一帧，内容与窗口同步变形。
+const BALL_SNAP_LEAD: Duration = Duration::from_millis(16);
+/// 自由位置松手后的落点过渡。
+const BALL_DROP: Duration = Duration::from_millis(220);
 const BALL_ANIMATION_TICK: Duration = Duration::from_millis(16);
 /// 拖动开始前等待窗口尺寸/位置生效的时间。
 const DRAG_SETTLE: Duration = Duration::from_millis(30);
@@ -755,7 +763,7 @@ fn expand_ball(app: &AppHandle, window: &WebviewWindow, animate: bool) {
     }
     emit_layout(app);
     if animate {
-        animate_ball(window, x, target_y, BALL_SIZE);
+        animate_ball(window, x, target_y, BALL_SIZE, BALL_EXPAND, ease_out_back);
     } else {
         set_ball_layout(window, x, target_y, false);
     }
@@ -840,18 +848,27 @@ fn finish_drag(app: &AppHandle, window: &WebviewWindow) {
         rt.hidden_edge = hidden_edge;
         rt.expanded = false;
     }
-    emit_layout(app);
-    // 松手后从落点平滑滑到吸附位置；收起时窗口同时缩到 24 点。
-    animate_ball(
-        window,
-        final_x,
-        final_y,
-        if edge.is_some() {
-            collapsed_width(clipped)
+    // 松手后从落点平滑滑到吸附位置；贴边后再收成 D 形。
+    // 布局事件等到贴边后才发，球不会在半路上就显示成吸附状态。
+    if let Some(edge) = edge {
+        // 内部边界第一段停在贴边位置（完整 60 点仍在本屏内），第二段再收窄。
+        let slid_x = if clipped {
+            flush_x(edge, screen, size.width as f64)
         } else {
-            BALL_SIZE
-        },
-    );
+            final_x
+        };
+        animate_ball_collapse(app, window, slid_x, final_x, final_y, clipped);
+    } else {
+        emit_layout(app);
+        animate_ball(
+            window,
+            final_x,
+            final_y,
+            BALL_SIZE,
+            BALL_DROP,
+            ease_out_cubic,
+        );
+    }
 
     let saved = FloatingBallPosition {
         x: final_x,
@@ -1217,15 +1234,22 @@ fn collapse_if_idle(app: &AppHandle) {
     let work = work_area(&monitor);
     let (x, hidden, clipped) =
         snap_layout(app, &monitor, screen, edge, y, size, SNAP_VISIBLE * scale);
+    let final_y = clamp_y(y, work, size);
     {
         let mut rt = runtime();
         rt.hidden_edge = hidden;
         rt.expanded = false;
-        rt.y = Some(clamp_y(y, work, size));
+        rt.y = Some(final_y);
         rt.layout_x = Some(x);
     }
-    emit_layout(app);
-    animate_ball(&window, x, clamp_y(y, work, size), collapsed_width(clipped));
+    // 先滑到边缘、贴边后再切布局收成 D 形，避免在离边缘还有一段距离时
+    // 就变成吸附的样子。布局事件由收起动画在贴边后发出。
+    let slid_x = if clipped {
+        flush_x(edge, screen, size)
+    } else {
+        x
+    };
+    animate_ball_collapse(app, &window, slid_x, x, final_y, clipped);
     lifecycle!("[float] 悬浮球收回边缘");
 }
 
@@ -1258,7 +1282,7 @@ fn schedule_hover_show(app: &AppHandle) {
     let handle = app.clone();
     thread::spawn(move || {
         // 比窗口过渡多留一帧，确保详情卡出现时球已经到位。
-        thread::sleep(BALL_ANIMATION + BALL_ANIMATION_TICK);
+        thread::sleep(BALL_EXPAND + BALL_ANIMATION_TICK);
         let target = handle.clone();
         let _ = handle.run_on_main_thread(move || {
             let show = {
@@ -1602,44 +1626,133 @@ fn ease_out_cubic(t: f64) -> f64 {
     1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)
 }
 
+/// 带轻微回弹的 ease-out：末段越过目标约 7% 再落回，弹出手感更“活”。
+///
+/// 只用于朝屏幕内侧或已确认没有相邻显示器的位移：越过贴边位置会把球
+/// 露到相邻屏幕上。
+fn ease_out_back(t: f64) -> f64 {
+    const C1: f64 = 1.4;
+    let t = t.clamp(0.0, 1.0) - 1.0;
+    1.0 + (C1 + 1.0) * t * t * t + C1 * t * t
+}
+
+/// 执行一段球窗口补间；返回 `false` 表示被新动画、拖动或窗口销毁打断。
+fn tween_ball(
+    window: &WebviewWindow,
+    generation: u64,
+    x: f64,
+    y: f64,
+    width: f64,
+    duration: Duration,
+    easing: fn(f64) -> f64,
+) -> bool {
+    let (Ok(position), Ok(size)) = (window.outer_position(), window.inner_size()) else {
+        return false;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    if !scale.is_finite() || scale <= 0.0 {
+        return false;
+    }
+    let start_x = position.x as f64;
+    let start_y = position.y as f64;
+    let start_width = size.width as f64 / scale;
+    let started = Instant::now();
+    loop {
+        if BALL_ANIMATION_GENERATION.load(Ordering::SeqCst) != generation {
+            return false;
+        }
+        let progress = started.elapsed().as_secs_f64() / duration.as_secs_f64();
+        let eased = easing(progress);
+        let frame_x = start_x + (x - start_x) * eased;
+        let frame_y = start_y + (y - start_y) * eased;
+        let frame_width = start_width + (width - start_width) * eased;
+        let _ = window.set_size(LogicalSize::new(frame_width, BALL_SIZE));
+        let _ = window.set_position(PhysicalPosition::new(
+            frame_x.round() as i32,
+            frame_y.round() as i32,
+        ));
+        if progress >= 1.0 {
+            return true;
+        }
+        thread::sleep(BALL_ANIMATION_TICK);
+    }
+}
+
 /// 把球窗口平滑移动到目标位置，并把宽度过渡到 `width`（逻辑点）。
 ///
-/// 窗口逐帧调整尺寸与位置，前端的内容变形用同样时长的 CSS 过渡衔接；
 /// 新动画、拖动开始与窗口销毁都会让旧动画在下一次循环时退出。
-fn animate_ball(window: &WebviewWindow, x: f64, y: f64, width: f64) {
+fn animate_ball(
+    window: &WebviewWindow,
+    x: f64,
+    y: f64,
+    width: f64,
+    duration: Duration,
+    easing: fn(f64) -> f64,
+) {
     let generation = BALL_ANIMATION_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let window = window.clone();
     thread::spawn(move || {
-        let (Ok(position), Ok(size)) = (window.outer_position(), window.inner_size()) else {
-            return;
+        tween_ball(&window, generation, x, y, width, duration, easing);
+    });
+}
+
+/// 吸附收起：先保持完整外观滑到边缘，贴边后再切换布局并收窄窗口。
+///
+/// 位移与形变放在同一段里时，球在离边缘还有一段距离就已经是 D 形，
+/// 看起来像“还没贴边就吸附了”。拆成两段后形变只发生在贴边之后。
+fn animate_ball_collapse(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    slid_x: f64,
+    final_x: f64,
+    y: f64,
+    clipped: bool,
+) {
+    let generation = BALL_ANIMATION_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let window = window.clone();
+    let app = app.clone();
+    thread::spawn(move || {
+        // 外侧边缘可以稍微越过落点再弹回来；内部边界越过就会露到相邻
+        // 显示器上，只用普通的缓出。
+        let slide = if clipped {
+            ease_out_cubic
+        } else {
+            ease_out_back
         };
-        let scale = window.scale_factor().unwrap_or(1.0);
-        if !scale.is_finite() || scale <= 0.0 {
+        if !tween_ball(
+            &window,
+            generation,
+            slid_x,
+            y,
+            BALL_SIZE,
+            BALL_SNAP_SLIDE,
+            slide,
+        ) {
             return;
         }
-        let start_x = position.x as f64;
-        let start_y = position.y as f64;
-        let start_width = size.width as f64 / scale;
-        let started = Instant::now();
-        loop {
+        let target = app.clone();
+        let win = window.clone();
+        let _ = app.run_on_main_thread(move || {
+            // 滑向边缘期间可能已经开始新的展开或拖动，过期的收起不能再切布局。
             if BALL_ANIMATION_GENERATION.load(Ordering::SeqCst) != generation {
                 return;
             }
-            let progress = started.elapsed().as_secs_f64() / BALL_ANIMATION.as_secs_f64();
-            let eased = ease_out_cubic(progress);
-            let frame_x = start_x + (x - start_x) * eased;
-            let frame_y = start_y + (y - start_y) * eased;
-            let frame_width = start_width + (width - start_width) * eased;
-            let _ = window.set_size(LogicalSize::new(frame_width, BALL_SIZE));
-            let _ = window.set_position(PhysicalPosition::new(
-                frame_x.round() as i32,
-                frame_y.round() as i32,
-            ));
-            if progress >= 1.0 {
-                return;
-            }
-            thread::sleep(BALL_ANIMATION_TICK);
-        }
+            emit_layout(&target);
+            // 内侧边界的窗口收窄与前端变形同时进行；外侧边缘只靠移出屏幕，
+            // 窗口保持 60 点。
+            thread::spawn(move || {
+                thread::sleep(BALL_SNAP_LEAD);
+                tween_ball(
+                    &win,
+                    generation,
+                    final_x,
+                    y,
+                    collapsed_width(clipped),
+                    BALL_SNAP_MORPH,
+                    ease_out_cubic,
+                );
+            });
+        });
     });
 }
 
@@ -1745,6 +1858,19 @@ mod tests {
         assert_eq!(ease_out_cubic(1.5), 1.0);
         // ease-out：前半段已经走过一半以上。
         assert!(ease_out_cubic(0.5) > 0.5);
+    }
+
+    #[test]
+    fn back_easing_settles_on_target_with_a_small_overshoot() {
+        assert_eq!(ease_out_back(0.0), 0.0);
+        assert!((ease_out_back(1.0) - 1.0).abs() < 1e-9);
+        assert_eq!(ease_out_back(-0.5), 0.0);
+        assert!((ease_out_back(1.5) - 1.0).abs() < 1e-9);
+        // 回弹控制在 10% 以内：展开只往屏幕内侧越界，不会明显偏离落点。
+        let peak = (0..=100)
+            .map(|step| ease_out_back(step as f64 / 100.0))
+            .fold(0.0_f64, f64::max);
+        assert!(peak > 1.02 && peak < 1.10, "peak={peak}");
     }
 
     #[test]
