@@ -756,7 +756,7 @@ fn expand_ball(app: &AppHandle, window: &WebviewWindow, animate: bool) {
     let screen = screen_area(&monitor);
     let work = work_area(&monitor);
     let neighbor = monitor_has_neighbor(app, &monitor, edge, y, size);
-    let x = expanded_x_at_cursor(app, edge, screen, size, EXPAND_GAP * scale);
+    let x = expanded_x_at_cursor(app, window, edge, screen, size, EXPAND_GAP * scale);
     let target_y = clamp_y(y, work, size);
     {
         let mut rt = runtime();
@@ -778,7 +778,10 @@ fn start_drag_loop(app: AppHandle, window: WebviewWindow) {
         // 收起状态的窗口只有 24 点宽，拖动前刚扩成 60 点；等一帧让
         // 尺寸与位置落到窗口系统，再记录拖动起点，避免首帧跳动。
         thread::sleep(DRAG_SETTLE);
-        let (Ok(start), Ok(origin)) = (app.cursor_position(), window.outer_position()) else {
+        let (Some(start), Ok(origin)) = (
+            cursor_in_window_space(&app, &window),
+            window.outer_position(),
+        ) else {
             return;
         };
         let started = Instant::now();
@@ -787,11 +790,11 @@ fn start_drag_loop(app: AppHandle, window: WebviewWindow) {
             if !runtime().dragging || started.elapsed() > DRAG_TIMEOUT {
                 break;
             }
-            let Ok(cursor) = app.cursor_position() else {
+            let Some(cursor) = cursor_in_window_space(&app, &window) else {
                 break;
             };
-            let x = origin.x as f64 + (cursor.x - start.x);
-            let y = origin.y as f64 + (cursor.y - start.y);
+            let x = origin.x as f64 + (cursor.0 - start.0);
+            let y = origin.y as f64 + (cursor.1 - start.1);
             let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
         }
     });
@@ -1321,10 +1324,10 @@ fn schedule_hover_show(app: &AppHandle) {
             let Some(ball) = target.get_webview_window(BALL_LABEL) else {
                 return;
             };
-            let Ok(cursor) = target.cursor_position() else {
+            let Some((cursor_x, cursor_y)) = cursor_in_window_space(&target, &ball) else {
                 return;
             };
-            if !window_contains(&ball, cursor.x, cursor.y) {
+            if !window_contains(&ball, cursor_x, cursor_y) {
                 return;
             }
             show_popover(&target, PopoverMode::Hover);
@@ -1356,6 +1359,40 @@ fn hover_enters(
         ball: over_ball && !seen_ball,
         panel: over_popover && !seen_panel,
     }
+}
+
+/// 把光标坐标从 tao 的主屏物理坐标换算到指定窗口的物理坐标。
+#[cfg(any(target_os = "macos", test))]
+fn cursor_to_window_scale(x: f64, y: f64, primary_scale: f64, window_scale: f64) -> (f64, f64) {
+    let factor = window_scale / primary_scale;
+    (x * factor, y * factor)
+}
+
+/// 光标在指定窗口物理坐标系里的位置。
+///
+/// macOS 上 tao 的 `cursor_position` 用**主屏**缩放把
+/// `NSEvent.mouseLocation` 换算成物理像素，而窗口位置与尺寸用**所在屏幕**
+/// 的缩放换算。主屏与外接屏缩放不同时（Retina 主屏 + 1x 外接屏，或反过来）
+/// 两者差一个比例：球在外接屏上时 `window_contains` 永远不命中，悬停既不会
+/// 展开也不会弹详情卡，拖动还会按比例放大位移。
+#[cfg(target_os = "macos")]
+fn cursor_in_window_space(app: &AppHandle, window: &WebviewWindow) -> Option<(f64, f64)> {
+    let cursor = app.cursor_position().ok()?;
+    let primary_scale = app.primary_monitor().ok().flatten()?.scale_factor();
+    let window_scale = window.scale_factor().ok()?;
+    Some(cursor_to_window_scale(
+        cursor.x,
+        cursor.y,
+        primary_scale,
+        window_scale,
+    ))
+}
+
+/// Windows 上光标与窗口位置都已经是虚拟桌面的物理像素，无需换算。
+#[cfg(not(target_os = "macos"))]
+fn cursor_in_window_space(app: &AppHandle, _window: &WebviewWindow) -> Option<(f64, f64)> {
+    let cursor = app.cursor_position().ok()?;
+    Some((cursor.x, cursor.y))
 }
 
 /// 光标是否落在窗口的矩形范围内。
@@ -1411,15 +1448,16 @@ fn start_hover_watch(app: AppHandle, generation: u64) {
                 outside_since = None;
                 continue;
             }
-            let Ok(cursor) = app.cursor_position() else {
-                continue;
-            };
-            let over_ball = window_contains(&ball, cursor.x, cursor.y);
+            let over_ball = cursor_in_window_space(&app, &ball)
+                .is_some_and(|(x, y)| window_contains(&ball, x, y));
             let over_popover = mode == Some(PopoverMode::Hover)
                 && app
                     .get_webview_window(POPOVER_LABEL)
                     .filter(|window| window.is_visible().unwrap_or(false))
-                    .is_some_and(|window| window_contains(&window, cursor.x, cursor.y));
+                    .is_some_and(|window| {
+                        cursor_in_window_space(&app, &window)
+                            .is_some_and(|(x, y)| window_contains(&window, x, y))
+                    });
             let enters = hover_enters(over_ball_seen, over_popover_seen, over_ball, over_popover);
             over_ball_seen = over_ball;
             over_popover_seen = over_popover;
@@ -1586,18 +1624,19 @@ fn snap_layout(
 /// 间隙边缘时反复“展开 → 移出 → 收起”。
 fn expanded_x_at_cursor(
     app: &AppHandle,
+    window: &WebviewWindow,
     edge: FloatingBallEdge,
     screen: WorkArea,
     size: f64,
     gap: f64,
 ) -> f64 {
     let default = expanded_x(edge, screen, size, gap);
-    let Ok(cursor) = app.cursor_position() else {
+    let Some((cursor_x, _)) = cursor_in_window_space(app, window) else {
         return default;
     };
     match edge {
-        FloatingBallEdge::Left if cursor.x <= screen.x + gap => screen.x,
-        FloatingBallEdge::Right if cursor.x >= screen.x + screen.width - gap => {
+        FloatingBallEdge::Left if cursor_x <= screen.x + gap => screen.x,
+        FloatingBallEdge::Right if cursor_x >= screen.x + screen.width - gap => {
             screen.x + screen.width - size
         }
         _ => default,
@@ -1820,6 +1859,25 @@ mod tests {
             width: 1000.0,
             height: 800.0,
         }
+    }
+
+    #[test]
+    fn cursor_is_scaled_to_the_window_monitor() {
+        // macOS：光标按主屏缩放（2x）换算，窗口按所在屏缩放换算。
+        assert_eq!(
+            cursor_to_window_scale(6480.0, 1368.0, 2.0, 1.0),
+            (3240.0, 684.0)
+        );
+        // 同一块屏幕时比例抵消，坐标不变。
+        assert_eq!(
+            cursor_to_window_scale(6480.0, 1368.0, 2.0, 2.0),
+            (6480.0, 1368.0)
+        );
+        // 1x 主屏 + 2x 外接屏时反向放大。
+        assert_eq!(
+            cursor_to_window_scale(1000.0, 500.0, 1.0, 2.0),
+            (2000.0, 1000.0)
+        );
     }
 
     #[test]
