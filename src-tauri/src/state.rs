@@ -80,6 +80,9 @@ pub struct Preferences {
     pub auth_expired_enabled: bool,
     pub reset_notice_enabled: bool,
     pub auto_launch_enabled: bool,
+    /// 桌面悬浮球；默认关闭，只能通过设置页的独立命令切换。
+    #[serde(default)]
+    pub floating_ball_enabled: bool,
     /// 网络代理模式；旧状态文件缺省为跟随系统。
     #[serde(default)]
     pub proxy_mode: ProxyMode,
@@ -99,6 +102,7 @@ impl Default for Preferences {
             auth_expired_enabled: true,
             reset_notice_enabled: false,
             auto_launch_enabled: false,
+            floating_ball_enabled: false,
             proxy_mode: ProxyMode::System,
             proxy_url: None,
         }
@@ -107,8 +111,10 @@ impl Default for Preferences {
 
 /// 普通设置保存不改变自启意图：该字段由系统登录项的实际状态决定，
 /// 只能通过 `set_auto_launch` 写入，避免一次无关的设置保存把系统状态覆盖掉。
+/// 悬浮球开关同理，由 `set_floating_ball_enabled` 统一处理窗口创建与销毁。
 fn preferences_for_update(current: &Preferences, mut incoming: Preferences) -> Preferences {
     incoming.auto_launch_enabled = current.auto_launch_enabled;
+    incoming.floating_ball_enabled = current.floating_ball_enabled;
     incoming
 }
 
@@ -303,6 +309,41 @@ pub struct OverviewOrder {
     pub accounts: Vec<String>,
 }
 
+/// 悬浮球吸附的屏幕边缘。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FloatingBallEdge {
+    Left,
+    Right,
+}
+
+/// 悬浮球位置使用物理像素保存；`monitor` 记录显示器名称，多屏时优先按名称恢复，
+/// 取不到时夹取到目标显示器的工作区。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FloatingBallPosition {
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub edge: Option<FloatingBallEdge>,
+    #[serde(default)]
+    pub monitor: Option<String>,
+}
+
+/// 悬浮球的界面偏好：当前套餐与窗口位置。只保存标识与坐标，
+/// 不包含账户名、额度原文或任何凭证。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FloatingBallState {
+    /// 当前选中的套餐键：`product:<accountId>:<productId>` 或 `relay:<relayId>`。
+    /// 为空表示尚未选择，悬浮球显示“选择套餐”。
+    #[serde(default)]
+    pub selected: Option<String>,
+    /// 最近一次拖动后的位置；为空时使用右侧居中的默认位置。
+    #[serde(default)]
+    pub position: Option<FloatingBallPosition>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedState {
@@ -320,6 +361,9 @@ pub struct PersistedState {
     /// 中转站账户的展示顺序；旧版本状态文件缺省为空，按注册表顺序展示。
     #[serde(default)]
     pub relay_order: Vec<String>,
+    /// 悬浮球的当前套餐与位置；旧版本状态文件缺省为未选择、默认位置。
+    #[serde(default)]
+    pub floating_ball: FloatingBallState,
 }
 
 pub fn default_state() -> PersistedState {
@@ -331,6 +375,7 @@ pub fn default_state() -> PersistedState {
         reminders: ReminderMarks::default(),
         overview_order: OverviewOrder::default(),
         relay_order: Vec::new(),
+        floating_ball: FloatingBallState::default(),
     }
 }
 
@@ -2058,6 +2103,54 @@ impl StateStore {
             return Ok(current);
         }
         self.update_strict(move |state| state.relay_order = order)
+    }
+
+    /// 悬浮球开关由设置页的独立命令写入：窗口创建与销毁由调用方负责，
+    /// 这里只保证偏好落盘与广播。重复设置同一值不递增修订号。
+    pub fn set_floating_ball_enabled(&self, enabled: bool) -> Result<PersistedState, String> {
+        let current = self.snapshot();
+        if current.preferences.floating_ball_enabled == enabled {
+            return Ok(current);
+        }
+        self.update_strict(|state| state.preferences.floating_ball_enabled = enabled)
+    }
+
+    /// 保存悬浮球选中的套餐。标识由界面生成，调用方负责校验它仍指向
+    /// 一个存在的套餐或中转站账户；这里只限制长度与控制字符。
+    pub fn set_floating_ball_selection(
+        &self,
+        selected: Option<String>,
+    ) -> Result<PersistedState, String> {
+        let selected = selected
+            .map(|key| key.trim().to_string())
+            .filter(|key| !key.is_empty());
+        if let Some(key) = &selected {
+            if key.chars().count() > 200 || key.chars().any(char::is_control) {
+                return Err("套餐标识无效。".to_string());
+            }
+        }
+        let current = self.snapshot();
+        if current.floating_ball.selected == selected {
+            return Ok(current);
+        }
+        self.update_strict(|state| state.floating_ball.selected = selected)
+    }
+
+    /// 保存悬浮球位置。拖动结束才调用，重复坐标不落盘。
+    pub fn set_floating_ball_position(
+        &self,
+        position: Option<FloatingBallPosition>,
+    ) -> Result<PersistedState, String> {
+        if let Some(value) = &position {
+            if !value.x.is_finite() || !value.y.is_finite() {
+                return Err("悬浮球位置无效。".to_string());
+            }
+        }
+        let current = self.snapshot();
+        if current.floating_ball.position == position {
+            return Ok(current);
+        }
+        self.update_strict(|state| state.floating_ball.position = position)
     }
 
     /// 启动时把系统登录项的实际状态同步到偏好。失败只记录日志，不阻断启动。
@@ -3898,10 +3991,12 @@ mod tests {
     fn normal_preference_saves_do_not_change_auto_launch() {
         let current = Preferences {
             auto_launch_enabled: true,
+            floating_ball_enabled: true,
             ..Preferences::default()
         };
         let incoming = Preferences {
             auto_launch_enabled: false,
+            floating_ball_enabled: false,
             refresh_minutes: 15,
             ..Preferences::default()
         };
@@ -3910,7 +4005,55 @@ mod tests {
 
         // 自启只由系统登录项状态决定，普通设置保存不能把它覆盖掉。
         assert!(next.auto_launch_enabled);
+        // 悬浮球开关由独立命令管理，普通设置保存同样不能改。
+        assert!(next.floating_ball_enabled);
         assert_eq!(next.refresh_minutes, 15);
+    }
+
+    #[test]
+    fn floating_ball_defaults_to_disabled_and_unselected() {
+        let state = default_state();
+        assert!(!state.preferences.floating_ball_enabled);
+        assert_eq!(state.floating_ball, FloatingBallState::default());
+        assert!(state.floating_ball.selected.is_none());
+        assert!(state.floating_ball.position.is_none());
+    }
+
+    #[test]
+    fn old_state_without_floating_ball_keeps_defaults() {
+        let mut value = serde_json::to_value(default_state()).expect("serialize");
+        let object = value.as_object_mut().expect("state object");
+        object.remove("floatingBall");
+        let preferences = object
+            .get_mut("preferences")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("preferences object");
+        preferences.remove("floatingBallEnabled");
+
+        let state: PersistedState = serde_json::from_value(value).expect("legacy state parses");
+        assert!(!state.preferences.floating_ball_enabled);
+        assert_eq!(state.floating_ball, FloatingBallState::default());
+    }
+
+    #[test]
+    fn floating_ball_state_round_trips_through_disk() {
+        let path = temp_state_path("floating-ball");
+        let mut state = default_state();
+        state.preferences.floating_ball_enabled = true;
+        state.floating_ball.selected = Some("product:codex-local:codex-subscription".to_string());
+        state.floating_ball.position = Some(FloatingBallPosition {
+            x: -36.0,
+            y: 240.0,
+            edge: Some(FloatingBallEdge::Left),
+            monitor: Some("Built-in Retina Display".to_string()),
+        });
+
+        write_state(&path, &state).expect("write state");
+        let loaded = load_state(&path);
+
+        assert!(loaded.state.preferences.floating_ball_enabled);
+        assert_eq!(loaded.state.floating_ball, state.floating_ball);
+        fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
     #[test]

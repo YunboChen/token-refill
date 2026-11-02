@@ -309,6 +309,11 @@ impl RelayStore {
         }
     }
 
+    /// 判断标识是否仍指向一个已保存的中转站账户；悬浮球选择校验使用。
+    pub fn has(&self, id: &str) -> bool {
+        self.lock().iter().any(|entry| entry.id == id)
+    }
+
     /// 读取每个账户目录；损坏或权限不符的条目直接跳过并记录，不影响启动。
     fn load_from_disk(&self) {
         self.load_from_disk_with(discovery::discover_candidates);

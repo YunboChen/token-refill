@@ -363,7 +363,7 @@
   height: 5px;
   overflow: hidden;
   border-radius: 999px;
-  background: var(--sunken);
+  background: var(--border);
 }
 
 .relayBarFill {
@@ -374,7 +374,11 @@
   transition: width 400ms ease-out;
 }
 
-.relayBar[data-low] .relayBarFill {
+.relayBar[data-level='warning'] .relayBarFill {
+  background: var(--warning);
+}
+
+.relayBar[data-level='danger'] .relayBarFill {
   background: var(--danger);
 }
 
@@ -685,6 +689,19 @@
   font-size: 12px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+.relayMeterValue[data-level='warning'] {
+  color: var(--warning);
+}
+
+.relayMeterValue[data-level='danger'] {
+  color: var(--danger);
+}
+
+.relayMeterValue[data-level='unknown'] {
+  color: var(--muted);
+  font-weight: 500;
 }
 
 /* 单元格内的窗口列表比整宽时更紧凑，避免半列里出现过多留白 */
@@ -1152,11 +1169,15 @@
   line-height: 1.15;
 }
 
-.quotaBarRow[data-low] .quotaPercent {
+.quotaBarRow[data-level='warning'] .quotaPercent {
+  color: var(--warning);
+}
+
+.quotaBarRow[data-level='danger'] .quotaPercent {
   color: var(--danger);
 }
 
-.quotaBarRow[data-unknown] .quotaPercent {
+.quotaBarRow[data-level='unknown'] .quotaPercent {
   color: var(--muted);
 }
 
@@ -1176,7 +1197,11 @@
   background: var(--accent-strong);
 }
 
-.quotaBarRow[data-low] .quotaBarFill {
+.quotaBarRow[data-level='warning'] .quotaBarFill {
+  background: var(--warning);
+}
+
+.quotaBarRow[data-level='danger'] .quotaBarFill {
   background: var(--danger);
 }
 

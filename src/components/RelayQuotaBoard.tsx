@@ -10,6 +10,7 @@ import {
 } from 'motion/react';
 import type { KeyQuota, KeyQuotaWindow, RelayAccount } from '../lib/desktop';
 import { clockLabel, resetLabel } from '../lib/format';
+import { quotaLevel } from '../lib/quotaLevel';
 import { useRelay } from '../lib/relay';
 import {
   RELAY_MODE_LABELS,
@@ -233,10 +234,11 @@ function WindowList({
     <div className={styles.relayWindows}>
       <p className={styles.relaySectionLabel}>{title}</p>
       {windows.map((item) => {
-        const low =
-          lowQuotaEnabled
-          && item.remainingPercent !== null
-          && item.remainingPercent <= threshold;
+        const level = quotaLevel(
+          item.remainingPercent,
+          threshold,
+          lowQuotaEnabled,
+        );
         return (
           <div className={styles.relayWindow} key={item.windowId}>
             <div className={styles.relayWindowHead}>
@@ -253,7 +255,7 @@ function WindowList({
             {item.remainingPercent !== null ? (
               <div
                 className={styles.relayBar}
-                data-low={low || undefined}
+                data-level={level}
                 role="progressbar"
                 aria-label={`${relayWindowLabel(item)}剩余额度比例`}
                 aria-valuemin={0}
@@ -279,7 +281,7 @@ function WindowList({
   );
 }
 
-/** 剩余比例条：数值贴右，低于提醒阈值时转危险色。 */
+/** 剩余比例条：数值贴右，颜色按统一的额度等级。 */
 function QuotaMeter({
   percent,
   threshold,
@@ -291,13 +293,13 @@ function QuotaMeter({
   lowQuotaEnabled: boolean;
   label: string;
 }) {
-  const low = lowQuotaEnabled && percent <= threshold;
+  const level = quotaLevel(percent, threshold, lowQuotaEnabled);
   return (
     <>
       <div className={styles.relayMeterRow}>
         <div
           className={styles.relayBar}
-          data-low={low || undefined}
+          data-level={level}
           role="progressbar"
           aria-label={`${label}剩余比例`}
           aria-valuemin={0}
@@ -310,11 +312,13 @@ function QuotaMeter({
             style={{ width: `${percent}%` }}
           />
         </div>
-        <span className={styles.relayMeterValue}>{percent}%</span>
+        <span className={styles.relayMeterValue} data-level={level}>
+          {percent}%
+        </span>
       </div>
-      {low ? (
+      {level === 'danger' ? (
         <span className={styles.quotaLowNote}>
-          低于提醒阈值 {threshold}%
+          {percent <= 0 ? '额度已用尽' : `低于提醒阈值 ${threshold}%`}
         </span>
       ) : null}
     </>

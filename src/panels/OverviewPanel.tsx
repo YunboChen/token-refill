@@ -25,6 +25,7 @@ import type {
   QuotaWindow,
 } from '../lib/desktop';
 import { platformMeta } from '../lib/platforms';
+import { quotaLevel, type QuotaLevel } from '../lib/quotaLevel';
 import { useOverviewOrder } from '../lib/useOrdering';
 import {
   clockLabel,
@@ -212,11 +213,11 @@ function buildMetrics(account: AccountState): MetricSet {
 /** 剩余额度条：数值与进度条同行，弧长随剩余比例变化。 */
 function QuotaBar({
   value,
-  low,
+  level,
   label,
 }: {
   value: number | null;
-  low: boolean;
+  level: QuotaLevel;
   label: string;
 }) {
   const reducedMotion = useReducedMotion();
@@ -226,8 +227,7 @@ function QuotaBar({
   return (
     <div
       className={styles.quotaBarRow}
-      data-low={low || undefined}
-      data-unknown={!known || undefined}
+      data-level={level}
       role="progressbar"
       aria-label={label}
       aria-valuemin={0}
@@ -357,10 +357,7 @@ function AccountBody({
           {metrics.entries.map((entry, index) => {
             const { product, group, window } = entry;
             const remaining = window.remainingPercent;
-            const low =
-              lowQuotaEnabled
-              && remaining !== null
-              && remaining <= threshold;
+            const level = quotaLevel(remaining, threshold, lowQuotaEnabled);
             const label = quotaWindowLabel(
               window.windowDurationMins,
               window.windowName,
@@ -408,7 +405,7 @@ function AccountBody({
                   <span className={styles.metricLabel}>{label}</span>
                   <QuotaBar
                     value={remaining}
-                    low={low}
+                    level={level}
                     label={`${account.displayName} ${product.displayName} ${label}剩余比例`}
                   />
                   <span className={styles.metricMeta}>
@@ -421,9 +418,11 @@ function AccountBody({
                       {resetLabel(window.resetsAtEpoch)}
                     </span>
                   </span>
-                  {low ? (
+                  {level === 'danger' ? (
                     <span className={styles.quotaLowNote}>
-                      低于提醒阈值 {threshold}%
+                      {remaining !== null && remaining <= 0
+                        ? '额度已用尽'
+                        : `低于提醒阈值 ${threshold}%`}
                     </span>
                   ) : null}
                 </div>

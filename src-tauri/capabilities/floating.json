@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "floating",
+  "description": "悬浮球与套餐弹层：只开放核心默认权限与事件监听，不涉及文件、shell 或窗口控制。",
+  "windows": ["floating-ball", "float-popover"],
+  "permissions": ["core:default", "core:event:default"]
+}

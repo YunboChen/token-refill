@@ -27,6 +27,7 @@ import {
   renameAccount as renameAccountCommand,
   replaceApiKey as replaceApiKeyCommand,
   setAutoLaunch as setAutoLaunchCommand,
+  setFloatingBallEnabled as setFloatingBallEnabledCommand,
   setOverviewOrder as setOverviewOrderCommand,
   setRelayOrder as setRelayOrderCommand,
   updatePreferences,
@@ -38,7 +39,7 @@ import {
   type UpdateStatus,
 } from './desktop';
 import { clearLegacyPreferences, defaultAppState, readLegacyPreferences } from './prefs';
-import { IS_TRAY_VIEW } from './view';
+import { WINDOW_VIEW } from './view';
 
 /** 自动复查间隔：新版本发布后最迟约 6 小时被发现。 */
 const UPDATE_RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -96,6 +97,8 @@ interface AppStateContextValue {
   renameAccount: (accountId: string, displayName: string) => Promise<boolean>;
   removeAccount: (accountId: string) => Promise<boolean>;
   setAutoLaunch: (enabled: boolean) => Promise<boolean>;
+  /** 开关桌面悬浮球；Rust 负责创建/销毁窗口。 */
+  setFloatingBall: (enabled: boolean) => Promise<boolean>;
   openExternal: (url: string) => Promise<void>;
 }
 
@@ -162,7 +165,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // 测试渠道由 Rust 侧直接返回“无更新”，这里不做渠道分支，保持原有节流语义。
   const updateCheckedAt = useRef(0);
   useEffect(() => {
-    if (!desktop || IS_TRAY_VIEW) return;
+    if (!desktop || WINDOW_VIEW !== 'main') return;
     let disposed = false;
     let timer: number | undefined;
 
@@ -487,6 +490,30 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [desktop, applyState],
   );
 
+  // 悬浮球开关由 Rust 统一处理窗口创建与销毁；浏览器预览只切换本地占位。
+  const setFloatingBall = useCallback(
+    async (enabled: boolean) => {
+      if (!desktop) {
+        setState((prev) => ({
+          ...prev,
+          revision: prev.revision + 1,
+          preferences: { ...prev.preferences, floatingBallEnabled: enabled },
+        }));
+        return true;
+      }
+      try {
+        const next = await setFloatingBallEnabledCommand(enabled);
+        applyState(next);
+        setError(null);
+        return true;
+      } catch (err) {
+        setError(errorMessage(err));
+        return false;
+      }
+    },
+    [desktop, applyState],
+  );
+
   const openExternal = useCallback(
     async (url: string) => {
       if (!desktop) return;
@@ -522,6 +549,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       renameAccount,
       removeAccount,
       setAutoLaunch,
+      setFloatingBall,
       openExternal,
     }),
     [
@@ -546,6 +574,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       renameAccount,
       removeAccount,
       setAutoLaunch,
+      setFloatingBall,
       openExternal,
     ],
   );

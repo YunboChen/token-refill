@@ -1,0 +1,579 @@
+/* 悬浮球：60×60 的置顶小窗口。
+   球体跟随应用外观（浅色/深色/跟随系统），通过 --ball-* token 取色；
+   弹层沿用应用主题 token，与菜单栏面板保持一致。 */
+
+:global(html[data-view='float']),
+:global(html[data-view='float'] body),
+:global(html[data-view='float'] #root) {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  background: transparent;
+}
+
+:global(html[data-view='float-popover']),
+:global(html[data-view='float-popover'] body),
+:global(html[data-view='float-popover'] #root) {
+  min-width: 0;
+  background: transparent;
+}
+
+.stage {
+  --ball-accent: var(--hud-accent);
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.stage[data-severity='warning'] {
+  --ball-accent: var(--hud-warning);
+}
+
+.stage[data-severity='danger'] {
+  --ball-accent: var(--hud-danger);
+}
+
+.stage[data-severity='unknown'] {
+  --ball-accent: var(--hud-muted);
+}
+
+.ball {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 60px;
+  height: 60px;
+  border: 1px solid var(--ball-border);
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 32% 22%,
+    var(--ball-fill-start) 0%,
+    var(--ball-fill-end) 68%
+  );
+  box-shadow: var(--ball-shadow);
+  color: var(--ball-text);
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+}
+
+/* 球以屏幕边缘那一侧为基准对齐。内部边界收起时窗口缩到 24 点，
+   左边缘需要把球向左移出窗口，只露右侧；窗口宽度过渡期间球会
+   跟着边缘滑入/滑出，不需要额外的位移动画。 */
+.stage[data-edge='left'] .ball {
+  left: calc(100% - 60px);
+}
+
+.stage[data-dragging] .ball {
+  cursor: grabbing;
+}
+
+.ring,
+.peekRing {
+  position: absolute;
+  /* 相对于球体（60×60）定位，不随窗口/舞台宽度变化；
+     内部边界收起时窗口只有 24 点宽，由窗口把球裁成 D 形。 */
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.ring {
+  transform: rotate(-90deg);
+}
+
+/* 收起态的弧不旋转：路径按球坐标从露出边界扫过露出的那一侧。 */
+.peekRing {
+  opacity: 0;
+}
+
+.stage[data-transitions] .ring,
+.stage[data-transitions] .peekRing {
+  transition: opacity 160ms ease;
+}
+
+.stage[data-collapsed] .ring {
+  opacity: 0;
+}
+
+.stage[data-collapsed] .peekRing {
+  opacity: 1;
+}
+
+.track {
+  fill: none;
+  stroke: var(--ball-track);
+  stroke-width: 3.5;
+}
+
+.progress {
+  fill: none;
+  stroke: var(--ball-accent);
+  stroke-linecap: round;
+  stroke-width: 3.5;
+  transition: stroke-dashoffset 450ms ease, stroke 200ms ease;
+}
+
+.spinner {
+  fill: none;
+  stroke: var(--ball-spinner);
+  stroke-dasharray: 14 137;
+  stroke-linecap: round;
+  stroke-width: 1.5;
+  transform-origin: 30px 30px;
+  animation: float-spin 1.1s linear infinite;
+}
+
+@keyframes float-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  pointer-events: none;
+}
+
+/* 展开时内容跟着窗口一起弹出；收起时 Rust 侧先滑到边缘、贴边后才切换
+   布局，所以这里的形变只会发生在贴边之后，可以用带一点回弹的曲线收进 D 形。 */
+.stage[data-transitions] .logo,
+.stage[data-transitions] .value,
+.stage[data-transitions] .detail {
+  transition:
+    transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 160ms ease;
+}
+
+.stage[data-transitions][data-collapsed] .logo,
+.stage[data-transitions][data-collapsed] .value,
+.stage[data-transitions][data-collapsed] .detail {
+  transition:
+    transform 180ms cubic-bezier(0.34, 1.32, 0.64, 1),
+    opacity 140ms ease;
+}
+
+/* 收起时把 logo 移到露出弧形内部的视觉中心。不能按 24 点窗口矩形的
+   中心（x=12 / 48）算：露出边界是弧线内沿，比窗口边缘再内缩约 6 点，
+   弧形内部的实际中心在 x≈15 / 45。 */
+.stage[data-collapsed][data-edge='right'] .logo {
+  transform: translate(-15px, 13px);
+}
+
+.stage[data-collapsed][data-edge='left'] .logo {
+  transform: translate(15px, 13px);
+}
+
+/* 未选择套餐时 value 为空，内容列比有数值时矮 16 点，logo 的基准位置
+   因此低 8 点；垂直补偿减半，否则“+”会落在球心下方。 */
+.stage[data-collapsed]:has(.value:empty)[data-edge='right'] .logo {
+  transform: translate(-15px, 5px);
+}
+
+.stage[data-collapsed]:has(.value:empty)[data-edge='left'] .logo {
+  transform: translate(15px, 5px);
+}
+
+/* 金额型数值用 10 点字号，列高比百分比少 6 点，补偿相应减少。 */
+.stage[data-collapsed]:has(.value[data-compact])[data-edge='right'] .logo {
+  transform: translate(-15px, 10px);
+}
+
+.stage[data-collapsed]:has(.value[data-compact])[data-edge='left'] .logo {
+  transform: translate(15px, 10px);
+}
+
+.stage[data-collapsed] .value,
+.stage[data-collapsed] .detail {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage[data-transitions] .logo,
+  .stage[data-transitions] .value,
+  .stage[data-transitions] .detail,
+  .stage[data-transitions][data-collapsed] .logo,
+  .stage[data-transitions][data-collapsed] .value,
+  .stage[data-transitions][data-collapsed] .detail {
+    transition: none;
+  }
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 12px;
+  color: var(--ball-logo);
+}
+
+.logo svg {
+  width: 12px;
+  height: 12px;
+}
+
+.logo span {
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.value {
+  max-width: 48px;
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.value[data-compact] {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.detail {
+  color: var(--ball-detail);
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* ---------- 弹层 ---------- */
+
+.popover {
+  width: 340px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.eyebrow {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hover {
+  padding: 14px 16px 0;
+}
+
+.hoverHead {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hoverTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hoverTitle {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hoverAccount {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tierBadge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.planLogo {
+  display: grid;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--sunken);
+  color: var(--text);
+}
+
+.planLogo svg {
+  width: 17px;
+  height: 17px;
+}
+
+.planLogo span {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  margin-top: 10px;
+  overflow-y: auto;
+}
+
+.row {
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+}
+
+.rows .row:first-child {
+  padding-top: 4px;
+  border-top: none;
+}
+
+.rowHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.rowLabel {
+  overflow: hidden;
+  min-width: 0;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowValue {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.rowValue[data-level='warning'] {
+  color: var(--warning);
+}
+
+.rowValue[data-level='danger'] {
+  color: var(--danger);
+}
+
+.rowValue[data-level='unknown'] {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.bar {
+  display: block;
+  height: 5px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+}
+
+.barFill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent-strong);
+  transition: width 450ms ease;
+}
+
+.barFill[data-level='warning'] {
+  background: var(--warning);
+}
+
+.barFill[data-level='danger'] {
+  background: var(--danger);
+}
+
+.rowMeta {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.hoverError {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.hoverError svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.footerButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: calc(100% + 32px);
+  margin: 10px -16px 0;
+  padding: 11px 16px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.footerButton:hover {
+  background: var(--hover);
+}
+
+.emptyText {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.menu {
+  display: flex;
+  flex-direction: column;
+}
+
+.menuHead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 13px 16px 9px;
+}
+
+.menuHint {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.menuList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 360px;
+  padding: 2px 8px 8px;
+  overflow-y: auto;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 9px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.item:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.item[data-selected] {
+  background: var(--accent-soft);
+}
+
+.item:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.itemCheck {
+  display: grid;
+  flex: none;
+  width: 14px;
+  place-items: center;
+  color: var(--accent);
+}
+
+.itemText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.itemTitle {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemSub {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemValue {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.itemPercent {
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.itemPeriod {
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+.menuError {
+  margin: 0;
+  padding: 0 16px 12px;
+  color: var(--danger);
+  font-size: 11px;
+}

@@ -17,7 +17,6 @@ import { Reorder, useDragControls, type DragControls } from 'motion/react';
 import wordmark from '../assets/logo-text.png';
 import {
   hideTrayPanel,
-  onThemeChanged,
   onTrayPanelShown,
   openMainWindow,
   quitApp,
@@ -26,8 +25,6 @@ import {
   type QuotaWindow,
   type RelayAccount,
 } from '../lib/desktop';
-import { THEME_OPTIONS, type ThemePref } from '../lib/prefs';
-import { applyTheme } from '../lib/theme';
 import {
   groupLabel,
   planTierLabel,
@@ -37,6 +34,7 @@ import {
   stampLabel,
 } from '../lib/format';
 import { platformMeta, type AccountGroup } from '../lib/platforms';
+import { quotaLevel, type QuotaLevel } from '../lib/quotaLevel';
 import {
   RELAY_SECTION_KEY,
   useOverviewOrder,
@@ -62,7 +60,7 @@ interface QuotaRow {
   eyebrow: string | null;
   percent: number | null;
   meta: string[];
-  low: boolean;
+  level: QuotaLevel;
 }
 
 /** 金额/次数补充说明；没有绝对值时退回已用比例。 */
@@ -135,7 +133,7 @@ function accountRows(
           meta: [amountText(window), resetLabel(window.resetsAtEpoch)].filter(
             (part): part is string => part !== null,
           ),
-          low: lowQuotaEnabled && percent !== null && percent <= threshold,
+          level: quotaLevel(percent, threshold, lowQuotaEnabled),
         });
         productLead = false;
         groupLead = false;
@@ -155,7 +153,7 @@ function QuotaMeter({
 }) {
   const fullLabel = row.groupName ? `${row.groupName} · ${row.label}` : row.label;
   return (
-    <div className={styles.quotaRow} data-low={row.low || undefined}>
+    <div className={styles.quotaRow} data-level={row.level}>
       <span className={styles.quotaLabel} title={fullLabel}>
         {row.label}
       </span>
@@ -180,11 +178,7 @@ function QuotaMeter({
           />
         ) : null}
       </div>
-      <span
-        className={styles.percent}
-        data-low={row.low || undefined}
-        data-unknown={row.percent === null || undefined}
-      >
+      <span className={styles.percent} data-level={row.level}>
         {row.percent !== null ? `剩余 ${Math.round(row.percent)}%` : '剩余 —'}
       </span>
       {row.meta.length > 0 ? (
@@ -381,7 +375,7 @@ function RelayCard({
   const quota = account.quota;
   const name = account.label ?? relayHost(account.baseUrl);
   const percent = quota ? relayMeter(quota) : null;
-  const low = lowQuotaEnabled && percent !== null && percent <= threshold;
+  const level = quotaLevel(percent, threshold, lowQuotaEnabled);
 
   return (
     <Reorder.Item
@@ -433,7 +427,7 @@ function RelayCard({
         <>
           <p className={styles.relaySummary}>{relaySummary(quota)}</p>
           {percent !== null ? (
-            <div className={styles.relayMeter} data-low={low || undefined}>
+            <div className={styles.relayMeter} data-level={level}>
               <div
                 className={styles.bar}
                 role="progressbar"
@@ -448,7 +442,7 @@ function RelayCard({
                   style={{ width: `${percent}%` }}
                 />
               </div>
-              <span className={styles.percent} data-low={low || undefined}>
+              <span className={styles.percent} data-level={level}>
                 剩余 {percent}%
               </span>
             </div>
@@ -833,25 +827,6 @@ export default function TrayPanel() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
-
-  // 主题是前端本地偏好；主窗口切换后通过事件同步到面板。
-  useEffect(() => {
-    if (!desktop) return;
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void onThemeChanged((theme) => {
-      if (THEME_OPTIONS.includes(theme as ThemePref)) {
-        applyTheme(theme as ThemePref);
-      }
-    }).then((stop) => {
-      if (disposed) stop();
-      else unlisten = stop;
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, [desktop]);
 
   const refreshAll = useCallback(async () => {
     if (!desktop || refreshingAll) return;

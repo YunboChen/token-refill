@@ -418,7 +418,7 @@
   height: 6px;
   overflow: hidden;
   border-radius: var(--radius-pill);
-  background: var(--border-strong);
+  background: var(--border);
 }
 
 .barFill {
@@ -440,7 +440,7 @@
   white-space: nowrap;
 }
 
-.percent[data-unknown] {
+.percent[data-level='unknown'] {
   color: var(--muted);
   font-weight: 500;
 }
@@ -464,14 +464,23 @@
   white-space: nowrap;
 }
 
-/* 低于提醒阈值：进度条转琥珀色，红色只留给查询失败。 */
-.quotaRow[data-low] .barFill,
-.relayMeter[data-low] .barFill {
+/* 额度颜色层级与主窗口、悬浮球一致：琥珀色表示注意，红色表示已到提醒阈值。 */
+.quotaRow[data-level='warning'] .barFill,
+.relayMeter[data-level='warning'] .barFill {
   background: var(--warning);
 }
 
-.percent[data-low] {
+.quotaRow[data-level='danger'] .barFill,
+.relayMeter[data-level='danger'] .barFill {
+  background: var(--danger);
+}
+
+.percent[data-level='warning'] {
   color: var(--warning);
+}
+
+.percent[data-level='danger'] {
+  color: var(--danger);
 }
 
 .errorLine {
