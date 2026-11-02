@@ -729,7 +729,7 @@ fn place_ball(app: &AppHandle, window: &WebviewWindow) {
     }
     // 启动恢复没有过渡：窗口尚未显示，直接落到目标位置。
     cancel_ball_animation();
-    set_ball_layout(window, x, y, clipped);
+    set_ball_layout(window, x, y, clipped, scale);
     emit_layout(app);
 }
 
@@ -769,7 +769,7 @@ fn expand_ball(app: &AppHandle, window: &WebviewWindow, animate: bool) {
     if animate {
         animate_ball(window, x, target_y, BALL_SIZE, BALL_EXPAND, ease_out_back);
     } else {
-        set_ball_layout(window, x, target_y, false);
+        set_ball_layout(window, x, target_y, false, scale);
     }
 }
 
@@ -778,10 +778,10 @@ fn start_drag_loop(app: AppHandle, window: WebviewWindow) {
         // 收起状态的窗口只有 24 点宽，拖动前刚扩成 60 点；等一帧让
         // 尺寸与位置落到窗口系统，再记录拖动起点，避免首帧跳动。
         thread::sleep(DRAG_SETTLE);
-        let (Some(start), Ok(origin)) = (
-            cursor_in_window_space(&app, &window),
-            window.outer_position(),
-        ) else {
+        // 起点与光标都换算成跨屏连续的全局点：窗口在中途经过不同缩放的
+        // 屏幕时，物理坐标会跟着所在屏幕跳变，相减会得到错误的位移。
+        let (Some(start), Some(origin)) = (cursor_points(&app), window_origin_points(&window))
+        else {
             return;
         };
         let started = Instant::now();
@@ -790,12 +790,12 @@ fn start_drag_loop(app: AppHandle, window: WebviewWindow) {
             if !runtime().dragging || started.elapsed() > DRAG_TIMEOUT {
                 break;
             }
-            let Some(cursor) = cursor_in_window_space(&app, &window) else {
+            let Some(cursor) = cursor_points(&app) else {
                 break;
             };
-            let x = origin.x as f64 + (cursor.0 - start.0);
-            let y = origin.y as f64 + (cursor.1 - start.1);
-            let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+            let x = origin.0 + (cursor.0 - start.0);
+            let y = origin.1 + (cursor.1 - start.1);
+            set_window_position_points(&window, x, y);
         }
     });
 }
@@ -1138,7 +1138,7 @@ fn place_popover(app: &AppHandle, window: &WebviewWindow) {
     );
 
     let _ = window.set_size(LogicalSize::new(POPOVER_WIDTH, height));
-    let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+    set_window_position_on_monitor(window, x, y, scale);
 }
 
 fn hide_popover(app: &AppHandle) {
@@ -1366,6 +1366,67 @@ fn hover_enters(
 fn cursor_to_window_scale(x: f64, y: f64, primary_scale: f64, window_scale: f64) -> (f64, f64) {
     let factor = window_scale / primary_scale;
     (x * factor, y * factor)
+}
+
+/// 光标在全局点坐标里的位置。
+///
+/// macOS 的全局点是 AppKit 的点坐标，跨屏幕连续；Tauri 的 `cursor_position`
+/// 却按主屏缩放换算过，需要先除掉。Windows 直接用虚拟桌面的物理像素。
+#[cfg(target_os = "macos")]
+fn cursor_points(app: &AppHandle) -> Option<(f64, f64)> {
+    let cursor = app.cursor_position().ok()?;
+    let primary_scale = app.primary_monitor().ok().flatten()?.scale_factor();
+    Some((cursor.x / primary_scale, cursor.y / primary_scale))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cursor_points(app: &AppHandle) -> Option<(f64, f64)> {
+    let cursor = app.cursor_position().ok()?;
+    Some((cursor.x, cursor.y))
+}
+
+/// 窗口左上角在全局点坐标里的位置。
+#[cfg(target_os = "macos")]
+fn window_origin_points(window: &WebviewWindow) -> Option<(f64, f64)> {
+    let position = window.outer_position().ok()?;
+    let scale = window.scale_factor().ok()?;
+    Some((position.x as f64 / scale, position.y as f64 / scale))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn window_origin_points(window: &WebviewWindow) -> Option<(f64, f64)> {
+    let position = window.outer_position().ok()?;
+    Some((position.x as f64, position.y as f64))
+}
+
+/// 用全局点坐标摆放窗口。
+///
+/// macOS 上逻辑坐标就是 AppKit 的全局点，与窗口当前所在屏幕的缩放无关；
+/// 直接用 `PhysicalPosition` 会被按窗口当前屏幕的缩放再折一次，窗口还停在
+/// 另一块缩放不同的屏幕上时就会落到错误位置。
+fn set_window_position_points(window: &WebviewWindow, x: f64, y: f64) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+    }
+}
+
+/// 按目标显示器的物理坐标摆放窗口：先折成该屏的全局点，再交给
+/// `set_window_position_points`，避免使用窗口当前所在屏幕的缩放。
+fn set_window_position_on_monitor(window: &WebviewWindow, x: f64, y: f64, monitor_scale: f64) {
+    #[cfg(target_os = "macos")]
+    {
+        set_window_position_points(window, x / monitor_scale, y / monitor_scale);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = monitor_scale;
+        set_window_position_points(window, x, y);
+    }
 }
 
 /// 光标在指定窗口物理坐标系里的位置。
@@ -1652,13 +1713,14 @@ fn clamp_y(y: f64, work: WorkArea, size: f64) -> f64 {
 }
 
 /// 设置窗口宽度并按逻辑尺寸调整；内部收起时宽度为 24 点。
-fn set_ball_layout(window: &WebviewWindow, x: f64, y: f64, clipped: bool) {
+/// `scale` 是目标显示器的缩放，用于把物理坐标折回跨屏连续的全局点。
+fn set_ball_layout(window: &WebviewWindow, x: f64, y: f64, clipped: bool, scale: f64) {
     let _ = window.set_size(LogicalSize::new(collapsed_width(clipped), BALL_SIZE));
-    set_ball_position(window, x, y);
+    set_ball_position(window, x, y, scale);
 }
 
-fn set_ball_position(window: &WebviewWindow, x: f64, y: f64) {
-    let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+fn set_ball_position(window: &WebviewWindow, x: f64, y: f64, scale: f64) {
+    set_window_position_on_monitor(window, x, y, scale);
 }
 
 /// 收起后的窗口逻辑宽度：内部边界缩到 24 点；最外侧边缘保留 60 点，
