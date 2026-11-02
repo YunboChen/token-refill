@@ -320,6 +320,10 @@ fn create_panel(app: &AppHandle) -> Option<WebviewWindow> {
             return None;
         }
     };
+    // 原生阴影会给透明窗口留出非客户区，系统在客户区边缘画的 1px 线会叠在
+    // 圆角面板描边外，看起来像双层直角边框；只在 Windows 关掉。
+    #[cfg(windows)]
+    let builder = builder.shadow(false);
     let panel = match builder
         .visible(false)
         .on_page_load(move |window, payload| {

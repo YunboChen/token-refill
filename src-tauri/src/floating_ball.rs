@@ -1014,6 +1014,10 @@ fn create_popover(app: &AppHandle) {
             return;
         }
     };
+    // 原生阴影会给透明窗口留出非客户区，系统在客户区边缘画的那条 1px 线
+    // 会叠在圆角卡片的描边外，看起来像多了一层直角边框；只在 Windows 关掉。
+    #[cfg(windows)]
+    let builder = builder.shadow(false);
     let window = match builder
         .visible(false)
         .on_page_load(move |window, payload| {

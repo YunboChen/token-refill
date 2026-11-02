@@ -2,7 +2,7 @@
 
 - 文档版本：0.16
 - 状态：Codex 本机查询、官方授权多账户、百炼 Token Plan 个人版与 Coding Plan 中国站查询、统一状态层、菜单栏快速查看、桌面悬浮球、Windows 兼容层、版本检查与应用内更新已实现
-- 最近更新：2026-11-01
+- 最近更新：2026-11-02
 - 关联文档：[需求文档](./requirements.md)、[软件设计文档](./software-design.md)
 
 ## 1. 计划原则
@@ -268,3 +268,5 @@
 2026-11-01 调整悬浮球收起/展开动画：原先窗口位移、宽度收窄与前端 D 形变形在同一段 220ms 里完成，松手点离边缘还有一段距离时球在半路上就已经变成 D 形，看起来像“还没贴边就吸附了”。现在收起拆成两段——`animate_ball_collapse` 先按 160ms 把完整 60 点球体滑到边缘（外侧边缘用带约 7% 回弹的 ease-out，内部边界只用普通缓出，越过贴边位置会露到相邻显示器），贴边后由主线程发出布局事件，再延迟一帧按 180ms 收窄窗口并播放内容变形；布局事件因此不会在滑动途中提前切换 `collapsed`，滑动期间开始悬停/拖动会取消过期段。展开改为 220ms 带回弹的 ease-out，详情卡仍然等这段过渡结束再显示；收起方向的内容过渡换成 180ms 带轻微回弹的曲线，`prefers-reduced-motion` 一并覆盖收起选择器。另修正一处布局假设：圆环与中心内容都是相对 60×60 的 `.ball` 定位，不随窗口/舞台宽度变化，内部边界收起时 logo 仍用 `translate(±15px, 13px)` 移到露出条带的视觉中心（一度按“舞台 24 点宽”给内部边界加了水平居中的覆盖规则，反而把 logo 推到窗口外、收起态看不到平台标识，已删除）。验证：`pnpm build`、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked`（悬浮球相关 16 项，新增回弹曲线起止与幅度用例）通过；macOS 双屏实机确认收起态平台标识回到 D 形条带内，动画观感与 Windows 透明窗口未复测。
 
 2026-11-01 悬浮球适配浅色外观：此前球体固定深色 HUD，只保证在任意桌面背景上清晰；现在球体跟随应用外观（浅色 / 深色 / 跟随系统）。新增 `--ball-fill-start` / `--ball-fill-end` / `--ball-border` / `--ball-shadow` / `--ball-text` / `--ball-logo` / `--ball-detail` / `--ball-track` / `--ball-spinner` 这组球体 token：浅色下为白底深字、加深描边并加底部内阴影，深色下保留原来的深蓝黑球体；额度环 `--hud-*` 改为引用 `--accent-strong` / `--warning` / `--danger` / `--muted`，随主题解析。主题同步从 `TrayPanel` 的单独订阅提升为 `main.tsx` 的 `useThemeSync()`，主窗口切换外观后菜单栏面板、悬浮球与弹层都会立即换色。验证：`pnpm build` 通过；用 headless Chrome 加载 Vite dev 页面分别截图，确认浅色球体为白底深字、深色球体外观与改动前一致。macOS 实机悬浮球窗口（透明背景、多显示器吸附）与 Windows 尚未复测。
+
+2026-11-02 修复 Windows 上悬浮球弹层与菜单栏面板的双层边框：透明窗口在 `tauri.conf.json` 里开启了 `shadow`，tao 会为原生阴影留出非客户区，Windows 在客户区边缘再画一条 1px 线；它贴在圆角卡片的描边外侧，四个角仍保持直角，看起来像多了一层白色直角边框。弹层与 `tray-panel` 在 `WebviewWindowBuilder::from_config` 之后用 `#[cfg(windows)] .shadow(false)` 关掉原生阴影，只保留卡片自己的 1px 描边（macOS 的 NSPanel 阴影不变）。验证：Windows 实机用黑色背景截图逐像素检查，弹层与面板的边框从「外层直角线 + 内层圆角描边」变为单条描边；`pnpm build`、`cargo fmt --check`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo test --locked`（238 项）通过。
