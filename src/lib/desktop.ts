@@ -29,6 +29,8 @@ export interface Preferences {
   authExpiredEnabled: boolean;
   resetNoticeEnabled: boolean;
   autoLaunchEnabled: boolean;
+  /** 桌面悬浮球；默认关闭，由独立命令切换。 */
+  floatingBallEnabled: boolean;
   /** system：跟随系统；none：直连；manual：使用 proxyUrl。 */
   proxyMode: ProxyMode;
   proxyUrl: string | null;
@@ -120,6 +122,22 @@ export interface OverviewOrder {
   accounts: string[];
 }
 
+export type FloatingBallEdge = 'left' | 'right';
+
+/** 悬浮球位置使用物理像素保存；多显示器时按名称恢复。 */
+export interface FloatingBallPosition {
+  x: number;
+  y: number;
+  edge: FloatingBallEdge | null;
+  monitor: string | null;
+}
+
+export interface FloatingBallState {
+  /** `product:<accountId>:<productId>` 或 `relay:<relayId>`；空表示尚未选择。 */
+  selected: string | null;
+  position: FloatingBallPosition | null;
+}
+
 export interface AppState {
   schemaVersion: number;
   revision: number;
@@ -128,6 +146,7 @@ export interface AppState {
   overviewOrder: OverviewOrder;
   /** 中转站账户的展示顺序；未列出的保持注册表顺序。 */
   relayOrder: string[];
+  floatingBall: FloatingBallState;
 }
 
 export const APP_STATE_EVENT = 'app-state-changed';
@@ -347,6 +366,95 @@ export function hideTrayPanel(): Promise<void> {
 /** 明确的退出入口：停止后台刷新并结束进程。 */
 export function quitApp(): Promise<void> {
   return invoke<void>('quit_app');
+}
+
+// ---------- 桌面悬浮球 ----------
+
+/** 开关悬浮球；Rust 侧负责创建/销毁窗口并把偏好写入状态。 */
+export function setFloatingBallEnabled(enabled: boolean): Promise<AppState> {
+  return invoke<AppState>('set_floating_ball_enabled', { enabled });
+}
+
+/** 开始拖动悬浮球；由球窗口的指针事件触发。 */
+export function floatingBallDragStart(): Promise<void> {
+  return invoke<void>('floating_ball_drag_start');
+}
+
+/** 松开鼠标；Rust 负责吸附边缘并保存位置。 */
+export function floatingBallDragEnd(): Promise<void> {
+  return invoke<void>('floating_ball_drag_end');
+}
+
+/** 球窗口的指针进出；用于展开/收起吸附状态与悬停详情。 */
+export function floatingBallHover(hovered: boolean): Promise<void> {
+  return invoke<void>('floating_ball_hover', { hovered });
+}
+
+/** 弹层自身的指针进出；与球任一保持悬停时不收起。 */
+export function floatingBallPanelHover(hovered: boolean): Promise<void> {
+  return invoke<void>('floating_ball_panel_hover', { hovered });
+}
+
+/** 点击悬浮球：打开或收起套餐切换菜单。 */
+export function floatingBallTogglePanel(): Promise<void> {
+  return invoke<void>('floating_ball_toggle_panel');
+}
+
+/** 详情卡里的“切换套餐”。 */
+export function floatingBallShowMenu(): Promise<void> {
+  return invoke<void>('floating_ball_show_menu');
+}
+
+export function floatingBallHidePanel(): Promise<void> {
+  return invoke<void>('floating_ball_hide_panel');
+}
+
+/** 弹层按内容高度调整窗口尺寸。 */
+export function floatingBallResize(height: number): Promise<void> {
+  return invoke<void>('floating_ball_popover_resize', { height });
+}
+
+/** 弹层当前模式；页面加载完成后主动拉取一次，避免错过事件。 */
+export function getFloatingBallPopoverMode(): Promise<'hover' | 'menu' | null> {
+  return invoke<'hover' | 'menu' | null>('floating_ball_popover_mode');
+}
+
+const FLOATING_BALL_POPOVER_EVENT = 'floating-ball-popover-mode';
+
+export function onFloatingBallPopoverMode(
+  handler: (mode: 'hover' | 'menu') => void,
+): Promise<UnlistenFn> {
+  return listen<'hover' | 'menu'>(FLOATING_BALL_POPOVER_EVENT, (event) =>
+    handler(event.payload),
+  );
+}
+
+/** 球窗口布局：收起时只露出贴边的 24 点，内部边界下窗口缩为 24 点宽。 */
+export interface FloatingBallLayout {
+  edge: FloatingBallEdge | null;
+  /** 收起状态：中心内容换成 logo，额度环只保留露出的弧。 */
+  collapsed: boolean;
+  clipped: boolean;
+}
+
+/** 球窗口挂载后主动拉取布局，避免错过创建期间的布局事件。 */
+export function getFloatingBallLayout(): Promise<FloatingBallLayout> {
+  return invoke<FloatingBallLayout>('floating_ball_layout');
+}
+
+const FLOATING_BALL_LAYOUT_EVENT = 'floating-ball-layout';
+
+export function onFloatingBallLayoutChanged(
+  handler: (layout: FloatingBallLayout) => void,
+): Promise<UnlistenFn> {
+  return listen<FloatingBallLayout>(FLOATING_BALL_LAYOUT_EVENT, (event) =>
+    handler(event.payload),
+  );
+}
+
+/** 选择当前套餐；标识必须是 `product:...` 或 `relay:...`。 */
+export function selectFloatingBallPlan(key: string): Promise<AppState> {
+  return invoke<AppState>('floating_ball_select', { key });
 }
 
 // ---------- 中转站密钥额度（手动凭证由 Rust 保存在应用数据目录）----------

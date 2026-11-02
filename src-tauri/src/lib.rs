@@ -6,6 +6,7 @@ mod cli;
 mod codex;
 mod commandcode;
 mod discovery;
+mod floating_ball;
 mod logging;
 mod notification;
 mod opencode;
@@ -578,6 +579,10 @@ pub fn run() {
             // 菜单栏图标与快速查看面板；关闭主窗口只隐藏，应用继续常驻。
             tray::setup(app.handle())?;
 
+            // 悬浮球默认关闭；只在用户开启过时恢复窗口。必须放在菜单栏初始化之后：
+            // macOS 上球依赖托盘面板插件注册的 NSPanel 支持。
+            floating_ball::restore(app.handle());
+
             state::start_scheduler(Arc::clone(&store));
             state::auto_detect_local_accounts(store);
             Ok(())
@@ -616,7 +621,19 @@ pub fn run() {
             relay_remove,
             open_main_window,
             hide_tray_panel,
-            quit_app
+            quit_app,
+            floating_ball::set_floating_ball_enabled,
+            floating_ball::floating_ball_drag_start,
+            floating_ball::floating_ball_drag_end,
+            floating_ball::floating_ball_hover,
+            floating_ball::floating_ball_panel_hover,
+            floating_ball::floating_ball_toggle_panel,
+            floating_ball::floating_ball_show_menu,
+            floating_ball::floating_ball_hide_panel,
+            floating_ball::floating_ball_popover_resize,
+            floating_ball::floating_ball_popover_mode,
+            floating_ball::floating_ball_layout,
+            floating_ball::floating_ball_select
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the application");

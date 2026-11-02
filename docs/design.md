@@ -1,9 +1,9 @@
 # Token Refill 界面设计规范
 
-- 文档版本：0.2
-- 最近更新：2026-10-27
-- 适用范围：管理窗口与菜单栏快速查看面板前端（React + TypeScript）
-- 事实来源：`src/App.module.css`、`src/styles.css`、`src/App.tsx`、`src/panels/`、`src/panels/TrayPanel.module.css`、`src/components/`、`src/lib/format.ts`、`src/lib/useDialogA11y.ts`
+- 文档版本：0.3
+- 最近更新：2026-11-01
+- 适用范围：管理窗口、菜单栏快速查看面板与桌面悬浮球前端（React + TypeScript）
+- 事实来源：`src/App.module.css`、`src/styles.css`、`src/App.tsx`、`src/panels/`、`src/panels/TrayPanel.module.css`、`src/panels/FloatingBall.module.css`、`src/components/`、`src/lib/format.ts`、`src/lib/useDialogA11y.ts`
 - 关联文档：[软件设计文档](./software-design.md)、[需求文档](./requirements.md)、[开发计划文档](./development-plan.md)
 
 本文从现有实现提炼界面结构、组件用法与改造步骤，目标是让新增页面或重做相似页面时**先复用、再新增**，避免每次重画一套卡片、状态和弹窗。产品范围与业务规则以需求文档为准，本文只描述界面层。
@@ -32,7 +32,7 @@
 1. **安静的工具感**：界面服务于快速查看额度，不用大面积渐变、强投影或装饰性插画。
 2. **三层容器**：画布（`--background`）→ 面板/卡片（`--surface`）→ 凹陷块（`--sunken`）。层级靠 1px 发丝线和底色差，不靠阴影；阴影只留给浮层弹窗。
 3. **一种信息只用一个组件**：账户摘要、额度条、授权状态、错误提示都已有固定形态，新页面先找现成的，不再发明第二种表达。
-4. **主色克制**：强调色只用于选中态、主按钮、可点击的强调信息；异常色（`--danger`）只出现在失败与需要重新授权，低额度用 `--warning` 的琥珀色表示「注意」。正常状态保持中性。
+4. **主色克制**：强调色只用于选中态、主按钮、可点击的强调信息。额度颜色统一为四级：正常用主色；剩余 ≤70% 且高于提醒阈值用 `--warning` 琥珀色表示「注意」；剩余 ≤提醒阈值用 `--danger` 红色；没有可靠比例用 `--muted` 灰色。查询失败与需要重新授权同样用红色。三个界面（主窗口、菜单栏面板、悬浮球）共用 `src/lib/quotaLevel.ts` 的 `quotaLevel()`，不要在页面里另写阈值判断。
 5. **密度分级**：总览偏浏览（折叠摘要 + 展开详情），账户页偏管理（等宽网格 + 操作行），设置页偏逐项阅读（列表行 + 右侧控件）。
 6. **交互可预期**：图标按钮必有 `aria-label` 和 `title`；刷新有旋转反馈；失败保留旧数据；浏览器预览下按钮禁用并说明原因。
 7. **动效可有可无**：所有动画都遵循系统「减少动态效果」，不引入阻塞式动画。
@@ -59,16 +59,22 @@
 | `--accent-text` | `#f7faff` | `#06121f` | 实色主色上的文字 |
 | `--accent-soft` | `#e7eefb` | `#18293f` | 强调底色：选中导航、徽标、成功/进行中 |
 | `--ok` / `--ok-soft` | `#167a4a` / `#e6f4ec` | `#4fbf82` / `#13281d` | 授权正常、成功 |
-| `--warning` / `--warning-soft` | `#b06f00` / `#fdf1db` | `#f0b429` / `#332912` | 需要注意但未失败：菜单栏面板的低额度提示 |
-| `--danger` / `--danger-soft` | `#b4233b` / `#fbeaed` | `#ff8b9c` / `#341c23` | 失败、破坏性操作 |
+| `--warning` / `--warning-soft` | `#b06f00` / `#fdf1db` | `#f0b429` / `#332912` | 需要注意但未失败：剩余 ≤70% 且高于提醒阈值 |
+| `--danger` / `--danger-soft` | `#b4233b` / `#fbeaed` | `#ff8b9c` / `#341c23` | 剩余 ≤提醒阈值、查询失败、破坏性操作 |
 | `--focus` | `#0b63ce` | `#79b8ff` | 键盘焦点描边 |
 | `--accent-ring` | 14% 主色 | 18% 主色 | 输入框聚焦光晕 |
+| `--hud-accent` / `--hud-warning` / `--hud-danger` / `--hud-muted` | 引用 `--accent-strong` / `--warning` / `--danger` / `--muted` | 同左（解析为深色值） | 悬浮球额度环；跟随外观，保证与主窗口、菜单栏的额度层级一致 |
+| `--ball-fill-start` / `--ball-fill-end` | `#ffffff` / `#e3e8ef` | `#1c2a3c` / `#0c121b` | 悬浮球球体径向渐变 |
+| `--ball-border` / `--ball-shadow` | `rgb(15 23 42 / 22%)` / 顶部高光 + 底部内阴影 | `rgb(148 180 220 / 16%)` / 顶部高光 | 球体描边与内阴影 |
+| `--ball-text` / `--ball-logo` / `--ball-detail` | `#14181f` / `#2b3440` / `#5a6472` | `#eef4ff` / `#dbe8fb` / `#93a4ba` | 球内百分比、平台标识与周期文字 |
+| `--ball-track` / `--ball-spinner` | `rgb(15 23 42 / 14%)` / `rgb(15 23 42 / 42%)` | `rgb(255 255 255 / 13%)` / `rgb(255 255 255 / 42%)` | 额度环轨道与刷新指示 |
 
 使用规则：
 
 - **文字强调用 `--accent`，实色块用 `--accent-strong`**，不要反过来。
 - 新颜色先问是否能用现有语义 token；确需新增时同时补浅色、深色和系统跟随三处。
 - 不在组件里写十六进制色值（弹窗遮罩、开关滑块等高光/中性黑除外）。
+- 悬浮球跟随主题：球体用 `--ball-*`（浅色白底深字、深色保留深蓝黑球体），额度环用引用语义色的 `--hud-*`；球内不要再直接写十六进制。
 
 ### 2.2 圆角与层级
 
@@ -238,8 +244,8 @@
 | `.metricDivider` | 窗口间竖线；`data-strong` 表示套餐分界，竖线占满整行高度 |
 | `.metricEyebrow` / `.metricProduct` | 多套餐时的眉线，固定高度保证下方标签对齐 |
 | `.metricLabel` / `.metricMeta` / `.metricMetaPart` / `.metricDot` | 窗口名、已用/重置说明；`.metricMeta` 固定分成两行（已用在上、重置时间在下），与窗口列数无关；窗口宽度 ≤1050px 时隐藏 `.metricDot` |
-| `.quotaBarRow` / `.quotaPercent` / `.quotaBarTrack` / `.quotaBarFill` | 百分比 + 进度条；`data-low` 转危险色，`data-unknown` 弱化 |
-| `.quotaLowNote` | 低于提醒阈值的红色说明 |
+| `.quotaBarRow` / `.quotaPercent` / `.quotaBarTrack` / `.quotaBarFill` | 百分比 + 进度条；`data-level="warning|danger|unknown"` 按统一额度等级着色，`normal` 保持中性 |
+| `.quotaLowNote` | 达到提醒阈值的红色说明；剩余为 0 时显示「额度已用尽」 |
 | `.dataGaps` | 数据缺口说明 |
 
 账户管理网格卡关键结构：
@@ -267,7 +273,7 @@
 | `.accountTools` / `.refreshButton` / `.updatedAt` / `.chevronButton` | 右侧刷新、更新时间与展开箭头 |
 | `.relayQuotaGrid` / `.relayQuotaCell` | 「密钥额度 / 账户额度」两列；竖线分隔，窄窗口退成单列 |
 | `.relayQuotaLabel` / `.relayQuotaCaption` / `.relayAmount` | 单元格标签、额度口径与金额；未知金额用 `data-muted` 弱化 |
-| `.relayMeterRow` / `.relayMeterValue` / `.relayBar` / `.relayBarFill` | 剩余比例条与数值；`data-low` 转危险色 |
+| `.relayMeterRow` / `.relayMeterValue` / `.relayBar` / `.relayBarFill` | 剩余比例条与数值；`data-level` 按统一额度等级着色 |
 | `.relayWindows` / `.relayWindow` / `.relayWindowHead` / `.relaySectionLabel` | 密钥限速窗口与账户订阅窗口 |
 
 中转站管理卡（管理页）沿用账户网格卡：
@@ -547,12 +553,56 @@ div.panel（透明窗口内的圆角面板）
 - 面板内也能调整顺序：平台标题右侧、订阅账户与中转站账户的工具区各有与总览相同的排序手柄（共用 `useOverviewOrder` / `useRelayOrder`），拖动或聚焦后按上下方向键移动，写入同一份 `overviewOrder` / `relayOrder`，主窗口与面板随状态事件互相同步；只有一个分组或一个账户时不显示对应手柄。折叠按钮与箭头仍然只负责展开/收起。
 - 中转站分组在面板里是与平台分组并列的可拖动项：分组标题右侧也有手柄，位置以标识 `relay` 记入 `overviewOrder.platforms`，可以放到任意平台分组之前或之后；总览页不展示该分组，但拖动平台时会按原槽位保留它。
 - 额度行是三列网格：左侧窗口名、中间额度条、右侧「剩余 X%」，重置时间（外加金额/次数）贴在额度条下方并跨到「剩余 X%」那一列，右列下方的空白也用来放说明，长日期不会被省略号截断；真正装不下时才在「·」前换成两行。因此同一张卡里的进度条始终对齐。多套餐账户在每类套餐第一行标注套餐名。
-- 账户头右侧显示相对更新时间（`刚刚更新` / `N 分钟前` / 钟点）、单个账户的刷新按钮，以及（同平台有多个账户时）排序手柄；顶部「全部刷新」同时刷新订阅账户与中转站。额度条 6px，低于提醒阈值时条与百分比转为 `--warning` 琥珀色。
+- 账户头右侧显示相对更新时间（`刚刚更新` / `N 分钟前` / 钟点）、单个账户的刷新按钮，以及（同平台有多个账户时）排序手柄；顶部「全部刷新」同时刷新订阅账户与中转站。额度条 6px，颜色与主窗口一致：剩余 ≤70% 且高于提醒阈值转 `--warning` 琥珀色，≤提醒阈值转 `--danger` 红色，未知比例用 `--muted`。
 - 中转站账户与订阅账户同卡式排版：账户名 + 相对更新时间 + 刷新按钮，第二行是 `平台 · 主机名`，下面是密钥/账户金额摘要与一条剩余比例条；不复制管理页的两列大卡。
 - 页脚不做实色主按钮：左侧版本号，右侧是两个纯文字动作（主色「打开主窗口」、弱化色「退出」），中间用一根竖线分隔。头部「全部刷新」与「打开主窗口」同一套文字动作样式，只换图标与位置。
 - 面板打开事件由 Rust 广播（`tray-panel-shown`）；收到后先展示缓存，再按刷新间隔补查中转站。面板只在用户点开时才创建，挂载即视为首次打开，会自己补一次状态同步与过期检查；中转站列表读完前不会主动发请求。
-- 面板内按 Esc 收起；点击面板外部由 Rust 的失焦监听收起。主题切换通过 `storage` 事件从主窗口同步。
+- 面板内按 Esc 收起；点击面板外部由 Rust 的失焦监听收起。主题切换通过 `theme-changed` 事件从主窗口同步，所有窗口统一由 `useThemeSync()` 订阅。
 - 文案与数字遵循与主窗口相同的字号/字重级别，但整体缩小一档：面板正文 10–13px，行距更紧，避免在 380px 宽度内换行撑高。时间文案统一走 `src/lib/format.ts` 的 `stampLabel` / `relativeUpdateLabel`。
+
+### 5.6 桌面悬浮球（`FloatingBall.tsx` / `FloatingBallPopover.tsx`）
+
+悬浮球是独立的置顶窗口（`floating-ball`，60×60 点），样式集中在 `src/panels/FloatingBall.module.css`。球体跟随应用外观（浅色 / 深色 / 跟随系统）：浅色下为白底深字，并用更明显的描边与内阴影保证在浅色桌面上仍有边界；深色下保留原来的深蓝黑球体。球体颜色全部来自 `--ball-*` token，弹层沿用 `--surface` / `--border-strong` 等主题 token。主窗口切换外观后通过 `theme-changed` 事件同步到菜单栏面板、悬浮球与弹层。两个窗口都通过 `?view=float` / `?view=float-popover` 复用同一份前端产物。
+
+```
+div.stage（60×60；内部边界收起时为 24×60）
+└─ div.ball[role=button]（圆形、深色径向渐变）
+   ├─ svg.ring（viewBox 0 0 60 60，旋转 -90°；展开时的整圈进度）
+   │  ├─ circle.track（轨道）
+   │  ├─ circle.progress（剩余比例，按额度等级变主色/琥珀/红/灰）
+   │  └─ circle.spinner（刷新中，虚线圆旋转）
+   ├─ svg.peekRing（不旋转；只画露出侧的一段弧，进度按这段弧归一化）
+   │  ├─ path.track（露出侧的轨道）
+   │  ├─ path.progress（归一化后的剩余比例）
+   │  └─ circle.spinner（刷新中）
+   └─ div.center
+      ├─ span.logo（PlatformLogo 12px / 中转站插头图标；收起时移到露出条带正中）
+      ├─ span.value（百分比 16px；金额型中转站显示 10px 金额；收起时淡出）
+      └─ span.detail（周期：周/月/5小时；或「余额」「选择」「异常」「刷新中」；收起时淡出）
+
+div.popover（340 宽，按内容高度）
+├─ 悬停：eyebrow「正在使用」+ 套餐标题 + 套餐档位徽标 + 账户/身份
+│  ├─ div.rows > div.row × N（窗口名 / 剩余百分比 / 额度条 / 已用量与重置时间）
+│  ├─ p.hoverError（可选）
+│  └─ button.footerButton「切换套餐 ›」
+└─ 菜单：eyebrow「当前套餐」+ 提示
+   └─ div.menuList[role=listbox] > button.item × N
+      ├─ span.itemCheck（选中勾）
+      ├─ span.planLogo（28px 品牌徽标）
+      ├─ span.itemText（套餐名 + 账户/来源）
+      └─ span.itemValue（百分比或金额 + 周期）
+```
+
+关键行为：
+
+- 球内多周期取最低剩余比例；周期标签取该窗口的短名称（`compactQuotaWindowLabel`，例如「周」「月」「5小时」）。金额型中转站没有可靠比例时不显示百分比，直接在球内显示剩余金额。
+- 球体外观使用 `--ball-*` token 跟随主题，额度环使用引用语义色的 `--hud-*`，与主窗口、菜单栏面板共用 `quotaLevel()`：高于 70% 主色，≤70% 且高于阈值琥珀色，≤阈值红色，无可靠比例灰色。
+- 球窗口设置为不能成为 key：非 key 窗口的首次点击会被 macOS 用于取 key 而吞掉，不能成为 key 的窗口则让第一次点击直接进入 WebView，同时不抢用户当前应用的键盘焦点。弹层保留 key 能力（菜单需要 Esc 与失焦），并在 `sendEvent:` 收到 mouseDown 时先取 key 再派发，避免详情卡里的「切换套餐」需要点两次。
+- 悬停显示详情卡，移出球与卡片后收起；点击球打开套餐切换菜单，再次点击、失焦或按 Esc 收起。弹层打开期间球保持展开。macOS 的悬停事件只派发给 key 窗口，而球是非激活 `NSPanel`，因此“进入”改由 Rust 侧每 150ms 的光标看门狗按窗口矩形补发（不能依赖 `pointerenter`，否则悬停没有反应）；离开仍由前端事件与看门狗宽限期兜底，拖动或菜单结束后要求指针先移出再移入，不会在松手/关闭菜单时立刻重新展开。吸附收起态被悬停时先只展开球，详情卡等 220ms 窗口过渡结束、且指针仍停在完整球体上才显示，避免卡片跟着展开动作一起滑出；自由位置或已经展开的球没有过渡，悬停立即显示。
+- 拖动由指针事件判定（移动超过 4 点才开始拖动），靠近左右屏幕边缘吸附并收起成 24 点宽：在虚拟桌面最外侧边缘通过窗口移出屏幕实现；如果该边缘紧接着另一块显示器，则窗口缩到 24×60 点。收起时前端把露出部分重排成 D 形：平台标识移到露出 D 形的视觉中心，百分比与周期淡出，额度环只保留露出侧的那段弧并把进度归一化到这段弧上；两种吸附方式都不会跨屏。悬停展开到完整 60 点（鼠标已贴边时不留 12 点间隙），移出 1 秒后收回。展开按 220ms 带轻微回弹的曲线弹出；收起分两段——先把完整球体滑到边缘（外侧边缘可略微越过落点再弹回，内部边界只用普通缓出），贴边后才切换 D 形布局并收窄窗口，避免球还没贴边就显示成吸附状态。位置与当前套餐写入状态文件，重启恢复。
+- 未选择或所选套餐已不存在时显示加号与「选择」，点击打开菜单；查询失败且没有快照时显示「异常」，保留旧快照时不伪装成失败。
+- 菜单里订阅套餐与中转站账户并列；中转站标题优先用用户设置的标题，其次主机名，副标题显示提供方与地址。没有可选项时显示空态文案。
+- 球窗口只响应鼠标，不进入键盘焦点；弹层按内容高度自适应，宽度固定 340 点。
 
 ## 6. 跨页交互约定
 
@@ -730,7 +780,7 @@ export default function FooPanel() {
 ## 10. 维护约定
 
 1. **样式只有一个入口**：新类写进 `src/App.module.css` 的对应分区，并按 `/* ---------- 分区名 ---------- */` 注释归类。
-2. **状态用 `data-*`**：`data-low`、`data-unknown`、`data-stacked`、`data-state`、`data-active`、`data-danger`、`data-disabled`，不要为每个状态造一个类。
+2. **状态用 `data-*`**：`data-level`（额度等级）、`data-stacked`、`data-state`、`data-active`、`data-danger`、`data-disabled`，不要为每个状态造一个类。
 3. **命名按语义**：用 `quotaAccount`、`planRowState` 这类描述角色的名字，不用 `box1`、`rowLeft`。
 4. **组件归属**：跨页面复用放 `src/components/`；单页辅助组件和格式化函数留在页面文件内，直到出现第二个使用者。
 5. **文案中文、术语统一**：额度、套餐、账户、授权、刷新、重新授权、移除；同一动作在不同页面用同一个词。

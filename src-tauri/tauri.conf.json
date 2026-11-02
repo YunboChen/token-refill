@@ -41,6 +41,42 @@
         "visible": false,
         "focus": false,
         "create": false
+      },
+      {
+        "label": "floating-ball",
+        "title": "Token Refill",
+        "url": "index.html?view=float",
+        "width": 60,
+        "height": 60,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "create": false
+      },
+      {
+        "label": "float-popover",
+        "title": "Token Refill",
+        "url": "index.html?view=float-popover",
+        "width": 340,
+        "height": 244,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "create": false
       }
     ],
     "security": {
