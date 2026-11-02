@@ -164,16 +164,33 @@
     opacity 140ms ease;
 }
 
-/* 收起时把 logo 移到露出 D 形的视觉中心：左侧以额度环内沿为界、
-   右侧以屏幕边缘为界（球体贴着边缘的那 3.5 点会融进桌面背景，
-   按几何中心放会明显偏左）；垂直移到球心 30。
-   两种吸附方式都相对球体定位，内部边界缩窗口时偏移量不变。 */
+/* 收起时把 logo 移到露出部分（24×60）的中心：水平在 x=12 / 48，
+   垂直在球心 30。两种吸附方式都相对球体定位，内部边界缩窗口时偏移量不变。 */
 .stage[data-collapsed][data-edge='right'] .logo {
-  transform: translate(-15px, 13px);
+  transform: translate(-18px, 13px);
 }
 
 .stage[data-collapsed][data-edge='left'] .logo {
-  transform: translate(15px, 13px);
+  transform: translate(18px, 13px);
+}
+
+/* 未选择套餐时 value 为空，内容列比有数值时矮 16 点，logo 的基准位置
+   因此低 8 点；垂直补偿减半，否则“+”会落在球心下方。 */
+.stage[data-collapsed]:has(.value:empty)[data-edge='right'] .logo {
+  transform: translate(-18px, 5px);
+}
+
+.stage[data-collapsed]:has(.value:empty)[data-edge='left'] .logo {
+  transform: translate(18px, 5px);
+}
+
+/* 金额型数值用 10 点字号，列高比百分比少 6 点，补偿相应减少。 */
+.stage[data-collapsed]:has(.value[data-compact])[data-edge='right'] .logo {
+  transform: translate(-18px, 10px);
+}
+
+.stage[data-collapsed]:has(.value[data-compact])[data-edge='left'] .logo {
+  transform: translate(18px, 10px);
 }
 
 .stage[data-collapsed] .value,
