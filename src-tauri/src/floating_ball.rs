@@ -315,13 +315,17 @@ pub fn floating_ball_select(
 // ---------- 命令入口 ----------
 
 /// 设置页开关：先落盘偏好，再异步创建或销毁窗口。
+///
+/// 命令在主线程的 IPC 回调里同步执行，而 `run_on_main_thread` 在主线程上
+/// 会就地执行；在这里创建/销毁 WebView 会重入 WebView2 的事件派发并死锁
+/// （Windows 上表现为整窗卡死）。所以窗口操作一律先转到后台线程再投递主线程。
 pub fn set_enabled(app: &AppHandle, enabled: bool) {
     if enabled {
-        on_main(app, |app| {
+        defer_to_main(app, |app| {
             ensure_ball(&app);
         });
     } else {
-        on_main(app, |app| {
+        defer_to_main(app, |app| {
             destroy_float_windows(&app);
         });
     }
@@ -975,10 +979,22 @@ fn show_popover(app: &AppHandle, mode: PopoverMode) {
         present_popover(app, &window, mode);
         return;
     }
-    create_popover(app);
+    // 创建进行中但窗口尚未注册时不能再创建一次：`build()` 会泵消息，
+    // 悬停看门狗与前端 pointerenter 的第二个请求可能在期间重入，
+    // 两个 WebView2 同时在主线程创建会把事件循环锁死。
+    if POPOVER_LOADING.load(Ordering::SeqCst) {
+        return;
+    }
+    // 悬停命令在主线程的 IPC 回调里同步执行，就地创建 WebView 会死锁；
+    // 先转到后台线程再投递主线程（同 `set_enabled`）。
+    defer_to_main(app, |app| create_popover(&app));
 }
 
 fn create_popover(app: &AppHandle) {
+    // 与 `show_popover` 的检查成对：即使从其他路径进入也只允许一次创建。
+    if POPOVER_LOADING.load(Ordering::SeqCst) || app.get_webview_window(POPOVER_LABEL).is_some() {
+        return;
+    }
     let Some(config) = window_config(app, POPOVER_LABEL) else {
         return;
     };
