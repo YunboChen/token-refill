@@ -715,6 +715,23 @@ fn clamp_percent(value: i64) -> i64 {
     value.clamp(0, 100)
 }
 
+/// 由绝对值派生的剩余百分比向下取整：额度总数很大时，少量消耗四舍五入后会
+/// 变成 0%，整块额度看起来仍是 100%。向下取整保证只要用掉一点就不会显示满额。
+fn derived_remaining_percent(total: f64, remaining: f64) -> i64 {
+    if total <= 0.0 {
+        return 0;
+    }
+    clamp_percent(((remaining.clamp(0.0, total) / total) * 100.0).floor() as i64)
+}
+
+/// 只有已用量时派生已用百分比；与剩余比例相反，这里向上取整，同样避免消耗被抹平。
+fn derived_used_percent(total: f64, used: f64) -> i64 {
+    if total <= 0.0 {
+        return 0;
+    }
+    clamp_percent(((used.clamp(0.0, total) / total) * 100.0).ceil() as i64)
+}
+
 fn token_plan_snapshot(
     usage: &TokenPlanUsage,
     subscription: Option<&TokenPlanSubscription>,
@@ -879,12 +896,10 @@ fn workbuddy_snapshot(usage: &CreditsUsage, checked_at: i64) -> QuotaSnapshot {
 fn workbuddy_group_window(group: &CreditGroupUsage) -> QuotaWindow {
     let total = group.total.filter(|value| *value > 0.0);
     let used_percent = match (total, group.remaining, group.used) {
-        (Some(total), Some(remaining), _) => Some(clamp_percent(
-            (((total - remaining).max(0.0) / total) * 100.0).round() as i64,
-        )),
-        (Some(total), None, Some(used)) => Some(clamp_percent(
-            ((used.max(0.0) / total) * 100.0).round() as i64,
-        )),
+        (Some(total), Some(remaining), _) => {
+            Some(100 - derived_remaining_percent(total, remaining))
+        }
+        (Some(total), None, Some(used)) => Some(derived_used_percent(total, used)),
         _ => None,
     };
     QuotaWindow {
@@ -5234,6 +5249,34 @@ mod tests {
         assert_eq!(benefit.remaining_percent, Some(75));
         assert_eq!(benefit.resets_at_epoch, None);
         assert_eq!(benefit.expires_at_epoch, Some(1_794_099_602));
+    }
+
+    #[test]
+    fn workbuddy_small_usage_does_not_round_to_full_remaining() {
+        let usage = CreditsUsage {
+            plan_name: None,
+            is_paid: None,
+            total: Some(6_200.0),
+            remaining: Some(6_195.29),
+            used: Some(4.71),
+            groups: vec![CreditGroupUsage {
+                kind: "benefit".to_string(),
+                name: "平台奖励积分".to_string(),
+                total: Some(6_200.0),
+                remaining: Some(6_195.29),
+                used: Some(4.71),
+                resets_at_epoch: None,
+                expires_at_epoch: Some(1_794_099_602),
+            }],
+            capability_gaps: Vec::new(),
+        };
+        let snapshot = workbuddy_snapshot(&usage, 1_790_000_000);
+        let window = &snapshot.groups[0].windows[0];
+        // 0.076% 的消耗向上取整为 1%，剩余向下取整为 99%，不再显示 100%。
+        assert_eq!(window.used_percent, Some(1));
+        assert_eq!(window.remaining_percent, Some(99));
+        assert_eq!(window.used_amount, Some(4.71));
+        assert_eq!(window.remaining_amount, Some(6_195.29));
     }
 
     #[test]
