@@ -221,8 +221,9 @@ function AntigravityLogo() {
 
 /**
  * WorkBuddy 官方标识：品牌绿圆角方块 + 白色主题图形。
- * 矢量取自 workbuddy.cn 官方 favicon（logo.svg）；渐变、柔光与裁剪的 id
- * 用 useId 派生，避免同页多个徽标互相引用。
+ * 矢量取自 workbuddy.cn 官方 favicon（logo.svg），外形按桌面客户端图标取圆角方块
+ * （favicon 本身是圆形，与客户端不一致）；渐变、柔光与裁剪的 id 用 useId 派生，
+ * 避免同页多个徽标互相引用。
  */
 function WorkBuddyLogo() {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, '');
@@ -277,11 +278,11 @@ function WorkBuddyLogo() {
           <feGaussianBlur stdDeviation="5.50019" result="effect1_foregroundBlur" />
         </filter>
         <clipPath id={ref('clip')}>
-          <rect width="40" height="40" rx="20" fill="#FFFFFF" />
+          <rect width="40" height="40" rx="8.6" fill="#FFFFFF" />
         </clipPath>
       </defs>
       <g clipPath={`url(#${ref('clip')})`}>
-        <rect width="40" height="40" rx="20" fill={`url(#${ref('bg')})`} />
+        <rect width="40" height="40" rx="8.6" fill={`url(#${ref('bg')})`} />
         <g filter={`url(#${ref('glow')})`}>
           <circle cx="31.3411" cy="43.6183" r="12.8704" fill="#FFE355" fillOpacity="0.49" />
         </g>
