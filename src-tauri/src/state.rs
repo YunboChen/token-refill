@@ -245,6 +245,10 @@ pub struct AccountState {
     /// 脱敏身份提示（如 j***@example.com），不包含令牌。
     #[serde(default)]
     pub identity_hint: Option<String>,
+    /// 百炼控制台令牌的本地推算到期时间；仅供展示与提前提醒，不是凭证。
+    /// 其他平台保持 `None`。
+    #[serde(default)]
+    pub credential_expires_at_epoch: Option<i64>,
     pub products: Vec<ProductState>,
 }
 
@@ -276,6 +280,9 @@ pub struct ReminderMarks {
     pub low_quota: HashMap<String, LowQuotaMark>,
     #[serde(default)]
     pub auth_expired: HashMap<String, AuthExpiredMark>,
+    /// 百炼控制台令牌到期前的提醒；按账户记录已提醒的到期时间。
+    #[serde(default)]
+    pub auth_expiring: HashMap<String, AuthExpiringMark>,
 }
 
 /// 授权失效与通知送达分开记录；同一次失效的标识跨重试、重启保持不变。
@@ -284,6 +291,19 @@ pub struct ReminderMarks {
 pub struct AuthExpiredMark {
     pub notice_id: String,
     /// 只表示系统已接收，不保证横幅实际展示或用户已读。
+    pub delivered: bool,
+    pub attempts: u32,
+    pub next_attempt_epoch: Option<i64>,
+}
+
+/// 到期前提醒的去重记录：同一份凭证只提醒一次；重新授权后到期时间
+/// 变化，旧记录随之清理，下一轮到期前可以再次提醒。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthExpiringMark {
+    pub notice_id: String,
+    /// 本轮凭证的推算到期时间；与账户当前值不一致时视为已换代。
+    pub expires_at_epoch: i64,
     pub delivered: bool,
     pub attempts: u32,
     pub next_attempt_epoch: Option<i64>,
@@ -387,6 +407,7 @@ fn local_codex_account() -> AccountState {
         auth_state: AuthState::Unknown,
         source: AccountSource::Local,
         identity_hint: None,
+        credential_expires_at_epoch: None,
         products: vec![ProductState {
             product_id: DEFAULT_PRODUCT_ID.to_string(),
             kind: "codex-subscription".to_string(),
@@ -1102,6 +1123,8 @@ fn apply_bailian_error(
     let Some(account) = account_mut(state, account_id) else {
         return;
     };
+    // 凭证文件缺失或损坏时没有可推算的到期时间。
+    account.credential_expires_at_epoch = None;
     if error.is_auth_error() {
         account.auth_state = AuthState::NeedsReauth;
     }
@@ -1259,6 +1282,7 @@ fn apply_login_success(
         auth_state: AuthState::Ok,
         source: AccountSource::Managed,
         identity_hint,
+        credential_expires_at_epoch: None,
         products: vec![ProductState {
             product_id: DEFAULT_PRODUCT_ID.to_string(),
             kind: "codex-subscription".to_string(),
@@ -1294,8 +1318,27 @@ pub struct AuthExpiredNotice {
     pub source: AccountSource,
 }
 
+/// 百炼控制台令牌到期前的提醒；只包含展示信息，不包含令牌。
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuthExpiringNotice {
+    pub account_id: String,
+    pub notice_id: String,
+    pub account_name: String,
+    pub expires_at_epoch: i64,
+}
+
+fn new_notice_id(prefix: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    let sequence = ACCOUNT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("{prefix}-{nanos}-{sequence}")
+}
+
 /// 所有状态更新共用这一入口，避免某个平台只写失效状态却漏接提醒。
 /// 恢复、重新授权或移除账户时清理；旧版失效账户没有记录时补建待提醒项。
+/// 同时清理已换代的百炼到期前提醒记录。
 fn sync_auth_expired_marks(state: &mut PersistedState) {
     let expired_accounts: HashSet<_> = state
         .accounts
@@ -1314,20 +1357,33 @@ fn sync_auth_expired_marks(state: &mut PersistedState) {
             .reminders
             .auth_expired
             .entry(account_id)
-            .or_insert_with(|| {
-                let nanos = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|elapsed| elapsed.as_nanos())
-                    .unwrap_or_default();
-                let sequence = ACCOUNT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-                AuthExpiredMark {
-                    notice_id: format!("auth-expired-{nanos}-{sequence}"),
-                    delivered: false,
-                    attempts: 0,
-                    next_attempt_epoch: None,
-                }
+            .or_insert_with(|| AuthExpiredMark {
+                notice_id: new_notice_id("auth-expired"),
+                delivered: false,
+                attempts: 0,
+                next_attempt_epoch: None,
             });
     }
+    sync_auth_expiring_marks(state);
+}
+
+/// 到期前提醒只保留与账户当前凭证一致的记录：重新授权后到期时间变化，
+/// 旧记录自动失效，下一轮到期前可以再次提醒。
+fn sync_auth_expiring_marks(state: &mut PersistedState) {
+    let current: HashMap<String, i64> = state
+        .accounts
+        .iter()
+        .filter(|account| account.platform == "bailian" && account.source == AccountSource::Managed)
+        .filter_map(|account| {
+            account
+                .credential_expires_at_epoch
+                .map(|expires_at| (account.account_id.clone(), expires_at))
+        })
+        .collect();
+    state
+        .reminders
+        .auth_expiring
+        .retain(|account_id, mark| current.get(account_id) == Some(&mark.expires_at_epoch));
 }
 
 fn auth_notice_due(state: &PersistedState, account_id: &str, now: i64) -> bool {
@@ -1376,6 +1432,88 @@ fn complete_auth_expired_notice(state: &mut PersistedState, notice: &AuthExpired
     if let Some(mark) = state.reminders.auth_expired.get_mut(&notice.account_id) {
         // 发送期间可能已恢复并再次失效，旧回调不能确认新一轮提醒。
         if mark.notice_id == notice.notice_id {
+            mark.delivered = true;
+            mark.next_attempt_epoch = None;
+        }
+    }
+}
+
+/// 百炼凭证进入到期前提醒窗口时返回 true；已经失效的账户交给
+/// 授权失效提醒，避免同时发两条通知。
+fn auth_expiring_notice_due(state: &PersistedState, account_id: &str, now: i64) -> bool {
+    state.preferences.auth_expired_enabled
+        && state.accounts.iter().any(|account| {
+            account.account_id == account_id
+                && account.platform == "bailian"
+                && account.source == AccountSource::Managed
+                && account.auth_state != AuthState::NeedsReauth
+                && account
+                    .credential_expires_at_epoch
+                    .is_some_and(|expires_at| {
+                        now >= expires_at.saturating_sub(bailian::CONSOLE_TOKEN_REMIND_SECS)
+                            && now < expires_at
+                    })
+        })
+}
+
+/// 与授权失效提醒相同：先落盘预留退避时间，再调用系统通知。
+fn reserve_auth_expiring_notice(
+    state: &mut PersistedState,
+    account_id: &str,
+    now: i64,
+) -> Option<AuthExpiringNotice> {
+    if !auth_expiring_notice_due(state, account_id, now) {
+        return None;
+    }
+    let (account_name, expires_at) = {
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)?;
+        (
+            account.display_name.clone(),
+            account.credential_expires_at_epoch?,
+        )
+    };
+    let mark = state
+        .reminders
+        .auth_expiring
+        .entry(account_id.to_string())
+        .or_insert_with(|| AuthExpiringMark {
+            notice_id: new_notice_id("auth-expiring"),
+            expires_at_epoch: expires_at,
+            delivered: false,
+            attempts: 0,
+            next_attempt_epoch: None,
+        });
+    if mark.expires_at_epoch != expires_at {
+        *mark = AuthExpiringMark {
+            notice_id: new_notice_id("auth-expiring"),
+            expires_at_epoch: expires_at,
+            delivered: false,
+            attempts: 0,
+            next_attempt_epoch: None,
+        };
+    }
+    if mark.delivered || mark.next_attempt_epoch.is_some_and(|next| now < next) {
+        return None;
+    }
+    let delay = AUTH_NOTICE_RETRY_BASE_SECS
+        .saturating_mul(1_i64 << mark.attempts.min(6))
+        .min(AUTH_NOTICE_RETRY_MAX_SECS);
+    mark.attempts = mark.attempts.saturating_add(1);
+    mark.next_attempt_epoch = Some(now.saturating_add(delay));
+    Some(AuthExpiringNotice {
+        account_id: account_id.to_string(),
+        notice_id: mark.notice_id.clone(),
+        account_name,
+        expires_at_epoch: expires_at,
+    })
+}
+
+fn complete_auth_expiring_notice(state: &mut PersistedState, notice: &AuthExpiringNotice) {
+    if let Some(mark) = state.reminders.auth_expiring.get_mut(&notice.account_id) {
+        if mark.expires_at_epoch == notice.expires_at_epoch {
             mark.delivered = true;
             mark.next_attempt_epoch = None;
         }
@@ -1846,6 +1984,17 @@ impl StateStore {
         let bailian_dir = parent
             .map(|parent| parent.join(BAILIAN_PROFILES_DIR_NAME))
             .unwrap_or_else(|| PathBuf::from(BAILIAN_PROFILES_DIR_NAME));
+        // 到期时间由凭证文件推算，不信任状态文件里的旧值；这样外部替换
+        // 凭证（或旧版本没有该字段）时也能马上反映真实到期时间。
+        for account in state.accounts.iter_mut().filter(|account| {
+            account.platform == "bailian" && account.source == AccountSource::Managed
+        }) {
+            account.credential_expires_at_epoch = if is_valid_account_id(&account.account_id) {
+                bailian::credential_expiry_epoch(&bailian_dir.join(&account.account_id))
+            } else {
+                None
+            };
+        }
         let api_dir = parent
             .map(|parent| parent.join(API_PROFILES_DIR_NAME))
             .unwrap_or_else(|| PathBuf::from(API_PROFILES_DIR_NAME));
@@ -1968,6 +2117,60 @@ impl StateStore {
         }
     }
 
+    /// 百炼控制台令牌没有 refresh token，到期只能重新授权；在到期前
+    /// 提醒一次，避免等到额度查询失败才发现。
+    fn notify_auth_expiring(&self, notice: &AuthExpiringNotice) -> Result<(), String> {
+        let remaining_minutes = ((notice.expires_at_epoch - epoch_now()).max(0) as f64 / 60.0)
+            .round()
+            .max(1.0) as i64;
+        crate::notification::send_with_identifier(
+            &self.app,
+            "授权即将到期",
+            &format!(
+                "百炼账户「{}」的控制台授权将在约 {remaining_minutes} 分钟后到期，请打开 {} 重新授权。",
+                notice.account_name,
+                self.app.package_info().name
+            ),
+            &notice.notice_id,
+        )
+    }
+
+    /// 与授权失效提醒共用调度器；同一份凭证只提醒一次。
+    fn retry_auth_expiring_notices(&self, now: i64) {
+        let state = self.snapshot();
+        let targets: Vec<_> = state
+            .accounts
+            .iter()
+            .filter(|account| auth_expiring_notice_due(&state, &account.account_id, now))
+            .map(|account| account.account_id.clone())
+            .collect();
+        for account_id in targets {
+            if self.shutdown.load(Ordering::SeqCst) {
+                break;
+            }
+            if self.has_pending_login(&account_id) {
+                continue;
+            }
+            // 重新授权期间不提醒；授权完成后到期时间会更新，旧记录自动清理。
+            let mut notice = None;
+            if let Err(err) = self.update_strict(|state| {
+                notice = reserve_auth_expiring_notice(state, &account_id, now);
+            }) {
+                eprintln!("预留授权到期提醒失败：{err}");
+                continue;
+            }
+            let Some(notice) = notice else {
+                continue;
+            };
+            match self.notify_auth_expiring(&notice) {
+                Ok(()) => {
+                    self.update_soft(|state| complete_auth_expiring_notice(state, &notice));
+                }
+                Err(err) => eprintln!("发送「授权即将到期」失败，将按退避重试：{err}"),
+            }
+        }
+    }
+
     /// 应用一次刷新失败；状态更新统一维护待发送的授权提醒。
     fn apply_refresh_error(
         &self,
@@ -2059,6 +2262,14 @@ impl StateStore {
                 for mark in state
                     .reminders
                     .auth_expired
+                    .values_mut()
+                    .filter(|mark| !mark.delivered)
+                {
+                    mark.next_attempt_epoch = None;
+                }
+                for mark in state
+                    .reminders
+                    .auth_expiring
                     .values_mut()
                     .filter(|mark| !mark.delivered)
                 {
@@ -2222,6 +2433,7 @@ impl StateStore {
                 auth_state: AuthState::Ok,
                 source: AccountSource::Managed,
                 identity_hint: None,
+                credential_expires_at_epoch: None,
                 products: vec![ProductState {
                     plan_tier,
                     active,
@@ -2299,6 +2511,7 @@ impl StateStore {
                 auth_state: AuthState::Unknown,
                 source: AccountSource::Local,
                 identity_hint: None,
+                credential_expires_at_epoch: None,
                 products: antigravity_products(),
             });
         })?;
@@ -2339,6 +2552,7 @@ impl StateStore {
                 auth_state: AuthState::Unknown,
                 source: AccountSource::Local,
                 identity_hint: None,
+                credential_expires_at_epoch: None,
                 products: vec![product],
             });
             added = true;
@@ -2397,6 +2611,7 @@ impl StateStore {
                 auth_state: AuthState::Ok,
                 source: AccountSource::Local,
                 identity_hint,
+                credential_expires_at_epoch: None,
                 products,
             });
             notices = low_quota_notices(state, ANTIGRAVITY_ACCOUNT_ID);
@@ -2627,10 +2842,14 @@ impl StateStore {
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .map(str::to_string);
+        let credential_expires_at_epoch = self
+            .private_bailian_dir(account_id)
+            .and_then(|dir| bailian::credential_expiry_epoch(&dir));
         self.update_soft(|state| {
             if let Some(account) = account_mut(state, account_id) {
                 account.auth_state = AuthState::Unknown;
                 account.source = AccountSource::Managed;
+                account.credential_expires_at_epoch = credential_expires_at_epoch;
                 if let Some(name) = &requested_name {
                     account.display_name = name.clone();
                 }
@@ -2653,6 +2872,7 @@ impl StateStore {
                 auth_state: AuthState::Unknown,
                 source: AccountSource::Managed,
                 identity_hint: None,
+                credential_expires_at_epoch,
                 products: bailian_products(),
             });
         });
@@ -2994,6 +3214,7 @@ fn refresh_bailian(store: &Arc<StateStore>, account_id: &str) {
             return;
         }
     };
+    let credential_expires_at_epoch = credentials.expires_at_epoch();
 
     let readout = bailian::read_usage(&credentials.access_token);
     // 重新授权期间旧凭证的查询结果可能晚到；丢弃它。
@@ -3005,6 +3226,9 @@ fn refresh_bailian(store: &Arc<StateStore>, account_id: &str) {
     let mut low_notices = Vec::new();
     let mut reset_notices = Vec::new();
     store.update_soft(|state| {
+        if let Some(account) = account_mut(state, account_id) {
+            account.credential_expires_at_epoch = credential_expires_at_epoch;
+        }
         let previous_resets = window_resets(state, account_id);
         apply_bailian_readout(state, account_id, &readout, finished_at);
         low_notices = low_quota_notices(state, account_id);
@@ -3148,6 +3372,8 @@ pub fn start_scheduler(store: Arc<StateStore>) {
         }
         // 提醒重试独立于额度刷新间隔，不为重发通知再次请求第三方额度接口。
         store.retry_auth_expired_notices(epoch_now());
+        // 百炼令牌没有刷新机制，到期前单独提醒一次。
+        store.retry_auth_expiring_notices(epoch_now());
         // 启动时立即检查一次：没有快照会马上补数据，有快照则按间隔等待。
         for account_id in store.due_accounts(epoch_now()) {
             let _ = store.request_refresh(Some(&account_id));
@@ -3782,6 +4008,7 @@ mod tests {
                     auth_state: AuthState::Ok,
                     source: AccountSource::Managed,
                     identity_hint: None,
+                    credential_expires_at_epoch: None,
                     products: if platform == ANTIGRAVITY_PLATFORM {
                         antigravity_products()
                     } else {
@@ -4466,6 +4693,7 @@ mod tests {
             auth_state: AuthState::Unknown,
             source: AccountSource::Managed,
             identity_hint: None,
+            credential_expires_at_epoch: None,
             products: bailian_products(),
         }
     }
@@ -4704,6 +4932,62 @@ mod tests {
         )
         .is_none());
         assert_eq!(state.accounts[1].auth_state, AuthState::NeedsReauth);
+    }
+
+    #[test]
+    fn bailian_auth_expiring_notice_fires_once_inside_the_reminder_window() {
+        let now = 1_790_000_000;
+        let mut state = default_state();
+        state.accounts.push(bailian_account("bailian-1"));
+        state.accounts[1].credential_expires_at_epoch =
+            Some(now + bailian::CONSOLE_TOKEN_REMIND_SECS + 60);
+        assert!(
+            reserve_auth_expiring_notice(&mut state, "bailian-1", now).is_none(),
+            "离到期还早时不提醒"
+        );
+
+        let expires_at = now + bailian::CONSOLE_TOKEN_REMIND_SECS - 1;
+        state.accounts[1].credential_expires_at_epoch = Some(expires_at);
+        let notice = reserve_auth_expiring_notice(&mut state, "bailian-1", now)
+            .expect("进入提醒窗口后应发一次");
+        assert_eq!(notice.expires_at_epoch, expires_at);
+        complete_auth_expiring_notice(&mut state, &notice);
+        assert!(
+            reserve_auth_expiring_notice(&mut state, "bailian-1", now + 60).is_none(),
+            "同一份凭证只提醒一次"
+        );
+    }
+
+    #[test]
+    fn bailian_auth_expiring_notice_rearms_after_reauth_and_stops_at_expiry() {
+        let now = 1_790_000_000;
+        let mut state = default_state();
+        state.accounts.push(bailian_account("bailian-1"));
+        let first_expiry = now + 60;
+        state.accounts[1].credential_expires_at_epoch = Some(first_expiry);
+        let notice = reserve_auth_expiring_notice(&mut state, "bailian-1", now).unwrap();
+        complete_auth_expiring_notice(&mut state, &notice);
+
+        // 过期后不再发“即将到期”，交给授权失效提醒。
+        assert!(reserve_auth_expiring_notice(&mut state, "bailian-1", first_expiry + 1).is_none());
+
+        // 重新授权后到期时间更新，旧记录清理，新窗口可以再次提醒。
+        let next_expiry = first_expiry + bailian::CONSOLE_TOKEN_TTL_SECS;
+        state.accounts[1].credential_expires_at_epoch = Some(next_expiry);
+        sync_auth_expired_marks(&mut state);
+        assert!(!state.reminders.auth_expiring.contains_key("bailian-1"));
+        assert!(reserve_auth_expiring_notice(&mut state, "bailian-1", next_expiry - 60).is_some());
+    }
+
+    #[test]
+    fn bailian_auth_expiring_notice_respects_disabled_switch() {
+        let now = 1_790_000_000;
+        let mut state = default_state();
+        state.accounts.push(bailian_account("bailian-1"));
+        state.accounts[1].credential_expires_at_epoch = Some(now + 60);
+        state.preferences.auth_expired_enabled = false;
+        assert!(reserve_auth_expiring_notice(&mut state, "bailian-1", now).is_none());
+        assert!(state.reminders.auth_expiring.is_empty());
     }
 
     #[test]

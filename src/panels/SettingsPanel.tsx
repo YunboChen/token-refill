@@ -519,7 +519,7 @@ export default function SettingsPanel() {
           checked={prefs.authExpiredEnabled}
           onChange={(next) => update({ authExpiredEnabled: next })}
           label="授权失效提醒"
-          hint="真实授权失效时提示重新授权；普通网络故障不会按失效处理。"
+          hint="真实授权失效或百炼控制台授权即将到期时提示重新授权；普通网络故障不会按失效处理。"
         />
         <Toggle
           checked={prefs.resetNoticeEnabled}

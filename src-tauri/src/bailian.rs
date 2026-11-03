@@ -37,6 +37,13 @@ const CALLBACK_POLL_INTERVAL: Duration = Duration::from_millis(120);
 const MAX_CALLBACK_BYTES: usize = 64 * 1024;
 const CREDENTIALS_FILE: &str = "credentials.json";
 
+/// 控制台会话令牌的有效期。登录回调只返回 `access_token`，没有 refresh token；
+/// 阿里云控制台的 CLI 授权令牌实测约 24 小时后网关即返回 NotLogined。
+/// 这里只用于本地推算到期时间与提前提醒，不作为鉴权判断。
+pub const CONSOLE_TOKEN_TTL_SECS: i64 = 24 * 60 * 60;
+/// 到期前多久提醒用户重新授权。
+pub const CONSOLE_TOKEN_REMIND_SECS: i64 = 2 * 60 * 60;
+
 // ---------- 错误与凭证 ----------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +85,17 @@ impl BailianError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Credentials {
     pub access_token: String,
+    /// 令牌写入时间。旧文件没有该字段，读取时回退到凭证文件的修改时间。
+    #[serde(default)]
+    pub issued_at_epoch: Option<i64>,
+}
+
+impl Credentials {
+    /// 本地推算的到期时间，用于界面提示与提前提醒；鉴权仍以网关响应为准。
+    pub fn expires_at_epoch(&self) -> Option<i64> {
+        self.issued_at_epoch
+            .map(|issued_at| issued_at.saturating_add(CONSOLE_TOKEN_TTL_SECS))
+    }
 }
 
 pub fn credentials_path(profile_dir: &Path) -> PathBuf {
@@ -101,6 +119,7 @@ pub fn save_credentials(profile_dir: &Path, access_token: &str) -> Result<(), St
 
     let body = serde_json::to_vec(&Credentials {
         access_token: token.to_string(),
+        issued_at_epoch: Some(epoch_now()),
     })
     .map_err(|err| format!("序列化百炼凭证失败：{err}"))?;
     let path = credentials_path(profile_dir);
@@ -139,7 +158,28 @@ pub fn load_credentials(profile_dir: &Path) -> Result<Credentials, BailianError>
     if credentials.access_token.is_empty() {
         return Err(BailianError::auth("百炼授权已失效，请重新授权。"));
     }
+    credentials.issued_at_epoch = credentials
+        .issued_at_epoch
+        .or_else(|| file_modified_epoch(&path));
     Ok(credentials)
+}
+
+/// 旧凭证没有签发时间：文件是授权成功后才写入的，用修改时间作为回退。
+fn file_modified_epoch(path: &Path) -> Option<i64> {
+    fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|elapsed| elapsed.as_secs() as i64)
+}
+
+/// 读取账户目录下凭证的推算到期时间；没有凭证或无法读取时返回 `None`。
+pub fn credential_expiry_epoch(profile_dir: &Path) -> Option<i64> {
+    load_credentials(profile_dir)
+        .ok()
+        .and_then(|credentials| credentials.expires_at_epoch())
 }
 
 // ---------- 额度模型 ----------
@@ -1099,6 +1139,17 @@ mod tests {
         save_credentials(&dir, "  sk-test  ").unwrap();
         let credentials = load_credentials(&dir).unwrap();
         assert_eq!(credentials.access_token, "sk-test");
+        assert!(credentials.issued_at_epoch.is_some());
+        let expires_at = credentials.expires_at_epoch().unwrap();
+        assert_eq!(
+            expires_at - credentials.issued_at_epoch.unwrap(),
+            CONSOLE_TOKEN_TTL_SECS
+        );
+        assert_eq!(
+            credential_expiry_epoch(&dir),
+            Some(expires_at),
+            "目录级读取应与凭证内的推算一致"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1109,6 +1160,22 @@ mod tests {
                 & 0o777;
             assert_eq!(mode, 0o600);
         }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn legacy_credentials_without_issue_time_fall_back_to_file_mtime() {
+        let dir = std::env::temp_dir().join(format!(
+            "token-refill-bailian-legacy-{}-{}",
+            std::process::id(),
+            random_hex(4)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = credentials_path(&dir);
+        fs::write(&path, br#"{"access_token":"sk-legacy"}"#).unwrap();
+        let credentials = load_credentials(&dir).unwrap();
+        assert!(credentials.issued_at_epoch.is_some());
+        assert!(credentials.expires_at_epoch().is_some());
         let _ = fs::remove_dir_all(dir);
     }
 

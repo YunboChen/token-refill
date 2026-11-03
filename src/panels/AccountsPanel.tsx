@@ -218,6 +218,33 @@ function checkedAtLabel(epoch: number | null): string {
   })}`;
 }
 
+/** 与 Rust 侧 `bailian::CONSOLE_TOKEN_REMIND_SECS` 保持一致。 */
+const CREDENTIAL_REMIND_SECS = 2 * 60 * 60;
+
+/**
+ * 百炼控制台令牌没有 refresh token，只能重新授权；只在进入到期前提醒窗口
+ * 时显示一行提示。已失效的账户由授权状态徽标和重新授权按钮表达，不再重复。
+ */
+function credentialExpiry(
+  account: AccountState,
+  nowEpoch: number,
+): { text: string } | null {
+  if (account.platform !== 'bailian' || account.authState === 'needs-reauth') {
+    return null;
+  }
+  const expiresAt = account.credentialExpiresAtEpoch;
+  if (expiresAt === null) return null;
+  const remaining = expiresAt - nowEpoch;
+  if (remaining <= 0 || remaining > CREDENTIAL_REMIND_SECS) return null;
+  const absolute = new Date(expiresAt * 1000).toLocaleString([], {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return { text: `控制台授权即将到期：${absolute}，请重新授权` };
+}
+
 function planStateLabel(product: ProductState): string {
   if (product.active === false) return '未开通';
   if (product.query.refreshing) return '查询中…';
@@ -267,6 +294,22 @@ export default function AccountsPanel() {
   const [starting, setStarting] = useState(false);
   // 改名与移除都在弹窗里确认，提交期间锁住按钮避免重复请求。
   const [acting, setActing] = useState(false);
+  // 授权到期提示需要随时间从“有效”切到“即将到期”，页面停留时每分钟重算一次。
+  const [nowEpoch, setNowEpoch] = useState(() => Math.floor(Date.now() / 1000));
+  const hasBailianExpiry =
+    state?.accounts.some(
+      (account) =>
+        account.platform === 'bailian' &&
+        account.credentialExpiresAtEpoch !== null,
+    ) ?? false;
+
+  useEffect(() => {
+    if (!hasBailianExpiry) return;
+    const tick = () => setNowEpoch(Math.floor(Date.now() / 1000));
+    tick();
+    const timer = window.setInterval(tick, 60_000);
+    return () => window.clearInterval(timer);
+  }, [hasBailianExpiry]);
 
   // 平台与登录命令的映射集中一处：新增浏览器授权平台时 Record 会强制补齐，
   // 不再在 startAdd / startReauth 里写平台三元表达式。
@@ -573,6 +616,7 @@ export default function AccountsPanel() {
                   (product) => product.active !== false,
                 );
                 const plans = activated.length > 0 ? activated : account.products;
+                const credential = credentialExpiry(account, nowEpoch);
                 return (
                   <article className={styles.accountTile} key={account.accountId}>
                     <div className={styles.accountIdentityCell}>
@@ -596,6 +640,11 @@ export default function AccountsPanel() {
                           {sourceLabel(account)}
                           {account.identityHint ? ` · ${account.identityHint}` : ''}
                         </p>
+                        {credential ? (
+                          <p className={styles.credentialExpiry}>
+                            {credential.text}
+                          </p>
+                        ) : null}
                       </div>
                     </div>
 
