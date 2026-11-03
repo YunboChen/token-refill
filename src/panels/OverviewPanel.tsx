@@ -13,11 +13,13 @@ import {
 import {
   AnimatePresence,
   m,
-  Reorder,
   useDragControls,
   useReducedMotion,
   type DragControls,
 } from 'motion/react';
+// Reorder 内部会渲染 motion 组件，必须走 LazyMotion 兼容入口，
+// 否则会破坏 tree-shaking 并在控制台告警（motion 14.7+）。
+import { Reorder } from 'motion/react-m';
 import type {
   AccountState,
   ProductState,
