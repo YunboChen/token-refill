@@ -35,8 +35,8 @@ import {
   groupLabel,
   planTierLabel,
   quotaWindowLabel,
-  resetLabel,
   sourceLabel,
+  windowTimeLabel,
 } from '../lib/format';
 import { useAppState } from '../lib/store';
 import ChevronIcon from '../components/ChevronIcon';
@@ -117,9 +117,10 @@ function accountSummary(account: AccountState): string {
     windows: (QuotaWindow & { remainingPercent: number })[],
   ) =>
     windows
-      .map(
-        (window) =>
-          `${compactQuotaWindowLabel(window)} ${Math.round(window.remainingPercent)}%`,
+      .map((window) =>
+        [compactQuotaWindowLabel(window), `${Math.round(window.remainingPercent)}%`]
+          .filter(Boolean)
+          .join(' '),
       )
       .join(' · ');
 
@@ -404,11 +405,13 @@ function AccountBody({
                       ) : null}
                     </div>
                   ) : null}
-                  <span className={styles.metricLabel}>{label}</span>
+                  {label ? (
+                    <span className={styles.metricLabel}>{label}</span>
+                  ) : null}
                   <QuotaBar
                     value={remaining}
                     level={level}
-                    label={`${account.displayName} ${product.displayName} ${label}剩余比例`}
+                    label={`${account.displayName} ${product.displayName} ${label || groupLabel(group.limitName) || ''}剩余比例`}
                   />
                   <span className={styles.metricMeta}>
                     {usedAmount ? (
@@ -417,7 +420,7 @@ function AccountBody({
                       <span className={styles.metricMetaPart}>{usedPercent}</span>
                     ) : null}
                     <span className={styles.metricMetaPart}>
-                      {resetLabel(window.resetsAtEpoch)}
+                      {windowTimeLabel(window)}
                     </span>
                   </span>
                   {level === 'danger' ? (

@@ -17,6 +17,7 @@ mod state;
 mod tray;
 mod update;
 mod usage_api;
+mod workbuddy;
 
 use std::fs;
 #[cfg(not(target_os = "windows"))]
@@ -145,6 +146,22 @@ fn begin_bailian_login(
 ) -> Result<LoginStartPayload, String> {
     let store = Arc::clone(&store);
     store.begin_bailian_login(account_id, display_name)
+}
+
+/// 发起 WorkBuddy 官方登录页授权；令牌由 Rust 轮询获取，不经过前端。
+/// 申请 state 需要一次网络请求，放到阻塞线程池，避免卡住命令线程。
+#[tauri::command]
+async fn begin_workbuddy_login(
+    store: tauri::State<'_, Arc<StateStore>>,
+    account_id: Option<String>,
+    display_name: Option<String>,
+) -> Result<LoginStartPayload, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || {
+        store.begin_workbuddy_login(account_id, display_name)
+    })
+    .await
+    .map_err(|err| format!("发起 WorkBuddy 授权失败：{err}"))?
 }
 
 #[tauri::command]
@@ -597,6 +614,7 @@ pub fn run() {
             set_relay_order,
             begin_account_login,
             begin_bailian_login,
+            begin_workbuddy_login,
             cancel_account_login,
             rename_account,
             add_api_key_account,
