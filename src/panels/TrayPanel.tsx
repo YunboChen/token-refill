@@ -33,8 +33,8 @@ import {
   planTierLabel,
   quotaWindowLabel,
   relativeUpdateLabel,
-  resetLabel,
   stampLabel,
+  windowTimeLabel,
 } from '../lib/format';
 import { platformMeta, type AccountGroup } from '../lib/platforms';
 import { quotaLevel, type QuotaLevel } from '../lib/quotaLevel';
@@ -123,17 +123,23 @@ function accountRows(
       group.windows.forEach((window) => {
         const percent = window.remainingPercent;
         const currentGroup = groupLabel(group.limitName);
+        const windowLabel = quotaWindowLabel(
+          window.windowDurationMins,
+          window.windowName,
+        );
+        // 窗口标题为空时用分组名占位，避免重复显示“本周期额度”。
+        const label = windowLabel || currentGroup || '额度';
         const eyebrowParts = [
           productLead ? product.displayName : null,
-          groupLead ? currentGroup : null,
+          groupLead && windowLabel ? currentGroup : null,
         ].filter(Boolean);
         rows.push({
           key: `${product.productId}-${groupIndex}-${window.windowId}`,
-          label: quotaWindowLabel(window.windowDurationMins, window.windowName),
+          label,
           groupName: currentGroup,
           eyebrow: eyebrowParts.length > 0 ? eyebrowParts.join(' · ') : null,
           percent,
-          meta: [amountText(window), resetLabel(window.resetsAtEpoch)].filter(
+          meta: [amountText(window), windowTimeLabel(window)].filter(
             (part): part is string => part !== null,
           ),
           level: quotaLevel(percent, threshold, lowQuotaEnabled),
@@ -154,7 +160,10 @@ function QuotaMeter({
   account: AccountState;
   row: QuotaRow;
 }) {
-  const fullLabel = row.groupName ? `${row.groupName} · ${row.label}` : row.label;
+  const fullLabel =
+    !row.groupName || row.label === row.groupName
+      ? row.label || row.groupName || '额度'
+      : `${row.groupName} · ${row.label}`;
   return (
     <div className={styles.quotaRow} data-level={row.level}>
       <span className={styles.quotaLabel} title={fullLabel}>

@@ -12,6 +12,7 @@ import {
   groupLabel,
   quotaWindowLabel,
   resetLabel,
+  windowTimeLabel,
 } from './format';
 import { platformMeta } from './platforms';
 import { quotaLevel, type QuotaLevel } from './quotaLevel';
@@ -310,14 +311,19 @@ export function productRows(
   groups.forEach((group, groupIndex) => {
     group.windows.forEach((window) => {
       const percent = window.remainingPercent;
+      const windowLabel = quotaWindowLabel(
+        window.windowDurationMins,
+        window.windowName,
+      );
+      const currentGroup = groupLabel(group.limitName);
       rows.push({
         key: `${groupIndex}-${window.windowId}`,
-        label: quotaWindowLabel(window.windowDurationMins, window.windowName),
-        group: multipleGroups ? groupLabel(group.limitName) : null,
+        label: windowLabel || currentGroup || '额度',
+        group: windowLabel && multipleGroups ? currentGroup : null,
         percent,
         meta: [
           amountText(window),
-          resetLabel(window.resetsAtEpoch),
+          windowTimeLabel(window),
         ].filter((part): part is string => part !== null),
         level: quotaLevel(percent, threshold, lowQuotaEnabled),
       });

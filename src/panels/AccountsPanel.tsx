@@ -40,12 +40,13 @@ const AUTH_LABELS: Record<AuthState, string> = {
 type DialogPlatform =
   | 'codex'
   | 'bailian'
+  | 'workbuddy'
   | 'opencode-go'
   | 'commandcode'
   | 'antigravity';
 
 /** 走浏览器授权流程的平台；其余平台在弹窗内直接提交凭据。 */
-type LoginPlatform = 'codex' | 'bailian';
+type LoginPlatform = 'codex' | 'bailian' | 'workbuddy';
 
 type DialogMode = 'add' | 'reauth';
 
@@ -108,6 +109,26 @@ const PLATFORM_CHOICES: Record<DialogPlatform, PlatformChoice> = {
     waitingTitle: '登录阿里云百炼',
     waitingText:
       '请登录要接入的阿里云账号并确认授权，控制台会话令牌会通过本机回环地址直接交给应用。',
+  },
+  workbuddy: {
+    addLabel: '添加 WorkBuddy 账户',
+    subtitle: '腾讯 WorkBuddy · Credits',
+    steps: [
+      {
+        title: '登录 WorkBuddy',
+        text: '在系统浏览器中登录要接入的 WorkBuddy 账号',
+      },
+      {
+        title: '自动连接账户',
+        text: '应用轮询官方登录结果，令牌不经过前端',
+      },
+    ],
+    note: '授权在官方登录页完成，不读取浏览器 Cookie 或 WorkBuddy 本地凭证。',
+    namePlaceholder: '留空则显示为“WorkBuddy 账户”',
+    authorizeLabel: '前往 WorkBuddy 授权',
+    waitingTitle: '登录 WorkBuddy',
+    waitingText:
+      '请登录要接入的 WorkBuddy 账号并确认授权，完成后应用会自动读取 Credits 额度。',
   },
   'opencode-go': {
     addLabel: '添加 OpenCode Go 账户',
@@ -278,6 +299,7 @@ export default function AccountsPanel() {
     refresh,
     beginLogin,
     beginBailianLogin,
+    beginWorkbuddyLogin,
     addApiKeyAccount,
     replaceApiKey,
     addAntigravityAccount,
@@ -319,6 +341,7 @@ export default function AccountsPanel() {
   > = {
     codex: beginLogin,
     bailian: beginBailianLogin,
+    workbuddy: beginWorkbuddyLogin,
   };
 
   // 每次发起授权递增。弹窗在启动请求返回前关闭、或整个面板卸载时，

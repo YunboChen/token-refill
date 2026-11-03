@@ -35,6 +35,7 @@ macOS 安装包采用 ad-hoc 签名，尚未公证。Windows 安装版与便携�
 | --- | --- |
 | Codex 订阅 | 通过本机 Codex CLI 或 Codex 桌面端附带的 CLI 查询。可沿用本机登录态，也可通过官方浏览器授权添加独立账户 |
 | 阿里云百炼 | 通过官方控制台浏览器授权添加账户，支持 Token Plan 个人版与 Coding Plan 中国站；控制台会话约 24 小时有效且不能续期，应用会在到期前 2 小时提醒重新授权 |
+| 腾讯 WorkBuddy | 通过官方登录页授权添加账户，按套餐基础 / 赠送 / 购买 / 平台奖励分组读取中国站 Credits 与各自的重置或到期时间；访问令牌过期时自动续期，续期失效后需重新授权 |
 | OpenCode Go | API Key |
 | Command Code | API Key |
 | Google Antigravity | 沿用本机 Antigravity CLI（`agy`）登录态 |

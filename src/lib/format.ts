@@ -59,6 +59,8 @@ export function quotaWindowLabel(
   mins: number | null,
   name: string | null = null,
 ): string {
+  // 空字符串表示该窗口不显示标题（分组名已经说明额度类型）。
+  if (name === '') return '';
   const normalized = normalizeWindowName(name, mins);
   if (normalized) {
     // 「订阅月」与其它窗口统一成「月额度」，不再保留「订阅」二字。
@@ -90,6 +92,30 @@ export function resetLabel(epoch: number | null): string {
   if (date.toDateString() === now.toDateString()) return `重置于 ${time}`;
   const day = `${date.getMonth() + 1}月${date.getDate()}日`;
   return `重置于 ${day} ${time}`;
+}
+
+/** 奖励、赠送、购买积分的最近到期时间；与 WorkBuddy 客户端文案一致。 */
+export function expiryLabel(epoch: number | null): string {
+  if (epoch === null) return '到期时间未知';
+  const date = new Date(epoch * 1000);
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const day = `${date.getMonth() + 1}月${date.getDate()}日`;
+  if (date.getTime() < Date.now()) {
+    const now = new Date();
+    return date.toDateString() === now.toDateString()
+      ? `已于 ${time} 到期`
+      : `已于 ${day} ${time} 到期`;
+  }
+  return date.toDateString() === new Date().toDateString()
+    ? `到期于 ${time}`
+    : `到期于 ${day} ${time}`;
+}
+
+/** 窗口时间按数据来源选择“重置”或“到期”语义。 */
+export function windowTimeLabel(window: QuotaWindow): string {
+  return window.expiresAtEpoch !== null
+    ? expiryLabel(window.expiresAtEpoch)
+    : resetLabel(window.resetsAtEpoch);
 }
 
 export function clockLabel(epoch: number): string {
@@ -129,6 +155,7 @@ export function planTierLabel(tier: string): string {
 /** 账户接入方式；总览与账户页共用同一套说法。 */
 export function sourceLabel(account: AccountState): string {
   if (account.platform === 'bailian') return '百炼控制台授权';
+  if (account.platform === 'workbuddy') return 'WorkBuddy 官方授权';
   if (account.platform === 'antigravity') return '本机 agy 登录';
   if (account.platform === 'opencode-go') {
     return account.source === 'managed' ? 'API Key 授权' : '本机 CLI 登录';
