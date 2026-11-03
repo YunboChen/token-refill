@@ -13,7 +13,10 @@ import {
   PlugsIcon,
   Power,
 } from '@phosphor-icons/react';
-import { Reorder, useDragControls, type DragControls } from 'motion/react';
+import { useDragControls, type DragControls } from 'motion/react';
+// Reorder 内部会渲染 motion 组件，必须走 LazyMotion 兼容入口，
+// 否则会破坏 tree-shaking 并在控制台告警（motion 14.7+）。
+import { Reorder } from 'motion/react-m';
 import wordmark from '../assets/logo-text.png';
 import {
   hideTrayPanel,

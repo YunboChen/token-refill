@@ -2260,6 +2260,15 @@
   white-space: nowrap;
 }
 
+/* 百炼控制台令牌没有刷新机制；只在进入到期前提醒窗口时显示一行提示，
+   已失效的状态交给授权徽标与底部的重新授权按钮，不重复展示。 */
+.credentialExpiry {
+  margin: 2px 0 0;
+  color: var(--warning);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
 /* 中转站卡的身份第二行：名称与来源可省略；扫描来的账户在文字后跟一个小图标，
    说明放进悬浮卡片，不占行宽。 */
 .accountMetaRow {
