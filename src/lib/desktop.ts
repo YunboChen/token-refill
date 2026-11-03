@@ -98,6 +98,8 @@ export interface AccountState {
   authState: AuthState;
   source: AccountSource;
   identityHint: string | null;
+  /** 百炼控制台令牌的本地推算到期时间；其他平台为 null。 */
+  credentialExpiresAtEpoch: number | null;
   products: ProductState[];
 }
 
