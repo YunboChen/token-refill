@@ -10,7 +10,7 @@
 - 应用标识 `dev.tokenrefill.desktop`；数据目录由 Tauri `app_data_dir()` 决定：
   - macOS `~/Library/Application Support/dev.tokenrefill.desktop/`
   - Windows `%APPDATA%\dev.tokenrefill.desktop\`
-  - 目录内：`state.json`（设置、账户、额度快照、提醒去重、悬浮球当前套餐与位置）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
+  - 目录内：`state.json`（设置、账户、额度快照、提醒去重、悬浮球当前套餐与位置）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）、`workbuddy-profiles/<accountId>/`（WorkBuddy 访问令牌与续期令牌）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
   - `logs/` 只写固定文案、窗口标签与耗时，用途是排查发布包没有控制台（Windows GUI 子系统丢弃 `eprintln!`）时的“点了没反应”。令牌、Cookie、邮箱、密钥、请求内容一律不得写入。
 - 分发渠道分正式版（pro）与测试版（test），共用代码、靠 `src-tauri/tauri.test.conf.json` 覆盖身份：
   - 正式版：`productName` `Token Refill`、identifier `dev.tokenrefill.desktop`、版本 `X.Y.Z`，由 `release.yml` 发布并参与应用内更新。
@@ -18,7 +18,7 @@
   - 渠道由 Rust `channel.rs` 按 identifier 是否以 `.test` 结尾判定；前端只消费 `get_app_info().channel`。测试配置不得自带 `version`，正式配置不得使用测试 identifier 或 prerelease 版本（CI 两侧都有断言）。
   - 本地 `pnpm tauri:dev:test` 使用测试标识，可与已安装的正式版同时运行；它与 CI 测试包共用测试数据目录和单实例锁，不要同时启动。
   - 两个版本共用上游 Codex OAuth 的固定回调端口 1455/1457，不要同时发起 Codex 授权；百炼回调使用临时端口，无此限制。
-- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 / OpenCode Go / Command Code / Antigravity 额度查询、中转站（New API / Sub2API）密钥与账户额度查询、从 cc-switch 与 Claude Code / Codex 当前配置手动扫描并勾选导入中转站候选、菜单栏常驻与快速查看面板、桌面悬浮球（默认关闭，设置中开启）、系统提醒、开机自启、版本检查、应用内下载与安装更新（仅 NSIS 安装版，下载与安装两段确认）。
+- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 / WorkBuddy / OpenCode Go / Command Code / Antigravity 额度查询、中转站（New API / Sub2API）密钥与账户额度查询、从 cc-switch 与 Claude Code / Codex 当前配置手动扫描并勾选导入中转站候选、菜单栏常驻与快速查看面板、桌面悬浮球（默认关闭，设置中开启）、系统提醒、开机自启、版本检查、应用内下载与安装更新（仅 NSIS 安装版，下载与安装两段确认）。
 - 尚未实现：系统级凭证存储、Windows 免安装 exe 的原地更新。
 - 菜单栏行为是产品约定：关闭主窗口只隐藏，应用继续常驻并后台刷新；退出只通过菜单栏菜单或面板中的退出入口。菜单栏面板是独立窗口 `tray-panel`（380×560 点、无边框、透明、置顶），与主窗口共用同一份状态与事件；不要把它扩展成第二个带侧栏的管理窗口。面板在配置里是 `create: false`，第一次点开才创建；面板与主窗口隐藏 60 秒后销毁 WebView 以释放内存，重新打开时重建并等待页面加载。登录流程或更新下载进行期间不得销毁主窗口（前端弹窗与进度只存在于该窗口）。销毁最后一个窗口会让系统请求退出，必须在 `RunEvent::ExitRequested` 里拦截（仅拦截“没有窗口且非程序化退出”的情况），否则应用会在空闲销毁后自行结束。
 - 窗口创建不得在托盘 / 窗口事件回调里就地执行：这些回调本身在主线程，`run_on_main_thread` 会内联执行，而创建窗口要等 WebView2 初始化（零 WebView 状态下冷启动更慢，内部还会自行泵消息），会卡住托盘菜单并让重入的点击走进创建分支。显示请求一律先转到后台线程再回主线程。
@@ -109,7 +109,7 @@
 
 ## 7. 明确不做
 
-- 不读取浏览器 Cookie、系统钥匙串或其他工具的内部凭证文件来替代官方授权；本机登录态只通过工具官方 CLI 命令读取（Codex app-server、`opencode auth export`、`agy /usage`）。
+- 不读取浏览器 Cookie、系统钥匙串或其他工具的内部凭证文件来替代官方授权；本机登录态只通过工具官方 CLI 命令读取（Codex app-server、`opencode auth export`、`agy /usage`），或在工具官方登录页完成授权后由应用接收 / 轮询一次性令牌（百炼控制台回环回调、WorkBuddy 设备码轮询）。
 - 不把「检查到新版本」实现为静默下载或静默安装；后台只做版本检查，下载与安装必须由用户在界面上分别确认。
 - Windows 免安装单文件 exe 不做原地替换（没有安装目录可交换），只提供发布页跳转；应用内更新仅面向 NSIS 安装版，通过注册表 `InstallLocation` 与当前 exe 路径判断安装形态。
 - 不为尚未确认的平台/套餐预建复杂抽象层。

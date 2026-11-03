@@ -29,6 +29,7 @@ use crate::commandcode::{self, CommandCodeUsage};
 use crate::opencode::{self, OpencodeUsage};
 use crate::proxy::{self, ProxyMode};
 use crate::usage_api::ProviderError;
+use crate::workbuddy::{self, CreditGroupUsage, CreditsUsage, WorkbuddyError, WorkbuddyReadout};
 
 /// 结构版本。新增字段一律走 `#[serde(default)]` 追加，不升版本号：
 /// 已发布的旧版本只认 `schemaVersion == 1`，升号会让它们把文件当成不兼容
@@ -49,6 +50,8 @@ pub const COMMAND_CODE_PRODUCT_ID: &str = "commandcode";
 pub const ANTIGRAVITY_PLATFORM: &str = "antigravity";
 pub const ANTIGRAVITY_PRODUCT_ID: &str = "antigravity";
 pub const ANTIGRAVITY_ACCOUNT_ID: &str = "antigravity-local";
+pub const WORKBUDDY_PLATFORM: &str = "workbuddy";
+pub const WORKBUDDY_PRODUCT_ID: &str = "workbuddy-credits";
 
 /// 与前端设置页的可选项保持一致；后端在这里再次校验，不信任前端传入值。
 pub const REFRESH_OPTIONS: [i64; 5] = [1, 5, 15, 30, 60];
@@ -66,6 +69,7 @@ const OVERVIEW_ORDER_MAX_ITEMS: usize = 200;
 const OVERVIEW_ORDER_KEY_MAX_CHARS: usize = 128;
 const PROFILES_DIR_NAME: &str = "codex-profiles";
 const BAILIAN_PROFILES_DIR_NAME: &str = "bailian-profiles";
+const WORKBUDDY_PROFILES_DIR_NAME: &str = "workbuddy-profiles";
 const API_PROFILES_DIR_NAME: &str = "api-profiles";
 static ACCOUNT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -187,7 +191,12 @@ pub struct QuotaWindow {
     #[serde(default)]
     pub remaining_amount: Option<f64>,
     pub window_duration_mins: Option<i64>,
+    /// 周期刷新时间；适用于按周期重置的额度窗口。
+    #[serde(default)]
     pub resets_at_epoch: Option<i64>,
+    /// 额度到期时间；适用于奖励 / 赠送 / 购买等不会刷新、只会到期的额度。
+    #[serde(default)]
+    pub expires_at_epoch: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -542,6 +551,7 @@ fn snapshot_from_usage(usage: &CodexUsage) -> QuotaSnapshot {
                         remaining_amount: None,
                         window_duration_mins: window.window_duration_mins,
                         resets_at_epoch: window.resets_at_epoch,
+                        expires_at_epoch: None,
                     }
                 })
                 .collect::<Vec<_>>();
@@ -595,6 +605,10 @@ fn is_antigravity_product(product: &ProductState) -> bool {
     product.kind == ANTIGRAVITY_PRODUCT_ID
 }
 
+fn is_workbuddy_product(product: &ProductState) -> bool {
+    product.kind == WORKBUDDY_PRODUCT_ID
+}
+
 /// 调度与提醒需要覆盖所有已接入的产品；未识别平台不参与自动刷新。
 fn is_refreshable_product(product: &ProductState) -> bool {
     is_codex_product(product)
@@ -602,12 +616,18 @@ fn is_refreshable_product(product: &ProductState) -> bool {
         || is_opencode_product(product)
         || is_commandcode_product(product)
         || is_antigravity_product(product)
+        || is_workbuddy_product(product)
 }
 
 fn is_supported_platform(platform: &str) -> bool {
     matches!(
         platform,
-        "codex" | "bailian" | OPENCODE_GO_PLATFORM | COMMAND_CODE_PLATFORM | ANTIGRAVITY_PLATFORM
+        "codex"
+            | "bailian"
+            | OPENCODE_GO_PLATFORM
+            | COMMAND_CODE_PLATFORM
+            | ANTIGRAVITY_PLATFORM
+            | WORKBUDDY_PLATFORM
     )
 }
 
@@ -645,12 +665,25 @@ fn antigravity_products() -> Vec<ProductState> {
     }]
 }
 
+fn workbuddy_products() -> Vec<ProductState> {
+    vec![ProductState {
+        product_id: WORKBUDDY_PRODUCT_ID.to_string(),
+        kind: WORKBUDDY_PRODUCT_ID.to_string(),
+        display_name: "Credits".to_string(),
+        plan_tier: None,
+        active: None,
+        snapshot: None,
+        query: QueryState::default(),
+    }]
+}
+
 fn platform_display_name(platform: &str) -> &'static str {
     match platform {
         OPENCODE_GO_PLATFORM => "OpenCode Go 账户",
         COMMAND_CODE_PLATFORM => "Command Code 账户",
         ANTIGRAVITY_PLATFORM => "本机 Antigravity",
         "bailian" => "百炼账户",
+        WORKBUDDY_PLATFORM => "WorkBuddy 账户",
         _ => "Codex 账户",
     }
 }
@@ -680,6 +713,23 @@ fn bailian_products() -> Vec<ProductState> {
 
 fn clamp_percent(value: i64) -> i64 {
     value.clamp(0, 100)
+}
+
+/// 由绝对值派生的剩余百分比向下取整：额度总数很大时，少量消耗四舍五入后会
+/// 变成 0%，整块额度看起来仍是 100%。向下取整保证只要用掉一点就不会显示满额。
+fn derived_remaining_percent(total: f64, remaining: f64) -> i64 {
+    if total <= 0.0 {
+        return 0;
+    }
+    clamp_percent(((remaining.clamp(0.0, total) / total) * 100.0).floor() as i64)
+}
+
+/// 只有已用量时派生已用百分比；与剩余比例相反，这里向上取整，同样避免消耗被抹平。
+fn derived_used_percent(total: f64, used: f64) -> i64 {
+    if total <= 0.0 {
+        return 0;
+    }
+    clamp_percent(((used.clamp(0.0, total) / total) * 100.0).ceil() as i64)
 }
 
 fn token_plan_snapshot(
@@ -715,6 +765,7 @@ fn token_plan_snapshot(
         // 订阅月按购买日滚动，不能固定成 30 天。
         window_duration_mins: None,
         resets_at_epoch: usage.resets_at_epoch,
+        expires_at_epoch: None,
     };
     QuotaSnapshot {
         checked_at_epoch: checked_at,
@@ -759,6 +810,7 @@ fn coding_window_snapshot(
         remaining_amount: None,
         window_duration_mins,
         resets_at_epoch: window.resets_at_epoch,
+        expires_at_epoch: None,
     }
 }
 
@@ -809,11 +861,70 @@ fn coding_plan_snapshot(usage: &CodingPlanUsage, checked_at: i64) -> QuotaSnapsh
     }
 }
 
+/// WorkBuddy 按官方 `CreditGroups` 拆分为多个分组；每组一个周期窗口。
+/// 总量为 0 或缺失时仍保留窗口，交给 `active` 表达是否开通。
+fn workbuddy_snapshot(usage: &CreditsUsage, checked_at: i64) -> QuotaSnapshot {
+    let mut groups: Vec<QuotaGroup> = usage
+        .groups
+        .iter()
+        .map(|group| QuotaGroup {
+            limit_id: Some(group.kind.clone()),
+            limit_name: Some(group.name.clone()),
+            plan_type: None,
+            windows: vec![workbuddy_group_window(group)],
+        })
+        .collect();
+    if groups.is_empty() {
+        groups.push(QuotaGroup {
+            limit_id: Some("credits".to_string()),
+            limit_name: None,
+            plan_type: None,
+            windows: vec![workbuddy_group_window(&CreditGroupUsage {
+                kind: "credits".to_string(),
+                name: "Credits".to_string(),
+                ..CreditGroupUsage::default()
+            })],
+        });
+    }
+    QuotaSnapshot {
+        checked_at_epoch: checked_at,
+        groups,
+        capability_gaps: usage.capability_gaps.clone(),
+    }
+}
+
+fn workbuddy_group_window(group: &CreditGroupUsage) -> QuotaWindow {
+    let total = group.total.filter(|value| *value > 0.0);
+    let used_percent = match (total, group.remaining, group.used) {
+        (Some(total), Some(remaining), _) => {
+            Some(100 - derived_remaining_percent(total, remaining))
+        }
+        (Some(total), None, Some(used)) => Some(derived_used_percent(total, used)),
+        _ => None,
+    };
+    QuotaWindow {
+        window_id: format!("credits-{}", group.kind),
+        source_window_id: group.kind.clone(),
+        // 分组标题已经说明额度类型，窗口不再重复“本周期额度”。
+        window_name: Some(String::new()),
+        unit: "credits".to_string(),
+        used_percent,
+        remaining_percent: used_percent.map(|used| clamp_percent(100 - used)),
+        used_amount: group.used,
+        total_amount: total,
+        remaining_amount: group.remaining,
+        window_duration_mins: None,
+        resets_at_epoch: group.resets_at_epoch,
+        expires_at_epoch: group.expires_at_epoch,
+    }
+}
+
 fn is_product_for_platform(product: &ProductState, platform: &str) -> bool {
     match platform {
         OPENCODE_GO_PLATFORM => is_opencode_product(product),
         COMMAND_CODE_PLATFORM => is_commandcode_product(product),
         ANTIGRAVITY_PLATFORM => is_antigravity_product(product),
+        WORKBUDDY_PLATFORM => is_workbuddy_product(product),
         _ => false,
     }
 }
@@ -843,6 +954,7 @@ fn opencode_snapshot(usage: &OpencodeUsage) -> QuotaSnapshot {
             remaining_amount: None,
             window_duration_mins: window.window_duration_mins,
             resets_at_epoch: window.resets_at_epoch,
+            expires_at_epoch: None,
         })
         .collect();
 
@@ -876,6 +988,7 @@ fn rolling_window(
         remaining_amount: None,
         window_duration_mins: Some(duration_mins),
         resets_at_epoch: window.resets_at_epoch,
+        expires_at_epoch: None,
     }
 }
 
@@ -902,6 +1015,7 @@ fn commandcode_snapshot(usage: &CommandCodeUsage) -> QuotaSnapshot {
         remaining_amount: Some(crate::quota::round_money(usage.monthly.remaining)),
         window_duration_mins: None,
         resets_at_epoch: usage.monthly.resets_at_epoch,
+        expires_at_epoch: None,
     });
 
     QuotaSnapshot {
@@ -939,6 +1053,7 @@ fn antigravity_snapshot(usage: &AntigravityUsage) -> QuotaSnapshot {
                 remaining_amount: None,
                 window_duration_mins: window.window_duration_mins,
                 resets_at_epoch: window.resets_at_epoch,
+                expires_at_epoch: None,
             });
         }
         groups.push(QuotaGroup {
@@ -1132,6 +1247,65 @@ fn apply_bailian_error(
         .products
         .iter_mut()
         .filter(|p| is_bailian_product(p))
+    {
+        product.query.refreshing = false;
+        product.query.last_attempt_epoch = Some(now);
+        product.query.last_error = Some(QueryError {
+            code: error.code.clone(),
+            message: error.message.clone(),
+        });
+    }
+}
+
+/// 把一次 WorkBuddy 查询结果写入 Credits 产品。接口成功但总量为 0 时标记为未开通，
+/// 保留快照让用户看到 0/总量而不是空白。
+fn apply_workbuddy_readout(
+    state: &mut PersistedState,
+    account_id: &str,
+    readout: &WorkbuddyReadout,
+    now: i64,
+) {
+    let Some(account) = account_mut(state, account_id) else {
+        return;
+    };
+    let snapshot = workbuddy_snapshot(&readout.usage, readout.checked_at_epoch);
+    let active = readout
+        .usage
+        .total
+        .map(|total| total > 0.0)
+        .or(readout.usage.is_paid);
+    for product in account
+        .products
+        .iter_mut()
+        .filter(|product| is_workbuddy_product(product))
+    {
+        product.query.refreshing = false;
+        product.query.last_attempt_epoch = Some(now);
+        product.query.last_error = None;
+        product.plan_tier = readout.usage.plan_name.clone();
+        product.active = active;
+        product.snapshot = Some(snapshot.clone());
+    }
+    account.auth_state = AuthState::Ok;
+}
+
+/// 读取凭证、续期或请求失败；授权类错误才把账户标为需要重新授权。
+fn apply_workbuddy_error(
+    state: &mut PersistedState,
+    account_id: &str,
+    error: &WorkbuddyError,
+    now: i64,
+) {
+    let Some(account) = account_mut(state, account_id) else {
+        return;
+    };
+    if error.is_auth_error() {
+        account.auth_state = AuthState::NeedsReauth;
+    }
+    for product in account
+        .products
+        .iter_mut()
+        .filter(|product| is_workbuddy_product(product))
     {
         product.query.refreshing = false;
         product.query.last_attempt_epoch = Some(now);
@@ -1956,6 +2130,7 @@ pub struct StateStore {
     path: PathBuf,
     profiles_dir: PathBuf,
     bailian_dir: PathBuf,
+    workbuddy_dir: PathBuf,
     api_dir: PathBuf,
     app: AppHandle,
     in_flight: Mutex<HashSet<String>>,
@@ -1984,6 +2159,9 @@ impl StateStore {
         let bailian_dir = parent
             .map(|parent| parent.join(BAILIAN_PROFILES_DIR_NAME))
             .unwrap_or_else(|| PathBuf::from(BAILIAN_PROFILES_DIR_NAME));
+        let workbuddy_dir = parent
+            .map(|parent| parent.join(WORKBUDDY_PROFILES_DIR_NAME))
+            .unwrap_or_else(|| PathBuf::from(WORKBUDDY_PROFILES_DIR_NAME));
         // 到期时间由凭证文件推算，不信任状态文件里的旧值；这样外部替换
         // 凭证（或旧版本没有该字段）时也能马上反映真实到期时间。
         for account in state.accounts.iter_mut().filter(|account| {
@@ -2003,6 +2181,7 @@ impl StateStore {
             path,
             profiles_dir,
             bailian_dir,
+            workbuddy_dir,
             api_dir,
             app,
             in_flight: Mutex::new(HashSet::new()),
@@ -2072,6 +2251,7 @@ impl StateStore {
             (OPENCODE_GO_PLATFORM | COMMAND_CODE_PLATFORM, _) => {
                 "请在账户页重新填写 API Key 后再刷新。"
             }
+            (WORKBUDDY_PLATFORM, _) => "请在账户页重新授权 WorkBuddy 后再刷新。",
             _ => fallback.as_str(),
         };
         crate::notification::send_with_identifier(
@@ -2185,6 +2365,11 @@ impl StateStore {
     /// 百炼凭证读取失败：保留上次成功快照，统一维护待发送提醒。
     fn apply_bailian_refresh_error(&self, account_id: &str, error: &BailianError, now: i64) {
         self.update_soft(|state| apply_bailian_error(state, account_id, error, now));
+    }
+
+    /// WorkBuddy 凭证、续期或请求失败：保留上次成功快照。
+    fn apply_workbuddy_refresh_error(&self, account_id: &str, error: &WorkbuddyError, now: i64) {
+        self.update_soft(|state| apply_workbuddy_error(state, account_id, error, now));
     }
 
     /// 单套餐平台失败：记录查询错误，统一维护待发送提醒。
@@ -2388,6 +2573,13 @@ impl StateStore {
             return None;
         }
         Some(self.bailian_dir.join(account_id))
+    }
+
+    fn private_workbuddy_dir(&self, account_id: &str) -> Option<PathBuf> {
+        if !is_valid_account_id(account_id) {
+            return None;
+        }
+        Some(self.workbuddy_dir.join(account_id))
     }
 
     fn private_api_dir(&self, account_id: &str) -> Option<PathBuf> {
@@ -2837,6 +3029,174 @@ impl StateStore {
         })
     }
 
+    /// 发起 WorkBuddy 浏览器授权。官方登录页由系统浏览器打开，Rust 轮询拿令牌；
+    /// 令牌只写入应用私有目录，事件与状态里都只有流程标识与结果。
+    pub fn begin_workbuddy_login(
+        self: &Arc<Self>,
+        account_id: Option<String>,
+        display_name: Option<String>,
+    ) -> Result<LoginStartPayload, String> {
+        let state = self.snapshot();
+        let (target_id, is_new) = match account_id {
+            Some(id) => {
+                let account = state
+                    .accounts
+                    .iter()
+                    .find(|account| account.account_id == id)
+                    .ok_or_else(|| format!("未知账户：{id}"))?;
+                if account.platform != WORKBUDDY_PLATFORM {
+                    return Err("该账户不是 WorkBuddy 账户。".to_string());
+                }
+                if account.source != AccountSource::Managed {
+                    return Err("该 WorkBuddy 账户不能重新授权。".to_string());
+                }
+                (id, false)
+            }
+            None => (new_account_id(WORKBUDDY_PLATFORM), true),
+        };
+
+        {
+            let logins = lock(&self.logins);
+            if let Some(pending) = active_login(&logins) {
+                if pending.account_id == target_id {
+                    return Err("该账户正在等待授权，请先完成或取消当前登录。".to_string());
+                }
+                return Err("已有其他账户的授权流程进行中，请先完成或取消。".to_string());
+            }
+        }
+
+        let profile = self
+            .private_workbuddy_dir(&target_id)
+            .ok_or_else(|| "账户标识无效".to_string())?;
+        ensure_private_dir(&profile)?;
+
+        let session = workbuddy::begin_login().map_err(|error| error.message)?;
+        let auth_url = session.auth_url.clone();
+        let login_id = session.login_id.clone();
+        let login_state = session.state.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        lock(&self.logins).insert(
+            login_id.clone(),
+            PendingLogin {
+                account_id: target_id.clone(),
+                cancel: Arc::clone(&cancel),
+            },
+        );
+
+        let store = Arc::clone(self);
+        let thread_account_id = target_id.clone();
+        let thread_login_id = login_id.clone();
+        let requested_name = display_name.filter(|name| !name.trim().is_empty());
+        thread::spawn(move || {
+            let outcome = session.wait_for_token(&cancel, LOGIN_TIMEOUT);
+            lock(&store.logins).remove(&thread_login_id);
+            match outcome {
+                Ok(token) => {
+                    let identity = workbuddy::fetch_account(&login_state, &token.access_token);
+                    let credentials = workbuddy::Credentials::from_token(token, identity.clone());
+                    match workbuddy::save_credentials(&profile, &credentials) {
+                        Ok(()) => {
+                            store.finish_workbuddy_login(
+                                &thread_account_id,
+                                requested_name.as_deref(),
+                                identity.as_ref(),
+                            );
+                            store.emit_login_event(
+                                &thread_login_id,
+                                &thread_account_id,
+                                "succeeded",
+                                None,
+                            );
+                            let _ = store.request_refresh(Some(&thread_account_id));
+                        }
+                        Err(message) => {
+                            if is_new {
+                                let _ = fs::remove_dir_all(&profile);
+                            }
+                            store.emit_login_event(
+                                &thread_login_id,
+                                &thread_account_id,
+                                "failed",
+                                Some(message),
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    if is_new {
+                        let _ = fs::remove_dir_all(&profile);
+                    }
+                    let status = if error.code == "canceled" {
+                        "canceled"
+                    } else {
+                        "failed"
+                    };
+                    store.emit_login_event(
+                        &thread_login_id,
+                        &thread_account_id,
+                        status,
+                        Some(error.message),
+                    );
+                }
+            }
+        });
+
+        Ok(LoginStartPayload {
+            login_id,
+            account_id: target_id,
+            auth_url,
+        })
+    }
+
+    fn finish_workbuddy_login(
+        &self,
+        account_id: &str,
+        requested_name: Option<&str>,
+        identity: Option<&workbuddy::AccountIdentity>,
+    ) {
+        let requested_name = requested_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string);
+        let nickname = identity.and_then(|identity| identity.nickname.clone());
+        self.update_soft(|state| {
+            if let Some(account) = account_mut(state, account_id) {
+                account.auth_state = AuthState::Unknown;
+                account.source = AccountSource::Managed;
+                account.credential_expires_at_epoch = None;
+                if let Some(name) = &requested_name {
+                    account.display_name = name.clone();
+                } else if account.display_name == "WorkBuddy 账户" {
+                    if let Some(nickname) = &nickname {
+                        account.display_name = nickname.clone();
+                    }
+                }
+                for product in workbuddy_products() {
+                    if !account
+                        .products
+                        .iter()
+                        .any(|existing| existing.product_id == product.product_id)
+                    {
+                        account.products.push(product);
+                    }
+                }
+                return;
+            }
+            state.accounts.push(AccountState {
+                account_id: account_id.to_string(),
+                platform: WORKBUDDY_PLATFORM.to_string(),
+                display_name: requested_name
+                    .or(nickname)
+                    .unwrap_or_else(|| "WorkBuddy 账户".to_string()),
+                auth_state: AuthState::Unknown,
+                source: AccountSource::Managed,
+                identity_hint: None,
+                credential_expires_at_epoch: None,
+                products: workbuddy_products(),
+            });
+        });
+    }
+
     fn finish_bailian_login(&self, account_id: &str, requested_name: Option<&str>) {
         let requested_name = requested_name
             .map(str::trim)
@@ -3000,6 +3360,10 @@ impl StateStore {
                 self.private_bailian_dir(account_id)
                     .ok_or_else(|| "账户标识无效".to_string())?,
             ),
+            WORKBUDDY_PLATFORM => Some(
+                self.private_workbuddy_dir(account_id)
+                    .ok_or_else(|| "账户标识无效".to_string())?,
+            ),
             OPENCODE_GO_PLATFORM | COMMAND_CODE_PLATFORM => Some(
                 self.private_api_dir(account_id)
                     .ok_or_else(|| "账户标识无效".to_string())?,
@@ -3065,6 +3429,18 @@ impl StateStore {
         self.private_bailian_dir(account_id)
     }
 
+    fn workbuddy_profile_dir_for(&self, account_id: &str) -> Option<PathBuf> {
+        let state = self.snapshot();
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)?;
+        if account.platform != WORKBUDDY_PLATFORM || account.source != AccountSource::Managed {
+            return None;
+        }
+        self.private_workbuddy_dir(account_id)
+    }
+
     /// 手动刷新入口。`account_id` 为空时刷新全部已接入账户；
     /// 同一账户已有在途请求时直接复用，不重复启动查询。
     pub fn request_refresh(self: &Arc<Self>, account_id: Option<&str>) -> Result<(), String> {
@@ -3128,6 +3504,7 @@ fn spawn_refresh(store: Arc<StateStore>, account_id: String) {
             match store.account_platform(&account_id).as_deref() {
                 Some("codex") => refresh_codex(&store, &account_id),
                 Some("bailian") => refresh_bailian(&store, &account_id),
+                Some(WORKBUDDY_PLATFORM) => refresh_workbuddy(&store, &account_id),
                 Some(OPENCODE_GO_PLATFORM) => {
                     refresh_api_key(&store, &account_id, OPENCODE_GO_PLATFORM)
                 }
@@ -3192,6 +3569,104 @@ fn refresh_codex(store: &Arc<StateStore>, account_id: &str) {
         }
         Err(error) => {
             store.apply_refresh_error(account_id, error, finished_at, None);
+        }
+    }
+}
+
+/// WorkBuddy 的访问令牌有 refresh token：到期前主动续期，遇到 401/403 再重试一次。
+/// 续期失败按授权失效处理，保留上次成功快照并让账户页引导重新授权。
+fn refresh_workbuddy(store: &Arc<StateStore>, account_id: &str) {
+    let Some(profile) = store.workbuddy_profile_dir_for(account_id) else {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    };
+    let mut credentials = match workbuddy::load_credentials(&profile) {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            store.apply_workbuddy_refresh_error(account_id, &error, epoch_now());
+            return;
+        }
+    };
+    if store.has_pending_login(account_id) {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    }
+
+    if credentials.needs_refresh(epoch_now()) {
+        if let Some(refresh_token) = credentials.refresh_token.clone() {
+            match workbuddy::refresh_token(&refresh_token) {
+                Ok(token) => {
+                    credentials.apply_token(token);
+                    if let Err(message) = workbuddy::save_credentials(&profile, &credentials) {
+                        let error = WorkbuddyError {
+                            code: "storage".to_string(),
+                            message,
+                        };
+                        store.apply_workbuddy_refresh_error(account_id, &error, epoch_now());
+                        return;
+                    }
+                }
+                Err(error) => {
+                    store.apply_workbuddy_refresh_error(account_id, &error, epoch_now());
+                    return;
+                }
+            }
+        }
+    }
+
+    let mut result = workbuddy::read_usage(&credentials);
+    if result.as_ref().is_err_and(|error| error.is_auth_error())
+        && credentials
+            .refresh_token
+            .as_deref()
+            .is_some_and(|token| !token.trim().is_empty())
+    {
+        let refresh_token = credentials.refresh_token.clone().unwrap_or_default();
+        match workbuddy::refresh_token(&refresh_token) {
+            Ok(token) => {
+                credentials.apply_token(token);
+                if let Err(message) = workbuddy::save_credentials(&profile, &credentials) {
+                    let error = WorkbuddyError {
+                        code: "storage".to_string(),
+                        message,
+                    };
+                    store.apply_workbuddy_refresh_error(account_id, &error, epoch_now());
+                    return;
+                }
+                result = workbuddy::read_usage(&credentials);
+            }
+            Err(error) => {
+                store.apply_workbuddy_refresh_error(account_id, &error, epoch_now());
+                return;
+            }
+        }
+    }
+    // 重新授权期间旧凭证的结果可能晚到；丢弃它。
+    if store.has_pending_login(account_id) {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    }
+
+    let finished_at = epoch_now();
+    match result {
+        Ok(readout) => {
+            let mut low_notices = Vec::new();
+            let mut reset_notices = Vec::new();
+            store.update_soft(|state| {
+                let previous_resets = window_resets(state, account_id);
+                apply_workbuddy_readout(state, account_id, &readout, finished_at);
+                low_notices = low_quota_notices(state, account_id);
+                reset_notices = collect_reset_notices(state, account_id, &previous_resets);
+            });
+            for notice in &low_notices {
+                store.notify_low_quota(notice);
+            }
+            for notice in &reset_notices {
+                store.notify_reset(notice);
+            }
+        }
+        Err(error) => {
+            store.apply_workbuddy_refresh_error(account_id, &error, finished_at);
         }
     }
 }
@@ -4696,6 +5171,171 @@ mod tests {
             credential_expires_at_epoch: None,
             products: bailian_products(),
         }
+    }
+
+    fn workbuddy_account(id: &str) -> AccountState {
+        AccountState {
+            account_id: id.to_string(),
+            platform: WORKBUDDY_PLATFORM.to_string(),
+            display_name: "WorkBuddy 账户".to_string(),
+            auth_state: AuthState::Unknown,
+            source: AccountSource::Managed,
+            identity_hint: None,
+            credential_expires_at_epoch: None,
+            products: workbuddy_products(),
+        }
+    }
+
+    fn workbuddy_readout() -> WorkbuddyReadout {
+        WorkbuddyReadout {
+            checked_at_epoch: 1_790_000_000,
+            usage: CreditsUsage {
+                plan_name: Some("标准版".to_string()),
+                is_paid: Some(true),
+                total: Some(2_500.0),
+                remaining: Some(2_000.0),
+                used: Some(500.0),
+                groups: vec![
+                    CreditGroupUsage {
+                        kind: "plan_base".to_string(),
+                        name: "套餐基础积分".to_string(),
+                        total: Some(500.0),
+                        remaining: Some(500.0),
+                        used: Some(0.0),
+                        resets_at_epoch: Some(1_796_054_399),
+                        expires_at_epoch: None,
+                    },
+                    CreditGroupUsage {
+                        kind: "benefit".to_string(),
+                        name: "平台奖励积分".to_string(),
+                        total: Some(2_000.0),
+                        remaining: Some(1_500.0),
+                        used: Some(500.0),
+                        resets_at_epoch: None,
+                        expires_at_epoch: Some(1_794_099_602),
+                    },
+                ],
+                capability_gaps: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn workbuddy_snapshot_keeps_provider_credit_groups_separate() {
+        let snapshot = workbuddy_snapshot(&workbuddy_readout().usage, 1_790_000_000);
+        assert_eq!(snapshot.groups.len(), 2);
+        assert_eq!(snapshot.groups[0].limit_id.as_deref(), Some("plan_base"));
+        assert_eq!(
+            snapshot.groups[0].limit_name.as_deref(),
+            Some("套餐基础积分")
+        );
+        let base = &snapshot.groups[0].windows[0];
+        assert_eq!(base.unit, "credits");
+        assert_eq!(base.used_percent, Some(0));
+        assert_eq!(base.remaining_percent, Some(100));
+        assert_eq!(base.used_amount, Some(0.0));
+        assert_eq!(base.total_amount, Some(500.0));
+        assert_eq!(base.remaining_amount, Some(500.0));
+        assert_eq!(base.resets_at_epoch, Some(1_796_054_399));
+        assert_eq!(base.expires_at_epoch, None);
+
+        assert_eq!(snapshot.groups[1].limit_id.as_deref(), Some("benefit"));
+        assert_eq!(
+            snapshot.groups[1].limit_name.as_deref(),
+            Some("平台奖励积分")
+        );
+        let benefit = &snapshot.groups[1].windows[0];
+        assert_eq!(benefit.used_percent, Some(25));
+        assert_eq!(benefit.remaining_percent, Some(75));
+        assert_eq!(benefit.resets_at_epoch, None);
+        assert_eq!(benefit.expires_at_epoch, Some(1_794_099_602));
+    }
+
+    #[test]
+    fn workbuddy_small_usage_does_not_round_to_full_remaining() {
+        let usage = CreditsUsage {
+            plan_name: None,
+            is_paid: None,
+            total: Some(6_200.0),
+            remaining: Some(6_195.29),
+            used: Some(4.71),
+            groups: vec![CreditGroupUsage {
+                kind: "benefit".to_string(),
+                name: "平台奖励积分".to_string(),
+                total: Some(6_200.0),
+                remaining: Some(6_195.29),
+                used: Some(4.71),
+                resets_at_epoch: None,
+                expires_at_epoch: Some(1_794_099_602),
+            }],
+            capability_gaps: Vec::new(),
+        };
+        let snapshot = workbuddy_snapshot(&usage, 1_790_000_000);
+        let window = &snapshot.groups[0].windows[0];
+        // 0.076% 的消耗向上取整为 1%，剩余向下取整为 99%，不再显示 100%。
+        assert_eq!(window.used_percent, Some(1));
+        assert_eq!(window.remaining_percent, Some(99));
+        assert_eq!(window.used_amount, Some(4.71));
+        assert_eq!(window.remaining_amount, Some(6_195.29));
+    }
+
+    #[test]
+    fn workbuddy_zero_credits_marks_the_product_inactive() {
+        let mut state = default_state();
+        state.accounts.push(workbuddy_account("workbuddy-1"));
+        let readout = WorkbuddyReadout {
+            checked_at_epoch: 1_790_000_000,
+            usage: CreditsUsage {
+                total: Some(0.0),
+                remaining: Some(0.0),
+                used: Some(0.0),
+                ..CreditsUsage::default()
+            },
+        };
+
+        apply_workbuddy_readout(&mut state, "workbuddy-1", &readout, 1_790_000_000);
+
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == "workbuddy-1")
+            .unwrap();
+        let product = &account.products[0];
+        assert_eq!(account.auth_state, AuthState::Ok);
+        assert_eq!(product.active, Some(false));
+        let window = &product.snapshot.as_ref().unwrap().groups[0].windows[0];
+        assert_eq!(window.used_percent, None);
+        assert_eq!(window.total_amount, None);
+    }
+
+    #[test]
+    fn workbuddy_auth_error_keeps_the_last_snapshot() {
+        let mut state = default_state();
+        state.accounts.push(workbuddy_account("workbuddy-1"));
+        apply_workbuddy_readout(
+            &mut state,
+            "workbuddy-1",
+            &workbuddy_readout(),
+            1_790_000_000,
+        );
+        let error = WorkbuddyError {
+            code: "auth-expired".to_string(),
+            message: "请重新授权".to_string(),
+        };
+
+        apply_workbuddy_error(&mut state, "workbuddy-1", &error, 1_790_000_100);
+
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == "workbuddy-1")
+            .unwrap();
+        assert_eq!(account.auth_state, AuthState::NeedsReauth);
+        assert!(account.products[0].snapshot.is_some());
+        assert_eq!(
+            account.products[0].query.last_error.as_ref().unwrap().code,
+            "auth-expired"
+        );
     }
 
     fn bailian_readout() -> BailianReadout {

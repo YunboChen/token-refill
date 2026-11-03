@@ -1,8 +1,8 @@
 # Token Refill 软件设计文档
 
-- 文档版本：0.17
-- 状态：已实现 Codex、百炼、OpenCode Go、Command Code 与 Antigravity 额度查询、多账户接入、统一状态层、后台刷新调度、菜单栏快速查看、桌面悬浮球与应用内更新
-- 最近更新：2026-11-01
+- 文档版本：0.18
+- 状态：已实现 Codex、百炼、WorkBuddy、OpenCode Go、Command Code 与 Antigravity 额度查询、多账户接入、统一状态层、后台刷新调度、菜单栏快速查看、桌面悬浮球与应用内更新
+- 最近更新：2026-11-03
 - 需求来源：[需求文档](./requirements.md)
 
 ## 1. 设计边界
@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | 前端界面 | 总览（订阅账户额度 / 中转站账户额度）、账户、中转站账户管理、设置四页；读取统一状态并订阅变更事件 | `src/panels/` |
 | 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences`、`set_overview_order`、`set_relay_order`、账户授权/改名/移除命令、中转站查询/编辑/刷新/移除/访问令牌/标题命令与 `app-state-changed`、`account-login-changed` 事件；中转站账户由 `RelayProvider` 在总览与管理页之间共享 | `src/lib/desktop.ts`、`src/lib/store.tsx`、`src/lib/relay.tsx` |
-| 本地后端 | Rust 状态存储、后台刷新调度、Codex/百炼/OpenCode Go/Command Code/Antigravity 适配器、中转网关密钥额度适配器、中转站凭证存储与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/bailian.rs`、`src-tauri/src/opencode.rs`、`src-tauri/src/commandcode.rs`、`src-tauri/src/antigravity.rs`、`src-tauri/src/quota/`、`src-tauri/src/relay.rs`、`src-tauri/src/discovery.rs` |
+| 本地后端 | Rust 状态存储、后台刷新调度、Codex/百炼/WorkBuddy/OpenCode Go/Command Code/Antigravity 适配器、中转网关密钥额度适配器、中转站凭证存储与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/bailian.rs`、`src-tauri/src/workbuddy.rs`、`src-tauri/src/opencode.rs`、`src-tauri/src/commandcode.rs`、`src-tauri/src/antigravity.rs`、`src-tauri/src/quota/`、`src-tauri/src/relay.rs`、`src-tauri/src/discovery.rs` |
 | 桌面配置 | 窗口、构建、安全策略及打包配置 | `src-tauri/tauri.conf.json` |
 | 权限声明 | 窗口权限与事件监听权限 | `src-tauri/capabilities/` |
 
@@ -28,6 +28,8 @@
 百炼账户属于独立授权账户：Rust 在 `127.0.0.1` 随机端口启动一次性回调服务，打开官方控制台登录页；浏览器把控制台 `access_token` 回传到该地址，`state` 校验通过后才写入 `bailian-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600）。一个百炼账户下有两个产品：Token Plan 与 Coding Plan。每次刷新顺序请求两类额度接口，任一失败只影响对应产品并保留其上次成功快照；两者都判定会话失效时才把账户标为需要重新授权。控制台令牌没有 refresh token，有效期实测约 24 小时；`credentials.json` 记录写入时间，启动与刷新时据此推算到期时间并只把时间戳放进 `PersistedState` 供账户页展示，到期前 2 小时提醒一次。令牌本身不进入 `PersistedState`、IPC 返回值、事件或日志；移除账户会删除该目录。
 
 OpenCode Go 与 Command Code 属于 API Key 账户：添加时先用一次真实查询验证密钥，成功后写入 `api-profiles/<accountId>/credentials.json`（同样 0700/0600），失败不会留下账户或凭证。OpenCode Go 读取官方 `GET https://opencode.ai/zen/go/v1/usage` 的 5 小时 / 每周 / 订阅月百分比；Command Code 读取 CLI 同款 `/alpha/billing/credits`、`/alpha/usage/summary` 与 `/alpha/billing/subscriptions`，月度上限由“已用 + 剩余”推导，辅助接口失败时保留滚动窗口并记录能力缺口。密钥只在 Rust 侧使用，不进入 `PersistedState`、事件或错误消息。
+
+WorkBuddy 账户属于独立授权账户：Rust 先向官方接口申请一次性 `state` 与登录页地址，用系统浏览器打开；用户在官方页面完成登录后，Rust 轮询同一 `state` 的登录结果，取回 access token 与 refresh token，写入 `workbuddy-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600，先写临时文件再原子替换）。额度以计费摘要的官方 `CreditGroups` 为准，按套餐基础 / 套餐赠送 / 购买 / 平台奖励分别展示，每组一个周期窗口；套餐编码沿用官方客户端的分组映射（`plan_base` / `plan_bonus` / `addon` / `benefit`），从付费 / 免费套餐分页接口补充各组的重置或最近到期时间。分页失败只记录能力缺口，不影响余额展示。访问令牌到期前 60 秒或查询返回 401/403 时，使用 refresh token 调用官方续期接口；续期失效才把账户标为需要重新授权。令牌与账户标识只存在于凭证文件和 Rust 请求头，不进入 `PersistedState`、IPC 返回值、事件或日志；移除账户会删除该目录。
 
 启动后 Rust 会在后台探测本机已有登录态：OpenCode 调用官方 `opencode auth export`，存在活动 API Key 时自动创建“本机 OpenCode”账户，并在每次刷新时重新读取 CLI 凭据；Antigravity 先确认 `agy` 可执行，再实际读取一次 `/usage`，成功才创建“本机 Antigravity”账户。未探测到时不创建账户，保持“添加账户”的手动流程。探测只使用官方 CLI 命令，不直接解析 SQLite、钥匙串或浏览器 Cookie。
 

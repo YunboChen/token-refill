@@ -36,6 +36,14 @@ const PLATFORMS: Record<string, PlatformMeta> = {
     description: 'Token Plan 个人版 · Coding Plan 中国站',
     available: true,
   },
+  workbuddy: {
+    key: 'workbuddy',
+    name: 'WorkBuddy',
+    vendor: '腾讯',
+    mark: 'W',
+    description: 'Credits · 官方登录页授权',
+    available: true,
+  },
   'opencode-go': {
     key: 'opencode-go',
     name: 'OpenCode Go',
@@ -66,6 +74,7 @@ const PLATFORMS: Record<string, PlatformMeta> = {
 const PLATFORM_ORDER = [
   'codex',
   'bailian',
+  'workbuddy',
   'opencode-go',
   'commandcode',
   'antigravity',

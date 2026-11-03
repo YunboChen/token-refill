@@ -64,7 +64,10 @@ export interface QuotaWindow {
   /** 只有剩余余额时使用。 */
   remainingAmount: number | null;
   windowDurationMins: number | null;
+  /** 周期刷新时间；适用于按周期重置的额度。 */
   resetsAtEpoch: number | null;
+  /** 额度到期时间；适用于奖励、赠送、购买等不会刷新的额度。 */
+  expiresAtEpoch: number | null;
 }
 
 export interface QuotaGroup {
@@ -220,6 +223,17 @@ export function beginBailianLogin(
   displayName?: string,
 ): Promise<LoginStart> {
   return invoke<LoginStart>('begin_bailian_login', {
+    accountId: accountId ?? null,
+    displayName: displayName ?? null,
+  });
+}
+
+/** 发起 WorkBuddy 官方登录页授权；令牌由 Rust 轮询获取，不经过前端。 */
+export function beginWorkbuddyLogin(
+  accountId?: string,
+  displayName?: string,
+): Promise<LoginStart> {
+  return invoke<LoginStart>('begin_workbuddy_login', {
     accountId: accountId ?? null,
     displayName: displayName ?? null,
   });

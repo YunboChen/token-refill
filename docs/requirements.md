@@ -1,8 +1,8 @@
 # Token Refill 需求文档
 
-- 文档版本：0.16
-- 状态：首版产品范围已收敛；Codex、百炼、OpenCode Go、Command Code 与 Antigravity 额度查询、多账户授权、统一刷新状态层、菜单栏快速查看、版本检查与应用内更新已实现
-- 最近更新：2026-10-27
+- 文档版本：0.17
+- 状态：首版产品范围已收敛；Codex、百炼、WorkBuddy、OpenCode Go、Command Code 与 Antigravity 额度查询、多账户授权、统一刷新状态层、菜单栏快速查看、版本检查与应用内更新已实现
+- 最近更新：2026-11-03
 
 ## 1. 编写说明
 
@@ -23,6 +23,7 @@
 - 已实现 Windows 兼容层（CLI 查找、授权链接、数据目录与标题栏按平台适配），Windows 本机构建与单元测试通过；安装包与界面运行验收待补。
 - 已实现版本检查与应用内更新：设置页读取 GitHub Releases 最新正式版本并与当前版本比较；安装版可在用户确认后下载（minisign 校验）并重启安装，免安装 Windows exe 仍跳转下载页；应用启动时静默检查，运行期间定期复查；不静默下载或安装。
 - 百炼 Token Plan 个人版与 Coding Plan 中国站已通过控制台浏览器授权接入：应用在本机回环地址接收控制台令牌并存入私有目录，分别查询两类订阅额度；不依赖 `bl` CLI，也不读取其配置。
+- WorkBuddy 已通过官方登录页授权接入：应用向官方接口申请一次性 `state` 与登录页地址，用户在系统浏览器完成登录后由 Rust 轮询获取访问令牌；按官方 `CreditGroups` 分别展示套餐基础、套餐赠送、购买与平台奖励 Credits，各自读取重置或最近到期时间。访问令牌过期时使用 refresh token 自动续期，不读取浏览器 Cookie 或 WorkBuddy 本地凭证。
 - OpenCode Go 与 Command Code 使用用户填写的 API Key，验证成功后才保存到 `api-profiles/<accountId>/credentials.json`；Antigravity 通过本机 `agy -p /usage --output-format json` 读取官方打印结果，不读取其钥匙串、令牌文件或浏览器会话。
 - 菜单栏常驻已实现：左键打开快速查看面板，右键菜单提供打开主窗口、查看额度与退出；关闭管理窗口只隐藏，应用继续后台刷新；macOS 同时隐藏 Dock 图标与 Cmd+Tab 条目，打开主窗口时恢复。
 - 系统级凭证安全存储尚未实现（当前授权材料位于应用数据目录的私有文件）。
@@ -228,3 +229,4 @@
 | DEC-027 | 应用内更新采用 Tauri 官方 updater + minisign，下载与安装分两步由用户确认；只对 NSIS 安装版开放，免安装 Windows exe 保持发布页跳转；不做静默下载或静默安装 | 用户明确要求“直接下载并替换”，并确认两段式交互与便携版处理方式 | REQ-012；更新私钥只存 GitHub Secrets；ad-hoc 签名下更新后的权限状态与回滚策略仍需实测与明确 |
 | DEC-028 | 中转站扫描改为手动入口：扫描 cc-switch 保存的 provider（Claude Code / Codex）与 Claude Code / Codex 当前配置，只列候选、不联网、不自动登记；用户勾选确认后才查询额度并加入列表 | 用户要求改造 cc-switch 配置扫描，并确认“列出候选、勾选导入” | REQ-003、REQ-004；cc-switch 数据库只读打开，扫描到的密钥不复制到应用目录；导入后只保存来源引用，启动与刷新时重新读取源配置 |
 | DEC-029 | 标题栏按平台分治：macOS 保留 Overlay 原生标题栏，Windows 关闭系统装饰并由前端自绘标题栏，Windows 运行时在 `setup()` 中 `set_decorations(false)` | 用户明确要求 macOS 只用原生标题栏，新增自绘栏是为了 Windows 标题栏与界面一体化 | REQ-005、REQ-007；平台配置走 JSON Merge Patch 不能只覆盖单个窗口，故用运行时而非 `tauri.windows.conf.json`；自绘栏需实机验证 Windows 拖拽、缩放与贴靠布局 |
+| DEC-030 | WorkBuddy 采用官方登录页 + 设备码轮询授权：应用申请 `state` 与登录页地址，用户在系统浏览器登录后由 Rust 轮询获取令牌并保存到 `workbuddy-profiles/<accountId>/credentials.json`；只查询 Credits 周期额度，访问令牌过期时用 refresh token 续期 | 用户要求像百炼一样通过官方页面授权接入，并确认先做最小可用实现 | REQ-001 至 REQ-004；不读取浏览器 Cookie、系统钥匙串或 WorkBuddy 本地凭证；接口未公开文档，需在真实账户上验证额度字段与续期行为 |

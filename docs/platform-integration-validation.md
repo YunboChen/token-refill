@@ -197,3 +197,12 @@
 - 代理：设置页提供跟随系统 / 不走代理 / 指定代理三种模式，作用于全部 HTTP 查询与外部 CLI。跟随系统读取 Windows `ProxyEnable` / `ProxyServer` / `ProxyOverride` 或 macOS `scutil --proxy`，环境变量优先；`ProxyOverride` 转为 `NO_PROXY`。指定代理需为不含凭据的 HTTP/HTTPS 地址；PAC/自动配置脚本不解析。
 - 边界：不读取 `agy` 的钥匙串、`~/.gemini/...` 令牌文件、IDE SQLite 或浏览器会话；账户来自用户本机 CLI 登录态。移除应用内账户不会退出 `agy`。
 - 未验证：用户本机是否安装 `agy`、CLI 输出是否在所有版本保持蛇形字段、免费版与 Google AI 订阅的窗口差异。若后续版本改变字段，应在 `antigravity.rs` 的解析测试中更新合成样例。
+
+## 9. WorkBuddy（2026-11-03）
+
+- 授权：`POST https://www.workbuddy.cn/v2/plugin/auth/state?platform=workbuddy` 返回一次性 `state` 与 `https://www.workbuddy.cn/login?...` 登录页地址；用户在系统浏览器完成登录后，应用轮询 `GET /v2/plugin/auth/token?state=...`。未完成时返回 `code 11217`，完成后返回 `accessToken` / `refreshToken`；随后用 `GET /v2/plugin/login/account?state=...` 读取昵称与请求头所需的账户标识。已用真实请求验证 state 与 token 轮询接口在应用 UA 下返回 200。
+- 续期：`POST /v2/plugin/auth/token/refresh`，请求头携带 `X-Refresh-Token` 与 `X-Auth-Refresh-Source: plugin`。访问令牌到期前 60 秒主动续期；查询返回 HTTP 401/403 或业务码 `14015` / `11140` / `11142` 时续期一次，仍失败才标记为需要重新授权。
+- 额度：`POST /billing/meter/get-user-resource-summary`，Bearer 访问令牌。以 `CreditGroups` 为准按 `plan_base` / `plan_bonus` / `addon` / `benefit` 分组展示；每组取 `CycleTotalCapacity` / `CycleRemainCapacity` / `CycleUsedCapacity`，并兼容旧版 `CycleCapacity*Precise` 字段。套餐编码沿用官方客户端的映射（如 `TCACA_code_008` 为套餐基础，`007` / `029` / `030` 为平台奖励），从 `/billing/meter/get-user-resource-paid-packages` 与 `.../free-packages` 的 `Accounts[].CycleEndTime` 按组补充重置或最近到期时间（UTC+8）；分页失败只记录能力缺口，不影响余额。
+- 边界：不读取浏览器 Cookie、钥匙串或 `~/.workbuddy/` 下的加密凭证；令牌只保存到 `workbuddy-profiles/<accountId>/credentials.json`（0700/0600），不进入前端状态、事件或日志。响应中的 UIN / 企业 ID 不作为展示内容。
+- 已验证（2026-11-03，真实账户）：官方登录页完成授权并写入 0600 凭证；计费摘要返回 `CreditGroups`，应用拆出「套餐基础积分 0/500」与「平台奖励积分 4.71/6200」两组，重置 / 最近到期时间与 WorkBuddy 客户端一致（UTC+8）；手动刷新成功且无能力缺口。
+- 未验证：access token 到期后的真实续期（当前令牌 2026-12-03 到期）、第二个 WorkBuddy 账户的隔离、国际站与企业账户口径。
