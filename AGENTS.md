@@ -10,7 +10,7 @@
 - 应用标识 `dev.tokenrefill.desktop`；数据目录由 Tauri `app_data_dir()` 决定：
   - macOS `~/Library/Application Support/dev.tokenrefill.desktop/`
   - Windows `%APPDATA%\dev.tokenrefill.desktop\`
-  - 目录内：`state.json`（设置、账户、额度快照、提醒去重、悬浮球当前套餐与位置）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）、`workbuddy-profiles/<accountId>/`（WorkBuddy 访问令牌与续期令牌）、`cursor-profiles/<accountId>/`（隔离的 Cursor Agent CLI `HOME`，含 `.cursor/auth.json`）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
+  - 目录内：`state.json`（设置、账户、额度快照、提醒去重、悬浮球当前套餐与位置）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）、`workbuddy-profiles/<accountId>/`（WorkBuddy 访问令牌与续期令牌）、`cursor-profiles/<accountId>/`（隔离的 Cursor Agent CLI `HOME`，含 `.cursor/auth.json`）、`sensenova-profiles/<accountId>/`（商汤控制台 OAuth 会话 `session.json`）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
   - `logs/` 只写固定文案、窗口标签与耗时，用途是排查发布包没有控制台（Windows GUI 子系统丢弃 `eprintln!`）时的“点了没反应”。令牌、Cookie、邮箱、密钥、请求内容一律不得写入。
 - 分发渠道分正式版（pro）与测试版（test），共用代码、靠 `src-tauri/tauri.test.conf.json` 覆盖身份：
   - 正式版：`productName` `Token Refill`、identifier `dev.tokenrefill.desktop`、版本 `X.Y.Z`，由 `release.yml` 发布并参与应用内更新。
@@ -18,7 +18,7 @@
   - 渠道由 Rust `channel.rs` 按 identifier 是否以 `.test` 结尾判定；前端只消费 `get_app_info().channel`。测试配置不得自带 `version`，正式配置不得使用测试 identifier 或 prerelease 版本（CI 两侧都有断言）。
   - 本地 `pnpm tauri:dev:test` 使用测试标识，可与已安装的正式版同时运行；它与 CI 测试包共用测试数据目录和单实例锁，不要同时启动。
   - 两个版本共用上游 Codex OAuth 的固定回调端口 1455/1457，不要同时发起 Codex 授权；百炼回调使用临时端口，无此限制。
-- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 / WorkBuddy / OpenCode Go / Command Code / Antigravity 额度查询、中转站（New API / Sub2API）密钥与账户额度查询、从 cc-switch 与 Claude Code / Codex 当前配置手动扫描并勾选导入中转站候选、菜单栏常驻与快速查看面板、桌面悬浮球（默认关闭，设置中开启）、系统提醒、开机自启、版本检查、应用内下载与安装更新（仅 NSIS 安装版，下载与安装两段确认）。
+- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 / WorkBuddy / 商汤 SenseNova / OpenCode Go / Command Code / Antigravity 额度查询、中转站（New API / Sub2API）密钥与账户额度查询、从 cc-switch 与 Claude Code / Codex 当前配置手动扫描并勾选导入中转站候选、菜单栏常驻与快速查看面板、桌面悬浮球（默认关闭，设置中开启）、系统提醒、开机自启、版本检查、应用内下载与安装更新（仅 NSIS 安装版，下载与安装两段确认）。
 - 尚未实现：系统级凭证存储、Windows 免安装 exe 的原地更新。
 - 菜单栏行为是产品约定：关闭主窗口只隐藏，应用继续常驻并后台刷新；退出只通过菜单栏菜单或面板中的退出入口。菜单栏面板是独立窗口 `tray-panel`（380×560 点、无边框、透明、置顶），与主窗口共用同一份状态与事件；不要把它扩展成第二个带侧栏的管理窗口。面板在配置里是 `create: false`，第一次点开才创建；面板与主窗口隐藏 60 秒后销毁 WebView 以释放内存，重新打开时重建并等待页面加载。登录流程或更新下载进行期间不得销毁主窗口（前端弹窗与进度只存在于该窗口）。销毁最后一个窗口会让系统请求退出，必须在 `RunEvent::ExitRequested` 里拦截（仅拦截“没有窗口且非程序化退出”的情况），否则应用会在空闲销毁后自行结束。
 - 窗口创建不得在托盘 / 窗口事件回调里就地执行：这些回调本身在主线程，`run_on_main_thread` 会内联执行，而创建窗口要等 WebView2 初始化（零 WebView 状态下冷启动更慢，内部还会自行泵消息），会卡住托盘菜单并让重入的点击走进创建分支。显示请求一律先转到后台线程再回主线程。
@@ -30,6 +30,7 @@
 - 任何令牌、Cookie、密钥、邮箱原文都不得进入前端状态、日志、错误消息、测试样例或提交内容。
 - Codex 只通过官方 CLI 的 `app-server --stdio` JSON-RPC 交互；不解析、不复制、不迁移授权文件，令牌由 Codex CLI 维护在隔离目录。
 - 百炼控制台会话令牌由官方登录页回传，有效期约 24 小时且没有 refresh token。只能按凭证写入时间推算到期并在到期前提醒用户重新授权；不得读取浏览器 Cookie、不得用 AK/SK 换取长期令牌来绕过重新授权。状态文件只保存推算出的到期时间戳，不保存令牌。
+- 商汤 SenseNova 只在应用内独立会话的官方授权窗口中完成 OAuth 授权，截获跳回 `platform.sensenova.cn` 的授权码，再换取 refresh token。不得读取浏览器 Cookie、不得保存账号密码；refresh token 每次续期都会轮换，必须写入 `sensenova-profiles/<accountId>/session.json`（0700/0600）并立即写回。额度接口是控制台内部接口，界面必须标注实验性，失败时保留上次成功快照并提示重新登录。
 - 独立账户必须使用自己的 `CODEX_HOME`；本机账户只沿用本机登录态，不得修改或覆盖它。
 - 移除账户只清理本应用目录，不触发源工具注销，不影响其他账户。
 - 中转站手动填写的 API Key 与 New API 访问令牌写入 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 按用户 ACL），先写临时文件再原子替换；只保存用户主动填写的凭证。从 cc-switch、Claude Code / Codex 配置扫描到的密钥不得复制到应用目录；勾选导入后只能在 `relay-profiles/<relayId>/source.json` 保存来源引用（来源、provider id、地址、provider 类型与用户主动填写的访问令牌），启动时按引用重新读取源配置，取不到就跳过该账户。扫描只列候选、不联网，必须由用户勾选确认后才查询额度。cc-switch 的 `~/.cc-switch/cc-switch.db` 只能只读打开，不修改、不迁移、不复制其中的数据。New API 访问令牌只用于 `/api/user/self` 与 `/api/subscription/self`，不进入前端状态、日志或错误消息；旧版单令牌需要的 `New-Api-User` 用户 ID 与令牌一并保存，只作为请求头发送，不写入日志。

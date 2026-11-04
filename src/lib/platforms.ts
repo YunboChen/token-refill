@@ -36,6 +36,14 @@ const PLATFORMS: Record<string, PlatformMeta> = {
     description: 'Token Plan 个人版 · Coding Plan 中国站',
     available: true,
   },
+  sensenova: {
+    key: 'sensenova',
+    name: 'SenseNova',
+    vendor: '商汤',
+    mark: '商',
+    description: 'Token Plan · 5 小时 / 每周积分池（实验性）',
+    available: true,
+  },
   workbuddy: {
     key: 'workbuddy',
     name: 'WorkBuddy',
@@ -82,6 +90,7 @@ const PLATFORMS: Record<string, PlatformMeta> = {
 const PLATFORM_ORDER = [
   'codex',
   'bailian',
+  'sensenova',
   'workbuddy',
   'cursor',
   'opencode-go',

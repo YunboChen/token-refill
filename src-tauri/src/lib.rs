@@ -14,6 +14,8 @@ mod opencode;
 mod proxy;
 pub mod quota;
 mod relay;
+mod sensenova;
+mod sensenova_window;
 mod state;
 mod tray;
 mod update;
@@ -177,6 +179,18 @@ async fn begin_cursor_login(
     tauri::async_runtime::spawn_blocking(move || store.begin_cursor_login(account_id, display_name))
         .await
         .map_err(|err| format!("发起 Cursor 登录失败：{err}"))?
+}
+
+/// 发起商汤 SenseNova 登录：应用内官方授权窗口只截获授权码，不经过前端。
+#[tauri::command]
+fn begin_sensenova_login(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, Arc<StateStore>>,
+    account_id: Option<String>,
+    display_name: Option<String>,
+) -> Result<LoginStartPayload, String> {
+    let store = Arc::clone(&store);
+    store.begin_sensenova_login(&app, account_id, display_name)
 }
 
 #[tauri::command]
@@ -631,6 +645,7 @@ pub fn run() {
             begin_bailian_login,
             begin_workbuddy_login,
             begin_cursor_login,
+            begin_sensenova_login,
             cancel_account_login,
             rename_account,
             add_api_key_account,

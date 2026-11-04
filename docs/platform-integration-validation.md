@@ -206,3 +206,12 @@
 - 边界：不读取浏览器 Cookie、钥匙串或 `~/.workbuddy/` 下的加密凭证；令牌只保存到 `workbuddy-profiles/<accountId>/credentials.json`（0700/0600），不进入前端状态、事件或日志。响应中的 UIN / 企业 ID 不作为展示内容。
 - 已验证（2026-11-03，真实账户）：官方登录页完成授权并写入 0600 凭证；计费摘要返回 `CreditGroups`，应用拆出「套餐基础积分 0/500」与「平台奖励积分 4.71/6200」两组，重置 / 最近到期时间与 WorkBuddy 客户端一致（UTC+8）；手动刷新成功且无能力缺口。
 - 未验证：access token 到期后的真实续期（当前令牌 2026-12-03 到期）、第二个 WorkBuddy 账户的隔离、国际站与企业账户口径。
+
+## 10. 商汤 SenseNova Token Plan（2026-11-04）
+
+- 授权：标准 OAuth 授权码 + PKCE（公开客户端 `client_id=nova`，`redirect_uri=https://platform.sensenova.cn`，scope 含 `openid offline offline_access`）。应用在独立 incognito 会话的应用内 WebView 中打开官方授权页，通过导航回调截获跳回控制台的 `?code=`，再由 Rust 调用 `POST https://platform.sensenova.cn/oauth2/token` 换取 access token（约 3 小时）与 refresh token。
+- 续期：`POST /oauth2/token`，`grant_type=refresh_token`。Hydra 会轮换 refresh token，续期成功后立即写回 `sensenova-profiles/<accountId>/session.json`（0700/0600，原子替换）。
+- 额度：`GET https://platform.sensenova.cn/lite/console/v1/tokenplan/pool-usage`，Bearer access token。返回 `plan.name` 与 `pools[]`；每个池含 `name`、`pool_type`（`default` / `dedicated`）、`window_5h` / `window_7d` 的 `limit`、`used`、`remaining`、`reset_at`（十进制字符串，Unix 秒），以及 `grant_balance` 与最近返赠到期字段。应用把每个积分池映射为独立分组，两个窗口分别展示已用、上限与重置时间。
+- 边界：`sk-` 推理 Key 不能调用 pool-usage（401）。应用不读取浏览器 Cookie、不保存账号密码；登录窗口只允许在 `sensenova.cn` / `sensecore.cn` / `sensecoreapi.cn` 域名内跳转，且远程页面不获得 Tauri IPC 能力。令牌不进入 `PersistedState`、前端、事件或日志。
+- 已验证（2026-11-04，测试渠道真实账户）：应用内窗口完成登录，凭证以 0700 目录 / 0600 文件落盘；查询读到 Free Plan、通用积分池与 Flash-Lite 积分池的 5 小时 / 每周窗口，总览分组展示与重置时间正常。
+- 未验证：Windows WebView2 下的登录与域名跳转、refresh token 轮换后的长期续期、付费档位上线后的字段变化。接口与登录流程均未公开文档，界面标注为实验性。

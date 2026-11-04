@@ -11,9 +11,10 @@ use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
@@ -29,6 +30,8 @@ use crate::commandcode::{self, CommandCodeUsage};
 use crate::cursor::{self, CursorUsage};
 use crate::opencode::{self, OpencodeUsage};
 use crate::proxy::{self, ProxyMode};
+use crate::sensenova;
+use crate::sensenova_window::{self, Capture};
 use crate::usage_api::ProviderError;
 use crate::workbuddy::{self, CreditGroupUsage, CreditsUsage, WorkbuddyError, WorkbuddyReadout};
 
@@ -55,6 +58,8 @@ pub const WORKBUDDY_PLATFORM: &str = "workbuddy";
 pub const WORKBUDDY_PRODUCT_ID: &str = "workbuddy-credits";
 pub const CURSOR_PLATFORM: &str = "cursor";
 pub const CURSOR_PRODUCT_ID: &str = "cursor";
+pub const SENSENOVA_PLATFORM: &str = "sensenova";
+pub const SENSENOVA_PRODUCT_ID: &str = "sensenova-token-plan";
 
 /// 与前端设置页的可选项保持一致；后端在这里再次校验，不信任前端传入值。
 pub const REFRESH_OPTIONS: [i64; 5] = [1, 5, 15, 30, 60];
@@ -74,6 +79,7 @@ const PROFILES_DIR_NAME: &str = "codex-profiles";
 const BAILIAN_PROFILES_DIR_NAME: &str = "bailian-profiles";
 const WORKBUDDY_PROFILES_DIR_NAME: &str = "workbuddy-profiles";
 const CURSOR_PROFILES_DIR_NAME: &str = "cursor-profiles";
+const SENSENOVA_PROFILES_DIR_NAME: &str = "sensenova-profiles";
 const API_PROFILES_DIR_NAME: &str = "api-profiles";
 static ACCOUNT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -617,6 +623,10 @@ fn is_cursor_product(product: &ProductState) -> bool {
     product.kind == CURSOR_PRODUCT_ID
 }
 
+fn is_sensenova_product(product: &ProductState) -> bool {
+    product.kind == SENSENOVA_PRODUCT_ID
+}
+
 /// 调度与提醒需要覆盖所有已接入的产品；未识别平台不参与自动刷新。
 fn is_refreshable_product(product: &ProductState) -> bool {
     is_codex_product(product)
@@ -626,6 +636,7 @@ fn is_refreshable_product(product: &ProductState) -> bool {
         || is_antigravity_product(product)
         || is_workbuddy_product(product)
         || is_cursor_product(product)
+        || is_sensenova_product(product)
 }
 
 fn is_supported_platform(platform: &str) -> bool {
@@ -638,6 +649,7 @@ fn is_supported_platform(platform: &str) -> bool {
             | ANTIGRAVITY_PLATFORM
             | WORKBUDDY_PLATFORM
             | CURSOR_PLATFORM
+            | SENSENOVA_PLATFORM
     )
 }
 
@@ -699,6 +711,18 @@ fn cursor_products() -> Vec<ProductState> {
     }]
 }
 
+fn sensenova_products() -> Vec<ProductState> {
+    vec![ProductState {
+        product_id: SENSENOVA_PRODUCT_ID.to_string(),
+        kind: SENSENOVA_PRODUCT_ID.to_string(),
+        display_name: "Token Plan".to_string(),
+        plan_tier: None,
+        active: None,
+        snapshot: None,
+        query: QueryState::default(),
+    }]
+}
+
 fn platform_display_name(platform: &str) -> &'static str {
     match platform {
         OPENCODE_GO_PLATFORM => "OpenCode Go 账户",
@@ -707,6 +731,7 @@ fn platform_display_name(platform: &str) -> &'static str {
         "bailian" => "百炼账户",
         WORKBUDDY_PLATFORM => "WorkBuddy 账户",
         CURSOR_PLATFORM => "Cursor 账户",
+        SENSENOVA_PLATFORM => "SenseNova 账户",
         _ => "Codex 账户",
     }
 }
@@ -949,6 +974,7 @@ fn is_product_for_platform(product: &ProductState, platform: &str) -> bool {
         ANTIGRAVITY_PLATFORM => is_antigravity_product(product),
         WORKBUDDY_PLATFORM => is_workbuddy_product(product),
         CURSOR_PLATFORM => is_cursor_product(product),
+        SENSENOVA_PLATFORM => is_sensenova_product(product),
         _ => false,
     }
 }
@@ -1080,6 +1106,64 @@ fn cursor_snapshot(usage: &CursorUsage) -> QuotaSnapshot {
             plan_type: None,
             windows,
         }],
+        capability_gaps,
+    }
+}
+
+/// 商汤按积分池返回 5 小时与 7 天两个滚动窗口；每个池单独成组，
+/// 避免把通用池与 Flash-Lite 专属池的剩余比例混在一起。
+fn sensenova_snapshot(usage: &sensenova::Usage, checked_at_epoch: i64) -> QuotaSnapshot {
+    let mut groups = Vec::new();
+    let mut capability_gaps = Vec::new();
+    for pool in &usage.pools {
+        let key = pool
+            .id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .unwrap_or(&pool.name);
+        let mut windows = Vec::new();
+        for (source_id, name, duration_mins, window) in [
+            ("window_5h", "5 小时", 300_i64, pool.window_5h.as_ref()),
+            ("window_7d", "每周", 10_080_i64, pool.window_7d.as_ref()),
+        ] {
+            let Some(window) = window else {
+                capability_gaps.push(format!("{}未返回{}额度", pool.name, name));
+                continue;
+            };
+            if window.resets_at_epoch.is_none() {
+                capability_gaps.push(format!("{}未返回{}重置时间", pool.name, name));
+            }
+            windows.push(QuotaWindow {
+                window_id: format!("sensenova-{key}-{source_id}"),
+                source_window_id: source_id.to_string(),
+                window_name: Some(name.to_string()),
+                unit: "积分".to_string(),
+                used_percent: Some(derived_used_percent(window.limit, window.used)),
+                remaining_percent: Some(derived_remaining_percent(window.limit, window.remaining)),
+                used_amount: Some(window.used),
+                total_amount: Some(window.limit),
+                remaining_amount: Some(window.remaining),
+                window_duration_mins: Some(duration_mins),
+                resets_at_epoch: window.resets_at_epoch,
+                expires_at_epoch: None,
+            });
+        }
+        if windows.is_empty() {
+            continue;
+        }
+        groups.push(QuotaGroup {
+            limit_id: Some(key.to_string()),
+            limit_name: Some(pool.name.clone()),
+            plan_type: pool.pool_type.clone(),
+            windows,
+        });
+    }
+    if groups.is_empty() {
+        capability_gaps.push("商汤未返回可用的积分池".to_string());
+    }
+    QuotaSnapshot {
+        checked_at_epoch,
+        groups,
         capability_gaps,
     }
 }
@@ -2239,6 +2323,39 @@ fn active_login(logins: &HashMap<String, PendingLogin>) -> Option<&PendingLogin>
         .find(|pending| !pending.cancel.load(Ordering::SeqCst))
 }
 
+enum CaptureOutcome {
+    Code { code: String, state: Option<String> },
+    Error(String),
+    Closed,
+    Timeout,
+}
+
+/// 等待登录窗口交出授权码。取消标志用短轮询而不是阻塞接收，
+/// 保证前端关闭弹窗后登录窗口能及时回收。
+fn wait_for_sensenova_capture(
+    capture: &mpsc::Receiver<Capture>,
+    cancel: &AtomicBool,
+    timeout: Duration,
+) -> CaptureOutcome {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if cancel.load(Ordering::SeqCst) {
+            return CaptureOutcome::Closed;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return CaptureOutcome::Timeout;
+        }
+        match capture.recv_timeout(remaining.min(Duration::from_millis(200))) {
+            Ok(Capture::Code { code, state }) => return CaptureOutcome::Code { code, state },
+            Ok(Capture::Error(message)) => return CaptureOutcome::Error(message),
+            Ok(Capture::Closed) => return CaptureOutcome::Closed,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => return CaptureOutcome::Closed,
+        }
+    }
+}
+
 pub struct StateStore {
     inner: Mutex<PersistedState>,
     path: PathBuf,
@@ -2246,6 +2363,7 @@ pub struct StateStore {
     bailian_dir: PathBuf,
     workbuddy_dir: PathBuf,
     cursor_dir: PathBuf,
+    sensenova_dir: PathBuf,
     api_dir: PathBuf,
     app: AppHandle,
     in_flight: Mutex<HashSet<String>>,
@@ -2280,6 +2398,9 @@ impl StateStore {
         let cursor_dir = parent
             .map(|parent| parent.join(CURSOR_PROFILES_DIR_NAME))
             .unwrap_or_else(|| PathBuf::from(CURSOR_PROFILES_DIR_NAME));
+        let sensenova_dir = parent
+            .map(|parent| parent.join(SENSENOVA_PROFILES_DIR_NAME))
+            .unwrap_or_else(|| PathBuf::from(SENSENOVA_PROFILES_DIR_NAME));
         // 到期时间由凭证文件推算，不信任状态文件里的旧值；这样外部替换
         // 凭证（或旧版本没有该字段）时也能马上反映真实到期时间。
         for account in state.accounts.iter_mut().filter(|account| {
@@ -2301,6 +2422,7 @@ impl StateStore {
             bailian_dir,
             workbuddy_dir,
             cursor_dir,
+            sensenova_dir,
             api_dir,
             app,
             in_flight: Mutex::new(HashSet::new()),
@@ -2707,6 +2829,13 @@ impl StateStore {
             return None;
         }
         Some(self.cursor_dir.join(account_id))
+    }
+
+    fn private_sensenova_dir(&self, account_id: &str) -> Option<PathBuf> {
+        if !is_valid_account_id(account_id) {
+            return None;
+        }
+        Some(self.sensenova_dir.join(account_id))
     }
 
     fn private_api_dir(&self, account_id: &str) -> Option<PathBuf> {
@@ -3369,6 +3498,165 @@ impl StateStore {
         })
     }
 
+    /// 发起商汤 SenseNova Token Plan 登录。授权页由应用内 WebView 打开，
+    /// 只截获跳回控制台的授权码；账号密码与 Cookie 都不经过应用。
+    pub fn begin_sensenova_login(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        account_id: Option<String>,
+        display_name: Option<String>,
+    ) -> Result<LoginStartPayload, String> {
+        let state = self.snapshot();
+        let (target_id, is_new) = match account_id {
+            Some(id) => {
+                let account = state
+                    .accounts
+                    .iter()
+                    .find(|account| account.account_id == id)
+                    .ok_or_else(|| format!("未知账户：{id}"))?;
+                if account.platform != SENSENOVA_PLATFORM {
+                    return Err("该账户不是商汤账户。".to_string());
+                }
+                if account.source != AccountSource::Managed {
+                    return Err("该商汤账户不能重新登录。".to_string());
+                }
+                (id, false)
+            }
+            None => (new_account_id(SENSENOVA_PLATFORM), true),
+        };
+
+        {
+            let logins = lock(&self.logins);
+            if let Some(pending) = active_login(&logins) {
+                if pending.account_id == target_id {
+                    return Err("该账户正在等待授权，请先完成或取消当前登录。".to_string());
+                }
+                return Err("已有其他账户的授权流程进行中，请先完成或取消。".to_string());
+            }
+        }
+
+        let profile = self
+            .private_sensenova_dir(&target_id)
+            .ok_or_else(|| "账户标识无效".to_string())?;
+        ensure_private_dir(&profile)?;
+
+        let request = sensenova::start_login().map_err(|error| error.message)?;
+        let login_id = new_account_id("sensenova-login");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (capture_tx, capture_rx) = mpsc::channel();
+        lock(&self.logins).insert(
+            login_id.clone(),
+            PendingLogin {
+                account_id: target_id.clone(),
+                cancel: Arc::clone(&cancel),
+            },
+        );
+
+        let window = match sensenova_window::open(app, &login_id, &request.auth_url, capture_tx) {
+            Ok(window) => window,
+            Err(message) => {
+                lock(&self.logins).remove(&login_id);
+                if is_new {
+                    let _ = fs::remove_dir_all(&profile);
+                }
+                return Err(message);
+            }
+        };
+
+        let store = Arc::clone(self);
+        let thread_account_id = target_id.clone();
+        let thread_login_id = login_id.clone();
+        let requested_name = display_name.filter(|name| !name.trim().is_empty());
+        thread::spawn(move || {
+            let outcome = wait_for_sensenova_capture(&capture_rx, &cancel, LOGIN_TIMEOUT);
+            lock(&store.logins).remove(&thread_login_id);
+            sensenova_window::close(&window);
+
+            let (status, message) = match outcome {
+                CaptureOutcome::Code { code, state } => {
+                    match sensenova::exchange_code(
+                        &code,
+                        &request.verifier,
+                        &request.state,
+                        state.as_deref(),
+                    ) {
+                        Ok(session) => match sensenova::save_session(&profile, &session) {
+                            Ok(()) => {
+                                store.finish_sensenova_login(
+                                    &thread_account_id,
+                                    requested_name.as_deref(),
+                                );
+                                store.emit_login_event(
+                                    &thread_login_id,
+                                    &thread_account_id,
+                                    "succeeded",
+                                    None,
+                                );
+                                let _ = store.request_refresh(Some(&thread_account_id));
+                                return;
+                            }
+                            Err(error) => ("failed", Some(error.message)),
+                        },
+                        Err(error) => ("failed", Some(error.message)),
+                    }
+                }
+                CaptureOutcome::Error(message) => ("failed", Some(message)),
+                CaptureOutcome::Closed => ("canceled", None),
+                CaptureOutcome::Timeout => (
+                    "failed",
+                    Some("等待商汤登录超时，请重新发起授权。".to_string()),
+                ),
+            };
+
+            if is_new {
+                let _ = fs::remove_dir_all(&profile);
+            }
+            store.emit_login_event(&thread_login_id, &thread_account_id, status, message);
+        });
+
+        Ok(LoginStartPayload {
+            login_id,
+            account_id: target_id,
+            auth_url: request.auth_url,
+        })
+    }
+
+    fn finish_sensenova_login(&self, account_id: &str, requested_name: Option<&str>) {
+        let requested_name = requested_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string);
+        self.update_soft(|state| {
+            if let Some(account) = account_mut(state, account_id) {
+                account.auth_state = AuthState::Unknown;
+                account.source = AccountSource::Managed;
+                if let Some(name) = &requested_name {
+                    account.display_name = name.clone();
+                }
+                for product in sensenova_products() {
+                    if !account
+                        .products
+                        .iter()
+                        .any(|existing| existing.product_id == product.product_id)
+                    {
+                        account.products.push(product);
+                    }
+                }
+                return;
+            }
+            state.accounts.push(AccountState {
+                account_id: account_id.to_string(),
+                platform: SENSENOVA_PLATFORM.to_string(),
+                display_name: requested_name.unwrap_or_else(|| "SenseNova 账户".to_string()),
+                auth_state: AuthState::Unknown,
+                source: AccountSource::Managed,
+                identity_hint: None,
+                credential_expires_at_epoch: None,
+                products: sensenova_products(),
+            });
+        });
+    }
+
     fn finish_cursor_login(&self, account_id: &str, requested_name: Option<&str>) {
         let requested_name = requested_name
             .map(str::trim)
@@ -3625,6 +3913,10 @@ impl StateStore {
                 self.private_cursor_dir(account_id)
                     .ok_or_else(|| "账户标识无效".to_string())?,
             ),
+            SENSENOVA_PLATFORM => Some(
+                self.private_sensenova_dir(account_id)
+                    .ok_or_else(|| "账户标识无效".to_string())?,
+            ),
             OPENCODE_GO_PLATFORM | COMMAND_CODE_PLATFORM => Some(
                 self.private_api_dir(account_id)
                     .ok_or_else(|| "账户标识无效".to_string())?,
@@ -3714,6 +4006,18 @@ impl StateStore {
         self.private_cursor_dir(account_id)
     }
 
+    fn sensenova_profile_dir_for(&self, account_id: &str) -> Option<PathBuf> {
+        let state = self.snapshot();
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)?;
+        if account.platform != SENSENOVA_PLATFORM || account.source != AccountSource::Managed {
+            return None;
+        }
+        self.private_sensenova_dir(account_id)
+    }
+
     /// 手动刷新入口。`account_id` 为空时刷新全部已接入账户；
     /// 同一账户已有在途请求时直接复用，不重复启动查询。
     pub fn request_refresh(self: &Arc<Self>, account_id: Option<&str>) -> Result<(), String> {
@@ -3786,6 +4090,7 @@ fn spawn_refresh(store: Arc<StateStore>, account_id: String) {
                 }
                 Some(ANTIGRAVITY_PLATFORM) => refresh_antigravity(&store, &account_id),
                 Some(CURSOR_PLATFORM) => refresh_cursor(&store, &account_id),
+                Some(SENSENOVA_PLATFORM) => refresh_sensenova(&store, &account_id),
                 // 账户在排队期间被移除：不发起查询，也不回写旧任务。
                 _ => {
                     store.update_soft(|state| clear_refreshing(state, &account_id));
@@ -4145,6 +4450,59 @@ fn refresh_cursor(store: &Arc<StateStore>, account_id: &str) {
             }
         }
         Err(error) => store.apply_platform_refresh_error(account_id, CURSOR_PLATFORM, &error),
+    }
+}
+
+/// 商汤的 refresh_token 在每次续期后轮换，读取凭据与写回都由 sensenova 模块
+/// 在私有目录内完成；状态文件只保留脱敏快照。
+fn refresh_sensenova(store: &Arc<StateStore>, account_id: &str) {
+    let Some(profile) = store.sensenova_profile_dir_for(account_id) else {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    };
+    if store.has_pending_login(account_id) {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    }
+    let finished_at = epoch_now();
+    let result = sensenova::read_usage(&profile);
+    // 重新登录期间旧凭据的结果可能晚到；丢弃它。
+    if store.has_pending_login(account_id) {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    }
+    match result {
+        Ok(usage) => {
+            let plan_tier = usage.plan_name.clone();
+            let snapshot = sensenova_snapshot(&usage, finished_at);
+            let mut low_notices = Vec::new();
+            let mut reset_notices = Vec::new();
+            store.update_soft(|state| {
+                let previous_resets = window_resets(state, account_id);
+                apply_platform_success(
+                    state,
+                    account_id,
+                    SENSENOVA_PLATFORM,
+                    snapshot,
+                    plan_tier,
+                    None,
+                    Some(true),
+                );
+                low_notices = low_quota_notices(state, account_id);
+                reset_notices = collect_reset_notices(state, account_id, &previous_resets);
+            });
+            for notice in &low_notices {
+                store.notify_low_quota(notice);
+            }
+            for notice in &reset_notices {
+                store.notify_reset(notice);
+            }
+        }
+        Err(error) => store.apply_platform_refresh_error(
+            account_id,
+            SENSENOVA_PLATFORM,
+            &error.to_provider_error(),
+        ),
     }
 }
 
@@ -6225,5 +6583,71 @@ mod tests {
             snapshot.capability_gaps,
             vec!["Cursor 未返回计费周期重置时间".to_string()]
         );
+    }
+
+    #[test]
+    fn sensenova_snapshot_keeps_each_pool_separate() {
+        let usage = sensenova::Usage {
+            plan_name: Some("Free Plan".to_string()),
+            pools: vec![
+                sensenova::PoolUsage {
+                    id: Some("default".to_string()),
+                    name: "通用积分池".to_string(),
+                    pool_type: Some("default".to_string()),
+                    window_5h: Some(sensenova::WindowUsage {
+                        limit: 60_000.0,
+                        used: 33_586.3,
+                        remaining: 26_413.7,
+                        resets_at_epoch: Some(1_760_000_000),
+                    }),
+                    window_7d: Some(sensenova::WindowUsage {
+                        limit: 600_000.0,
+                        used: 120_000.0,
+                        remaining: 480_000.0,
+                        resets_at_epoch: Some(1_760_500_000),
+                    }),
+                    grant_balance: Some(1200.5),
+                    nearest_grant_expiry_epoch: None,
+                },
+                sensenova::PoolUsage {
+                    id: Some("flash-lite".to_string()),
+                    name: "Flash-Lite积分池".to_string(),
+                    pool_type: Some("dedicated".to_string()),
+                    window_5h: Some(sensenova::WindowUsage {
+                        limit: 60_000.0,
+                        used: 59_400.0,
+                        remaining: 600.0,
+                        resets_at_epoch: None,
+                    }),
+                    window_7d: None,
+                    grant_balance: None,
+                    nearest_grant_expiry_epoch: None,
+                },
+            ],
+        };
+
+        let snapshot = sensenova_snapshot(&usage, 1_760_000_000);
+        assert_eq!(snapshot.groups.len(), 2);
+        let default = &snapshot.groups[0];
+        assert_eq!(default.limit_name.as_deref(), Some("通用积分池"));
+        assert_eq!(default.windows.len(), 2);
+        let five = &default.windows[0];
+        assert_eq!(five.unit, "积分");
+        assert_eq!(five.used_percent, Some(56));
+        assert_eq!(five.remaining_percent, Some(44));
+        assert_eq!(five.used_amount, Some(33_586.3));
+        assert_eq!(five.total_amount, Some(60_000.0));
+        assert_eq!(five.window_duration_mins, Some(300));
+        assert_eq!(five.resets_at_epoch, Some(1_760_000_000));
+
+        let dedicated = &snapshot.groups[1];
+        assert_eq!(dedicated.limit_name.as_deref(), Some("Flash-Lite积分池"));
+        assert_eq!(dedicated.windows.len(), 1);
+        assert!(snapshot
+            .capability_gaps
+            .contains(&"Flash-Lite积分池未返回每周额度".to_string()));
+        assert!(snapshot
+            .capability_gaps
+            .contains(&"Flash-Lite积分池未返回5 小时重置时间".to_string()));
     }
 }

@@ -23,6 +23,9 @@ semver = "1"
 ureq = { version = "3.5", features = ["socks-proxy"] }
 getrandom = "0.4"
 url = "2"
+# 商汤控制台登录需要 PKCE(S256) 与 base64url 编解码。
+sha2 = "0.10"
+base64 = "0.22"
 # Sub2API 的时间字段是 RFC 3339（Go time.Time），统一解析为 Unix 秒。
 time = { version = "0.3", features = ["parsing"] }
 # 读取 Codex 的 config.toml（只取 provider 的 base_url 与密钥来源）。

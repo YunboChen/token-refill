@@ -250,6 +250,17 @@ export function beginCursorLogin(
   });
 }
 
+/** 发起商汤 SenseNova 登录；授权窗口由 Rust 打开，授权码不经过前端。 */
+export function beginSensenovaLogin(
+  accountId?: string,
+  displayName?: string,
+): Promise<LoginStart> {
+  return invoke<LoginStart>('begin_sensenova_login', {
+    accountId: accountId ?? null,
+    displayName: displayName ?? null,
+  });
+}
+
 export function cancelAccountLogin(loginId: string): Promise<void> {
   return invoke<void>('cancel_account_login', { loginId });
 }

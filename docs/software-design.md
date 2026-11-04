@@ -1,7 +1,7 @@
 # Token Refill 软件设计文档
 
 - 文档版本：0.19
-- 状态：已实现 Codex、百炼、WorkBuddy、OpenCode Go、Command Code、Antigravity 与 Cursor 额度查询、多账户接入、统一状态层、后台刷新调度、菜单栏快速查看、桌面悬浮球与应用内更新
+- 状态：已实现 Codex、百炼、WorkBuddy、商汤 SenseNova、OpenCode Go、Command Code、Antigravity 与 Cursor 额度查询、多账户接入、统一状态层、后台刷新调度、菜单栏快速查看、桌面悬浮球与应用内更新
 - 最近更新：2026-11-04
 - 需求来源：[需求文档](./requirements.md)
 
@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | 前端界面 | 总览（订阅账户额度 / 中转站账户额度）、账户、中转站账户管理、设置四页；读取统一状态并订阅变更事件 | `src/panels/` |
 | 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences`、`set_overview_order`、`set_relay_order`、账户授权/改名/移除命令、中转站查询/编辑/刷新/移除/访问令牌/标题命令与 `app-state-changed`、`account-login-changed` 事件；中转站账户由 `RelayProvider` 在总览与管理页之间共享 | `src/lib/desktop.ts`、`src/lib/store.tsx`、`src/lib/relay.tsx` |
-| 本地后端 | Rust 状态存储、后台刷新调度、Codex/百炼/WorkBuddy/OpenCode Go/Command Code/Antigravity/Cursor 适配器、中转网关密钥额度适配器、中转站凭证存储与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/bailian.rs`、`src-tauri/src/workbuddy.rs`、`src-tauri/src/opencode.rs`、`src-tauri/src/commandcode.rs`、`src-tauri/src/antigravity.rs`、`src-tauri/src/cursor.rs`、`src-tauri/src/quota/`、`src-tauri/src/relay.rs`、`src-tauri/src/discovery.rs` |
+| 本地后端 | Rust 状态存储、后台刷新调度、Codex/百炼/WorkBuddy/商汤 SenseNova/OpenCode Go/Command Code/Antigravity/Cursor 适配器、中转网关密钥额度适配器、中转站凭证存储与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/bailian.rs`、`src-tauri/src/workbuddy.rs`、`src-tauri/src/sensenova.rs`、`src-tauri/src/sensenova_window.rs`、`src-tauri/src/opencode.rs`、`src-tauri/src/commandcode.rs`、`src-tauri/src/antigravity.rs`、`src-tauri/src/cursor.rs`、`src-tauri/src/quota/`、`src-tauri/src/relay.rs`、`src-tauri/src/discovery.rs` |
 | 桌面配置 | 窗口、构建、安全策略及打包配置 | `src-tauri/tauri.conf.json` |
 | 权限声明 | 窗口权限与事件监听权限 | `src-tauri/capabilities/` |
 
@@ -32,6 +32,8 @@ OpenCode Go 与 Command Code 属于 API Key 账户：添加时先用一次真实
 WorkBuddy 账户属于独立授权账户：Rust 先向官方接口申请一次性 `state` 与登录页地址，用系统浏览器打开；用户在官方页面完成登录后，Rust 轮询同一 `state` 的登录结果，取回 access token 与 refresh token，写入 `workbuddy-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600，先写临时文件再原子替换）。额度以计费摘要的官方 `CreditGroups` 为准，按套餐基础 / 套餐赠送 / 购买 / 平台奖励分别展示，每组一个周期窗口；套餐编码沿用官方客户端的分组映射（`plan_base` / `plan_bonus` / `addon` / `benefit`），从付费 / 免费套餐分页接口补充各组的重置或最近到期时间。分页失败只记录能力缺口，不影响余额展示。访问令牌到期前 60 秒或查询返回 401/403 时，使用 refresh token 调用官方续期接口；续期失效才把账户标为需要重新授权。令牌与账户标识只存在于凭证文件和 Rust 请求头，不进入 `PersistedState`、IPC 返回值、事件或日志；移除账户会删除该目录。
 
 Cursor 个人订阅账户属于独立授权账户：Rust 为每个账户使用 `cursor-profiles/<accountId>/` 作为子进程的独立 `HOME`，以 `AGENT_CLI_CREDENTIAL_STORE=file`、`NO_OPEN_BROWSER=1` 启动官方 Cursor Agent CLI 的 `agent login`，从 stdout 解析并校验 `https://cursor.com/loginDeepControl?...` 登录地址，再交给系统浏览器。登录完成后只读取该目录下的 `.cursor/auth.json`，每次刷新重新读取 `accessToken`，用 Bearer 调用 `POST https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage`（附 `Connect-Protocol-Version: 1`），解析 `planUsage.totalPercentUsed / autoPercentUsed / apiPercentUsed` 与 `billingCycleStart / billingCycleEnd`；界面只展示 `autoPercentUsed`（Cursor 模型）与 `apiPercentUsed`（第三方模型），只有总比例时回退到总用量。套餐包含 Grok Bot 周额度时，再调用 `GetSandUsageStatus` 解析 `usagePercent` 与 `currentPeriodStart / nextResetTimestampUtc`，作为独立的周额度窗口展示；企业共享额度（`usesPooledEnterpriseAllowance`）或未附带额度的套餐不显示该窗口，该请求失败也只隐藏窗口，不影响主额度。令牌不复制到 `PersistedState`、不进入前端、事件或日志；登录输出中的邮箱也不写入日志。不读取用户已有 `~/.cursor`、Cursor.app 的 `state.vscdb`、Keychain 或浏览器 Cookie。该接口未公开文档，属于实验性接入：401/403 标记需要重新登录，其他失败保留上次成功快照。
+
+商汤 SenseNova Token Plan 账户属于独立授权账户：Rust 生成 PKCE verifier / state 后，用应用内 WebView 打开官方 OAuth 授权页（`client_id=nova`，独立 incognito 会话，只允许在商汤域名内跳转），通过导航回调截获跳回 `https://platform.sensenova.cn/?code=...` 的授权码，再由 Rust 换取 access token 与 refresh token。refresh token 写入 `sensenova-profiles/<accountId>/session.json`（Unix 目录 0700、文件 0600，先写临时文件再原子替换）；access token 约 3 小时有效，临近过期或查询返回 401/403 时续期，续期轮换出的新 refresh token 立即写回。额度读取控制台接口 `GET /lite/console/v1/tokenplan/pool-usage`，每个积分池（通用 / Flash-Lite 专属）作为独立分组，展示滚动 5 小时与 7 天窗口的已用、上限和重置时间。`sk-` 推理 Key 不能调用该接口。令牌不进入 `PersistedState`、前端、事件或日志；不读取浏览器 Cookie，也不保存账号密码。接口与登录流程均未公开文档，按实验性功能处理，失败时保留上次成功快照并提示重新登录。
 
 启动后 Rust 会在后台探测本机已有登录态：OpenCode 调用官方 `opencode auth export`，存在活动 API Key 时自动创建“本机 OpenCode”账户，并在每次刷新时重新读取 CLI 凭据；Antigravity 先确认 `agy` 可执行，再实际读取一次 `/usage`，成功才创建“本机 Antigravity”账户。未探测到时不创建账户，保持“添加账户”的手动流程。探测只使用官方 CLI 命令，不直接解析 SQLite、钥匙串或浏览器 Cookie。Cursor 不参与自动探测，只通过账户页显式发起隔离登录，避免读取用户已有的 `~/.cursor` 登录态。
 
@@ -378,6 +380,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | get_app_state | 无敏感输入 | 返回脱敏账户、产品、快照、查询状态、设置与版本标记；不返回凭证 | REQ-001、REQ-002、REQ-008 |
 | begin_account_login（已实现） | 可选账户标识与显示名 | 为独立 `CODEX_HOME` 启动官方 ChatGPT 授权，返回 `loginId` 与浏览器授权 URL；令牌不经过前端 | REQ-003 |
 | begin_cursor_login（已实现） | 可选账户标识与显示名 | 在隔离 `HOME` 中启动官方 Cursor Agent CLI 登录，返回 `loginId` 与浏览器授权 URL；令牌只写入该目录，不经过前端 | REQ-003 |
+| begin_sensenova_login（已实现） | 可选账户标识与显示名 | 创建应用内商汤官方授权窗口并截获授权码；refresh token 只写入账户私有目录，不经过前端 | REQ-003 |
 | cancel_account_login（已实现） | 流程标识 | 取消本应用授权流程；不改变本机 Codex 登录 | REQ-003 |
 | rename_account（已实现） | 本地账户标识、显示名 | 校验并保存名称，向两个界面同步 | REQ-003 |
 | add_api_key_account（已实现） | 平台、可选显示名、API Key | 先真实查询验证，成功后写入 `api-profiles/<accountId>/credentials.json`；密钥不回传前端 | REQ-003 |

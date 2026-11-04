@@ -40,14 +40,20 @@ const AUTH_LABELS: Record<AuthState, string> = {
 type DialogPlatform =
   | 'codex'
   | 'bailian'
+  | 'sensenova'
   | 'workbuddy'
   | 'cursor'
   | 'opencode-go'
   | 'commandcode'
   | 'antigravity';
 
-/** 走浏览器授权流程的平台；其余平台在弹窗内直接提交凭据。 */
-type LoginPlatform = 'codex' | 'bailian' | 'workbuddy' | 'cursor';
+/** 走授权流程的平台；其余平台在弹窗内直接提交凭据。 */
+type LoginPlatform =
+  | 'codex'
+  | 'bailian'
+  | 'sensenova'
+  | 'workbuddy'
+  | 'cursor';
 
 type DialogMode = 'add' | 'reauth';
 
@@ -110,6 +116,26 @@ const PLATFORM_CHOICES: Record<DialogPlatform, PlatformChoice> = {
     waitingTitle: '登录阿里云百炼',
     waitingText:
       '请登录要接入的阿里云账号并确认授权，控制台会话令牌会通过本机回环地址直接交给应用。',
+  },
+  sensenova: {
+    addLabel: '添加 SenseNova 账户',
+    subtitle: '商汤 · Token Plan · 应用内登录',
+    steps: [
+      {
+        title: '在应用内登录',
+        text: '应用会打开商汤官方登录窗口，登录要接入的商汤账号',
+      },
+      {
+        title: '自动连接账户',
+        text: '授权码交给应用换取长期凭据，之后自动续期',
+      },
+    ],
+    note: '登录窗口使用独立会话，不读取浏览器 Cookie，也不保存账号密码。',
+    namePlaceholder: '留空则显示为“SenseNova 账户”',
+    authorizeLabel: '打开商汤登录',
+    waitingTitle: '登录商汤 SenseNova',
+    waitingText:
+      '请在应用内打开的商汤登录窗口中完成登录。若窗口已被关闭，请取消后重新发起授权。',
   },
   workbuddy: {
     addLabel: '添加 WorkBuddy 账户',
@@ -321,6 +347,7 @@ export default function AccountsPanel() {
     beginBailianLogin,
     beginWorkbuddyLogin,
     beginCursorLogin,
+    beginSensenovaLogin,
     addApiKeyAccount,
     replaceApiKey,
     addAntigravityAccount,
@@ -362,6 +389,7 @@ export default function AccountsPanel() {
   > = {
     codex: beginLogin,
     bailian: beginBailianLogin,
+    sensenova: beginSensenovaLogin,
     workbuddy: beginWorkbuddyLogin,
     cursor: beginCursorLogin,
   };
@@ -464,7 +492,8 @@ export default function AccountsPanel() {
       phase: 'waiting',
       message: null,
     });
-    void openExternal(start.authUrl);
+    // 商汤的授权页由 Rust 创建应用内窗口，不再打开系统浏览器。
+    if (platform !== 'sensenova') void openExternal(start.authUrl);
   };
 
   // 添加弹窗的主按钮：浏览器授权、API Key 与本机登录态三种提交方式不同，
@@ -533,7 +562,8 @@ export default function AccountsPanel() {
       phase: 'waiting',
       message: null,
     });
-    void openExternal(start.authUrl);
+    // 商汤的授权页由 Rust 创建应用内窗口，不再打开系统浏览器。
+    if (platform !== 'sensenova') void openExternal(start.authUrl);
   };
 
   const beginReauth = (account: AccountState, trigger: HTMLElement | null) => {
@@ -975,7 +1005,8 @@ export default function AccountsPanel() {
                               ? '验证并更新'
                               : choice.authorizeLabel}
                             {!isApiKeyPlatform(dialog.platform)
-                            && dialog.platform !== 'antigravity' ? (
+                            && dialog.platform !== 'antigravity'
+                            && dialog.platform !== 'sensenova' ? (
                               <ArrowSquareOut size={13} aria-hidden />
                             ) : null}
                           </>
@@ -1071,10 +1102,12 @@ export default function AccountsPanel() {
                     {dialog.phase === 'waiting' ? (
                       <>
                         <p className={styles.usageNote}>{choice.waitingText}</p>
-                        <div className={styles.authBlock}>
-                          <span className={styles.fieldLabel}>授权链接</span>
-                          <p className={styles.authUrl}>{dialog.start.authUrl}</p>
-                        </div>
+                        {dialog.platform !== 'sensenova' ? (
+                          <div className={styles.authBlock}>
+                            <span className={styles.fieldLabel}>授权链接</span>
+                            <p className={styles.authUrl}>{dialog.start.authUrl}</p>
+                          </div>
+                        ) : null}
                         <p className={styles.loginStatus}>
                           <CircleNotch
                             size={13}
@@ -1091,14 +1124,16 @@ export default function AccountsPanel() {
                           >
                             取消授权
                           </button>
-                          <button
-                            type="button"
-                            className={styles.button}
-                            onClick={() => void openExternal(dialog.start.authUrl)}
-                          >
-                            重新打开授权页面
-                            <ArrowSquareOut size={13} aria-hidden />
-                          </button>
+                          {dialog.platform !== 'sensenova' ? (
+                            <button
+                              type="button"
+                              className={styles.button}
+                              onClick={() => void openExternal(dialog.start.authUrl)}
+                            >
+                              重新打开授权页面
+                              <ArrowSquareOut size={13} aria-hidden />
+                            </button>
+                          ) : null}
                         </div>
                       </>
                     ) : dialog.phase === 'succeeded' ? (
