@@ -26,6 +26,7 @@ use crate::bailian::{
 };
 use crate::codex::{self, CodexIdentity, CodexUsage, UsageError};
 use crate::commandcode::{self, CommandCodeUsage};
+use crate::cursor::{self, CursorUsage};
 use crate::opencode::{self, OpencodeUsage};
 use crate::proxy::{self, ProxyMode};
 use crate::usage_api::ProviderError;
@@ -52,6 +53,8 @@ pub const ANTIGRAVITY_PRODUCT_ID: &str = "antigravity";
 pub const ANTIGRAVITY_ACCOUNT_ID: &str = "antigravity-local";
 pub const WORKBUDDY_PLATFORM: &str = "workbuddy";
 pub const WORKBUDDY_PRODUCT_ID: &str = "workbuddy-credits";
+pub const CURSOR_PLATFORM: &str = "cursor";
+pub const CURSOR_PRODUCT_ID: &str = "cursor";
 
 /// 与前端设置页的可选项保持一致；后端在这里再次校验，不信任前端传入值。
 pub const REFRESH_OPTIONS: [i64; 5] = [1, 5, 15, 30, 60];
@@ -70,6 +73,7 @@ const OVERVIEW_ORDER_KEY_MAX_CHARS: usize = 128;
 const PROFILES_DIR_NAME: &str = "codex-profiles";
 const BAILIAN_PROFILES_DIR_NAME: &str = "bailian-profiles";
 const WORKBUDDY_PROFILES_DIR_NAME: &str = "workbuddy-profiles";
+const CURSOR_PROFILES_DIR_NAME: &str = "cursor-profiles";
 const API_PROFILES_DIR_NAME: &str = "api-profiles";
 static ACCOUNT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -609,6 +613,10 @@ fn is_workbuddy_product(product: &ProductState) -> bool {
     product.kind == WORKBUDDY_PRODUCT_ID
 }
 
+fn is_cursor_product(product: &ProductState) -> bool {
+    product.kind == CURSOR_PRODUCT_ID
+}
+
 /// 调度与提醒需要覆盖所有已接入的产品；未识别平台不参与自动刷新。
 fn is_refreshable_product(product: &ProductState) -> bool {
     is_codex_product(product)
@@ -617,6 +625,7 @@ fn is_refreshable_product(product: &ProductState) -> bool {
         || is_commandcode_product(product)
         || is_antigravity_product(product)
         || is_workbuddy_product(product)
+        || is_cursor_product(product)
 }
 
 fn is_supported_platform(platform: &str) -> bool {
@@ -628,6 +637,7 @@ fn is_supported_platform(platform: &str) -> bool {
             | COMMAND_CODE_PLATFORM
             | ANTIGRAVITY_PLATFORM
             | WORKBUDDY_PLATFORM
+            | CURSOR_PLATFORM
     )
 }
 
@@ -677,6 +687,18 @@ fn workbuddy_products() -> Vec<ProductState> {
     }]
 }
 
+fn cursor_products() -> Vec<ProductState> {
+    vec![ProductState {
+        product_id: CURSOR_PRODUCT_ID.to_string(),
+        kind: CURSOR_PRODUCT_ID.to_string(),
+        display_name: "套餐额度".to_string(),
+        plan_tier: None,
+        active: None,
+        snapshot: None,
+        query: QueryState::default(),
+    }]
+}
+
 fn platform_display_name(platform: &str) -> &'static str {
     match platform {
         OPENCODE_GO_PLATFORM => "OpenCode Go 账户",
@@ -684,6 +706,7 @@ fn platform_display_name(platform: &str) -> &'static str {
         ANTIGRAVITY_PLATFORM => "本机 Antigravity",
         "bailian" => "百炼账户",
         WORKBUDDY_PLATFORM => "WorkBuddy 账户",
+        CURSOR_PLATFORM => "Cursor 账户",
         _ => "Codex 账户",
     }
 }
@@ -925,6 +948,7 @@ fn is_product_for_platform(product: &ProductState, platform: &str) -> bool {
         COMMAND_CODE_PLATFORM => is_commandcode_product(product),
         ANTIGRAVITY_PLATFORM => is_antigravity_product(product),
         WORKBUDDY_PLATFORM => is_workbuddy_product(product),
+        CURSOR_PLATFORM => is_cursor_product(product),
         _ => false,
     }
 }
@@ -963,6 +987,96 @@ fn opencode_snapshot(usage: &OpencodeUsage) -> QuotaSnapshot {
         groups: vec![QuotaGroup {
             limit_id: Some("opencode-go".to_string()),
             limit_name: None,
+            plan_type: None,
+            windows,
+        }],
+        capability_gaps,
+    }
+}
+
+/// Cursor 的套餐用量只有百分比，没有金额上限；计费周期两端齐全时才派生窗口时长。
+/// 总用量不单独展示：模型窗口齐全时只列模型，只有总比例时回退到总用量。
+fn cursor_snapshot(usage: &CursorUsage) -> QuotaSnapshot {
+    let mut capability_gaps = Vec::new();
+    if usage.cycle_end_epoch.is_none() {
+        capability_gaps.push("Cursor 未返回计费周期重置时间".to_string());
+    }
+    let duration_mins = match (usage.cycle_start_epoch, usage.cycle_end_epoch) {
+        (Some(start), Some(end)) if end > start => Some((end - start) / 60),
+        _ => None,
+    };
+
+    let mut windows: Vec<QuotaWindow> = [
+        ("auto", "Cursor 模型", usage.auto_percent_used),
+        ("api", "第三方模型", usage.api_percent_used),
+    ]
+    .into_iter()
+    .filter_map(|(id, name, used)| {
+        let used = used?;
+        Some(QuotaWindow {
+            window_id: format!("cursor-{id}"),
+            source_window_id: id.to_string(),
+            window_name: Some(name.to_string()),
+            unit: "percent".to_string(),
+            used_percent: Some(used),
+            remaining_percent: Some(clamp_percent(100 - used)),
+            used_amount: None,
+            total_amount: None,
+            remaining_amount: None,
+            window_duration_mins: duration_mins,
+            resets_at_epoch: usage.cycle_end_epoch,
+            expires_at_epoch: None,
+        })
+    })
+    .collect();
+
+    if windows.is_empty() {
+        // `parse_usage` 已保证三种比例至少返回一种，走到这里时总用量必然存在。
+        if let Some(total) = usage.total_percent_used {
+            windows.push(QuotaWindow {
+                window_id: "cursor-total".to_string(),
+                source_window_id: "total".to_string(),
+                window_name: Some("总用量".to_string()),
+                unit: "percent".to_string(),
+                used_percent: Some(total),
+                remaining_percent: Some(clamp_percent(100 - total)),
+                used_amount: None,
+                total_amount: None,
+                remaining_amount: None,
+                window_duration_mins: duration_mins,
+                resets_at_epoch: usage.cycle_end_epoch,
+                expires_at_epoch: None,
+            });
+        }
+    }
+
+    // Grok Bot 是独立的周额度，重置时间与计费周期无关。
+    if let Some(bot) = &usage.grok_bot {
+        let bot_duration_mins = match (bot.period_start_epoch, bot.period_end_epoch) {
+            (Some(start), Some(end)) if end > start => Some((end - start) / 60),
+            _ => Some(10_080),
+        };
+        windows.push(QuotaWindow {
+            window_id: "cursor-grok-bot".to_string(),
+            source_window_id: "grok-bot".to_string(),
+            window_name: Some("Grok Bot".to_string()),
+            unit: "percent".to_string(),
+            used_percent: Some(bot.percent_used),
+            remaining_percent: Some(clamp_percent(100 - bot.percent_used)),
+            used_amount: None,
+            total_amount: None,
+            remaining_amount: None,
+            window_duration_mins: bot_duration_mins,
+            resets_at_epoch: bot.period_end_epoch,
+            expires_at_epoch: None,
+        });
+    }
+
+    QuotaSnapshot {
+        checked_at_epoch: usage.checked_at_epoch,
+        groups: vec![QuotaGroup {
+            limit_id: Some("cursor-plan".to_string()),
+            limit_name: Some("套餐额度".to_string()),
             plan_type: None,
             windows,
         }],
@@ -2131,6 +2245,7 @@ pub struct StateStore {
     profiles_dir: PathBuf,
     bailian_dir: PathBuf,
     workbuddy_dir: PathBuf,
+    cursor_dir: PathBuf,
     api_dir: PathBuf,
     app: AppHandle,
     in_flight: Mutex<HashSet<String>>,
@@ -2162,6 +2277,9 @@ impl StateStore {
         let workbuddy_dir = parent
             .map(|parent| parent.join(WORKBUDDY_PROFILES_DIR_NAME))
             .unwrap_or_else(|| PathBuf::from(WORKBUDDY_PROFILES_DIR_NAME));
+        let cursor_dir = parent
+            .map(|parent| parent.join(CURSOR_PROFILES_DIR_NAME))
+            .unwrap_or_else(|| PathBuf::from(CURSOR_PROFILES_DIR_NAME));
         // 到期时间由凭证文件推算，不信任状态文件里的旧值；这样外部替换
         // 凭证（或旧版本没有该字段）时也能马上反映真实到期时间。
         for account in state.accounts.iter_mut().filter(|account| {
@@ -2182,6 +2300,7 @@ impl StateStore {
             profiles_dir,
             bailian_dir,
             workbuddy_dir,
+            cursor_dir,
             api_dir,
             app,
             in_flight: Mutex::new(HashSet::new()),
@@ -2252,6 +2371,7 @@ impl StateStore {
                 "请在账户页重新填写 API Key 后再刷新。"
             }
             (WORKBUDDY_PLATFORM, _) => "请在账户页重新授权 WorkBuddy 后再刷新。",
+            (CURSOR_PLATFORM, _) => "请在账户页重新登录 Cursor 后再刷新。",
             _ => fallback.as_str(),
         };
         crate::notification::send_with_identifier(
@@ -2580,6 +2700,13 @@ impl StateStore {
             return None;
         }
         Some(self.workbuddy_dir.join(account_id))
+    }
+
+    fn private_cursor_dir(&self, account_id: &str) -> Option<PathBuf> {
+        if !is_valid_account_id(account_id) {
+            return None;
+        }
+        Some(self.cursor_dir.join(account_id))
     }
 
     fn private_api_dir(&self, account_id: &str) -> Option<PathBuf> {
@@ -3148,6 +3275,136 @@ impl StateStore {
         })
     }
 
+    /// 发起 Cursor 官方 CLI 登录。新账户成功后加入列表；重新登录复用原账户。
+    /// 登录进程使用隔离 HOME，令牌只写入该目录，不经过前端。
+    pub fn begin_cursor_login(
+        self: &Arc<Self>,
+        account_id: Option<String>,
+        display_name: Option<String>,
+    ) -> Result<LoginStartPayload, String> {
+        let state = self.snapshot();
+        let (target_id, is_new) = match account_id {
+            Some(id) => {
+                let account = state
+                    .accounts
+                    .iter()
+                    .find(|account| account.account_id == id)
+                    .ok_or_else(|| format!("未知账户：{id}"))?;
+                if account.platform != CURSOR_PLATFORM {
+                    return Err("该账户不是 Cursor 账户。".to_string());
+                }
+                if account.source != AccountSource::Managed {
+                    return Err("该 Cursor 账户不能重新登录。".to_string());
+                }
+                (id, false)
+            }
+            None => (new_account_id(CURSOR_PLATFORM), true),
+        };
+
+        {
+            let logins = lock(&self.logins);
+            if let Some(pending) = active_login(&logins) {
+                if pending.account_id == target_id {
+                    return Err("该账户正在等待登录，请先完成或取消当前登录。".to_string());
+                }
+                return Err("已有其他账户的授权流程进行中，请先完成或取消。".to_string());
+            }
+        }
+
+        let profile = self
+            .private_cursor_dir(&target_id)
+            .ok_or_else(|| "账户标识无效".to_string())?;
+        ensure_private_dir(&profile)?;
+
+        let binary = cursor::find_agent_binary().map_err(|error| error.message)?;
+        let login_id = new_account_id("cursor-login");
+        let mut session = cursor::LoginSession::start(&binary, &profile, login_id)
+            .map_err(|error| error.message)?;
+        let info = session.info();
+        let cancel = Arc::new(AtomicBool::new(false));
+        lock(&self.logins).insert(
+            info.login_id.clone(),
+            PendingLogin {
+                account_id: target_id.clone(),
+                cancel: Arc::clone(&cancel),
+            },
+        );
+
+        let store = Arc::clone(self);
+        let thread_account_id = target_id.clone();
+        let thread_login_id = info.login_id.clone();
+        let requested_name = display_name.filter(|name| !name.trim().is_empty());
+        thread::spawn(move || {
+            let outcome = session.wait(&cancel, LOGIN_TIMEOUT);
+            lock(&store.logins).remove(&thread_login_id);
+            match outcome {
+                Ok(()) => {
+                    store.finish_cursor_login(&thread_account_id, requested_name.as_deref());
+                    store.emit_login_event(&thread_login_id, &thread_account_id, "succeeded", None);
+                    let _ = store.request_refresh(Some(&thread_account_id));
+                }
+                Err(error) => {
+                    if is_new {
+                        let _ = fs::remove_dir_all(&profile);
+                    }
+                    let status = if error.code == "canceled" {
+                        "canceled"
+                    } else {
+                        "failed"
+                    };
+                    store.emit_login_event(
+                        &thread_login_id,
+                        &thread_account_id,
+                        status,
+                        Some(error.message),
+                    );
+                }
+            }
+        });
+
+        Ok(LoginStartPayload {
+            login_id: info.login_id,
+            account_id: target_id,
+            auth_url: info.auth_url,
+        })
+    }
+
+    fn finish_cursor_login(&self, account_id: &str, requested_name: Option<&str>) {
+        let requested_name = requested_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string);
+        self.update_soft(|state| {
+            if let Some(account) = account_mut(state, account_id) {
+                account.auth_state = AuthState::Unknown;
+                account.source = AccountSource::Managed;
+                if let Some(name) = &requested_name {
+                    account.display_name = name.clone();
+                }
+                for product in cursor_products() {
+                    if !account
+                        .products
+                        .iter()
+                        .any(|existing| existing.product_id == product.product_id)
+                    {
+                        account.products.push(product);
+                    }
+                }
+                return;
+            }
+            state.accounts.push(AccountState {
+                account_id: account_id.to_string(),
+                platform: CURSOR_PLATFORM.to_string(),
+                display_name: requested_name.unwrap_or_else(|| "Cursor 账户".to_string()),
+                auth_state: AuthState::Unknown,
+                source: AccountSource::Managed,
+                identity_hint: None,
+                credential_expires_at_epoch: None,
+                products: cursor_products(),
+            });
+        });
+    }
+
     fn finish_workbuddy_login(
         &self,
         account_id: &str,
@@ -3364,6 +3621,10 @@ impl StateStore {
                 self.private_workbuddy_dir(account_id)
                     .ok_or_else(|| "账户标识无效".to_string())?,
             ),
+            CURSOR_PLATFORM => Some(
+                self.private_cursor_dir(account_id)
+                    .ok_or_else(|| "账户标识无效".to_string())?,
+            ),
             OPENCODE_GO_PLATFORM | COMMAND_CODE_PLATFORM => Some(
                 self.private_api_dir(account_id)
                     .ok_or_else(|| "账户标识无效".to_string())?,
@@ -3441,6 +3702,18 @@ impl StateStore {
         self.private_workbuddy_dir(account_id)
     }
 
+    fn cursor_profile_dir_for(&self, account_id: &str) -> Option<PathBuf> {
+        let state = self.snapshot();
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)?;
+        if account.platform != CURSOR_PLATFORM || account.source != AccountSource::Managed {
+            return None;
+        }
+        self.private_cursor_dir(account_id)
+    }
+
     /// 手动刷新入口。`account_id` 为空时刷新全部已接入账户；
     /// 同一账户已有在途请求时直接复用，不重复启动查询。
     pub fn request_refresh(self: &Arc<Self>, account_id: Option<&str>) -> Result<(), String> {
@@ -3512,6 +3785,7 @@ fn spawn_refresh(store: Arc<StateStore>, account_id: String) {
                     refresh_api_key(&store, &account_id, COMMAND_CODE_PLATFORM)
                 }
                 Some(ANTIGRAVITY_PLATFORM) => refresh_antigravity(&store, &account_id),
+                Some(CURSOR_PLATFORM) => refresh_cursor(&store, &account_id),
                 // 账户在排队期间被移除：不发起查询，也不回写旧任务。
                 _ => {
                     store.update_soft(|state| clear_refreshing(state, &account_id));
@@ -3829,6 +4103,48 @@ fn refresh_antigravity(store: &Arc<StateStore>, account_id: &str) {
             }
         }
         Err(error) => store.apply_platform_refresh_error(account_id, ANTIGRAVITY_PLATFORM, &error),
+    }
+}
+
+/// Cursor 的令牌由隔离 profile 中的官方 CLI 维护；应用每次查询重新读取，
+/// 不把副本写进状态文件。重新登录期间旧结果晚到时直接丢弃。
+fn refresh_cursor(store: &Arc<StateStore>, account_id: &str) {
+    let Some(profile) = store.cursor_profile_dir_for(account_id) else {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    };
+    let result = cursor::read_usage(&profile);
+    if store.has_pending_login(account_id) {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    }
+    match result {
+        Ok(usage) => {
+            let snapshot = cursor_snapshot(&usage);
+            let mut low_notices = Vec::new();
+            let mut reset_notices = Vec::new();
+            store.update_soft(|state| {
+                let previous_resets = window_resets(state, account_id);
+                apply_platform_success(
+                    state,
+                    account_id,
+                    CURSOR_PLATFORM,
+                    snapshot,
+                    None,
+                    None,
+                    Some(true),
+                );
+                low_notices = low_quota_notices(state, account_id);
+                reset_notices = collect_reset_notices(state, account_id, &previous_resets);
+            });
+            for notice in &low_notices {
+                store.notify_low_quota(notice);
+            }
+            for notice in &reset_notices {
+                store.notify_reset(notice);
+            }
+        }
+        Err(error) => store.apply_platform_refresh_error(account_id, CURSOR_PLATFORM, &error),
     }
 }
 
@@ -5803,5 +6119,111 @@ mod tests {
         assert_eq!(window.resets_at_epoch, Some(1_792_888_105));
         assert_eq!(snapshot.groups[1].windows[0].remaining_percent, Some(50));
         assert_eq!(snapshot.groups[1].windows[0].used_percent, Some(50));
+    }
+
+    #[test]
+    fn cursor_snapshot_skips_total_when_model_windows_exist() {
+        let usage = CursorUsage {
+            checked_at_epoch: 1_792_759_583,
+            total_percent_used: Some(25),
+            auto_percent_used: Some(10),
+            api_percent_used: Some(40),
+            cycle_start_epoch: Some(1_792_728_069),
+            cycle_end_epoch: Some(1_795_406_469),
+            grok_bot: None,
+        };
+
+        let snapshot = cursor_snapshot(&usage);
+        assert_eq!(snapshot.groups.len(), 1);
+        assert_eq!(snapshot.groups[0].limit_id.as_deref(), Some("cursor-plan"));
+        assert_eq!(snapshot.groups[0].windows.len(), 2);
+
+        let auto = &snapshot.groups[0].windows[0];
+        assert_eq!(auto.window_name.as_deref(), Some("Cursor 模型"));
+        assert_eq!(auto.used_percent, Some(10));
+        assert_eq!(auto.remaining_percent, Some(90));
+        assert_eq!(auto.resets_at_epoch, Some(1_795_406_469));
+        assert_eq!(auto.window_duration_mins, Some(44_640));
+
+        let api = &snapshot.groups[0].windows[1];
+        assert_eq!(api.window_name.as_deref(), Some("第三方模型"));
+        assert_eq!(api.used_percent, Some(40));
+        assert!(snapshot.capability_gaps.is_empty());
+    }
+
+    #[test]
+    fn cursor_snapshot_appends_grok_bot_weekly_window() {
+        let usage = CursorUsage {
+            checked_at_epoch: 1_792_759_583,
+            total_percent_used: Some(25),
+            auto_percent_used: Some(10),
+            api_percent_used: Some(40),
+            cycle_start_epoch: Some(1_792_728_069),
+            cycle_end_epoch: Some(1_795_406_469),
+            grok_bot: Some(crate::cursor::GrokBotUsage {
+                percent_used: 1,
+                period_start_epoch: Some(1_792_728_069),
+                period_end_epoch: Some(1_793_332_869),
+            }),
+        };
+
+        let snapshot = cursor_snapshot(&usage);
+        let windows = &snapshot.groups[0].windows;
+        assert_eq!(windows.len(), 3);
+
+        let bot = &windows[2];
+        assert_eq!(bot.window_id, "cursor-grok-bot");
+        assert_eq!(bot.window_name.as_deref(), Some("Grok Bot"));
+        assert_eq!(bot.used_percent, Some(1));
+        assert_eq!(bot.remaining_percent, Some(99));
+        assert_eq!(bot.resets_at_epoch, Some(1_793_332_869));
+        assert_eq!(bot.window_duration_mins, Some(10_080));
+    }
+
+    #[test]
+    fn cursor_snapshot_uses_weekly_duration_when_bot_period_is_missing() {
+        let usage = CursorUsage {
+            checked_at_epoch: 1_792_759_583,
+            total_percent_used: Some(25),
+            auto_percent_used: Some(10),
+            api_percent_used: None,
+            cycle_start_epoch: None,
+            cycle_end_epoch: None,
+            grok_bot: Some(crate::cursor::GrokBotUsage {
+                percent_used: 30,
+                period_start_epoch: None,
+                period_end_epoch: None,
+            }),
+        };
+
+        let snapshot = cursor_snapshot(&usage);
+        let bot = &snapshot.groups[0].windows[1];
+        assert_eq!(bot.window_duration_mins, Some(10_080));
+        assert_eq!(bot.resets_at_epoch, None);
+    }
+
+    #[test]
+    fn cursor_snapshot_falls_back_to_total_and_records_missing_reset() {
+        let usage = CursorUsage {
+            checked_at_epoch: 1_792_759_583,
+            total_percent_used: Some(5),
+            auto_percent_used: None,
+            api_percent_used: None,
+            cycle_start_epoch: None,
+            cycle_end_epoch: None,
+            grok_bot: None,
+        };
+
+        let snapshot = cursor_snapshot(&usage);
+        assert_eq!(snapshot.groups[0].windows.len(), 1);
+        assert_eq!(
+            snapshot.groups[0].windows[0].window_name.as_deref(),
+            Some("总用量")
+        );
+        assert_eq!(snapshot.groups[0].windows[0].resets_at_epoch, None);
+        assert_eq!(
+            snapshot.capability_gaps,
+            vec!["Cursor 未返回计费周期重置时间".to_string()]
+        );
     }
 }

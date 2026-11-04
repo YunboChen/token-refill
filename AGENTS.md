@@ -10,7 +10,7 @@
 - 应用标识 `dev.tokenrefill.desktop`；数据目录由 Tauri `app_data_dir()` 决定：
   - macOS `~/Library/Application Support/dev.tokenrefill.desktop/`
   - Windows `%APPDATA%\dev.tokenrefill.desktop\`
-  - 目录内：`state.json`（设置、账户、额度快照、提醒去重、悬浮球当前套餐与位置）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）、`workbuddy-profiles/<accountId>/`（WorkBuddy 访问令牌与续期令牌）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
+  - 目录内：`state.json`（设置、账户、额度快照、提醒去重、悬浮球当前套餐与位置）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）、`workbuddy-profiles/<accountId>/`（WorkBuddy 访问令牌与续期令牌）、`cursor-profiles/<accountId>/`（隔离的 Cursor Agent CLI `HOME`，含 `.cursor/auth.json`）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
   - `logs/` 只写固定文案、窗口标签与耗时，用途是排查发布包没有控制台（Windows GUI 子系统丢弃 `eprintln!`）时的“点了没反应”。令牌、Cookie、邮箱、密钥、请求内容一律不得写入。
 - 分发渠道分正式版（pro）与测试版（test），共用代码、靠 `src-tauri/tauri.test.conf.json` 覆盖身份：
   - 正式版：`productName` `Token Refill`、identifier `dev.tokenrefill.desktop`、版本 `X.Y.Z`，由 `release.yml` 发布并参与应用内更新。
@@ -33,6 +33,7 @@
 - 独立账户必须使用自己的 `CODEX_HOME`；本机账户只沿用本机登录态，不得修改或覆盖它。
 - 移除账户只清理本应用目录，不触发源工具注销，不影响其他账户。
 - 中转站手动填写的 API Key 与 New API 访问令牌写入 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 按用户 ACL），先写临时文件再原子替换；只保存用户主动填写的凭证。从 cc-switch、Claude Code / Codex 配置扫描到的密钥不得复制到应用目录；勾选导入后只能在 `relay-profiles/<relayId>/source.json` 保存来源引用（来源、provider id、地址、provider 类型与用户主动填写的访问令牌），启动时按引用重新读取源配置，取不到就跳过该账户。扫描只列候选、不联网，必须由用户勾选确认后才查询额度。cc-switch 的 `~/.cc-switch/cc-switch.db` 只能只读打开，不修改、不迁移、不复制其中的数据。New API 访问令牌只用于 `/api/user/self` 与 `/api/subscription/self`，不进入前端状态、日志或错误消息；旧版单令牌需要的 `New-Api-User` 用户 ID 与令牌一并保存，只作为请求头发送，不写入日志。
+- Cursor 的例外边界仅限：应用以隔离的 `HOME` 启动官方 `cursor-agent login`（强制 `AGENT_CLI_CREDENTIAL_STORE=file`），只读取该隔离目录下由这次登录写出的 `.cursor/auth.json` 中的 `accessToken`，用于调用 `api2.cursor.sh` 的额度接口。不得读取用户已有 `~/.cursor`、Cursor.app 的 `state.vscdb`、macOS Keychain 或浏览器 Cookie；登录输出中的邮箱不得写入日志，令牌不得进入 `state.json`、前端状态、事件或错误消息。Cursor 额度接口未公开文档，界面必须标注为实验性，失败时保留上次成功快照并提示重新登录，不做自动重试风暴。
 - 状态文件是脱敏数据，不是凭证；不要把它改成日志、调试导出或可分享格式。
 - 应用内更新的 minisign 私钥只保存在 GitHub Secrets 与发布者的离线备份中，不得进入仓库、日志、构建产物或应用数据目录；公钥可以公开。
 
@@ -57,6 +58,7 @@
 - 打包只产出：免安装单文件 exe（`--no-bundle`）与 NSIS 安装器（`tauri.windows.conf.json` 把 `bundle.targets` 固定为 `["nsis"]`）。**不产出、不发布 MSI**。
 - Codex 登录回调端口由上游固定为 1455（1457 仅在占用时回退），本应用不能改；遇到 `os error 10013` 只提示用户释放端口，不要尝试修改 CLI 行为。
 - 悬浮球与弹层在 Windows 上通过 `GetWindowLongPtrW` / `SetWindowLongPtrW` 加 `WS_EX_TOOLWINDOW`，球再加 `WS_EX_NOACTIVATE`；弹层需要 `set_focus` 才能收到 Esc 与失焦。透明窗口的渲染、拖动与多显示器吸附必须在 Windows 实机验证。
+- Cursor 的隔离登录依赖 `USERPROFILE` / `APPDATA` 覆盖与 `AGENT_CLI_CREDENTIAL_STORE=file`；官方 Windows 安装器把 CLI 放在 `%LOCALAPPDATA%\cursor-agent`，查找时要在 PATH 之外回退到该目录；取消或超时必须按进程树终止（`cmd.exe → powershell.exe → node.exe`），不能只杀直接子进程。目前只在 macOS 实机验证过，Windows 上的登录与额度查询仍需平台内验证，未验证前不要宣称 Windows 可用。
 
 ### macOS
 
@@ -109,7 +111,7 @@
 
 ## 7. 明确不做
 
-- 不读取浏览器 Cookie、系统钥匙串或其他工具的内部凭证文件来替代官方授权；本机登录态只通过工具官方 CLI 命令读取（Codex app-server、`opencode auth export`、`agy /usage`），或在工具官方登录页完成授权后由应用接收 / 轮询一次性令牌（百炼控制台回环回调、WorkBuddy 设备码轮询）。
+- 不读取浏览器 Cookie、系统钥匙串或其他工具的内部凭证文件来替代官方授权；本机登录态只通过工具官方 CLI 命令读取（Codex app-server、`opencode auth export`、`agy /usage`、`cursor-agent login`），或在工具官方登录页完成授权后由应用接收 / 轮询一次性令牌（百炼控制台回环回调、WorkBuddy 设备码轮询）。Cursor 的唯一例外是读取应用自己以隔离 `HOME` 启动的 `cursor-agent login` 写出的 `.cursor/auth.json`；不读取用户已有 Cursor 凭证或浏览器 Cookie。
 - 不把「检查到新版本」实现为静默下载或静默安装；后台只做版本检查，下载与安装必须由用户在界面上分别确认。
 - Windows 免安装单文件 exe 不做原地替换（没有安装目录可交换），只提供发布页跳转；应用内更新仅面向 NSIS 安装版，通过注册表 `InstallLocation` 与当前 exe 路径判断安装形态。
 - 不为尚未确认的平台/套餐预建复杂抽象层。

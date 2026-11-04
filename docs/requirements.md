@@ -1,7 +1,7 @@
 # Token Refill 需求文档
 
 - 文档版本：0.17
-- 状态：首版产品范围已收敛；Codex、百炼、WorkBuddy、OpenCode Go、Command Code 与 Antigravity 额度查询、多账户授权、统一刷新状态层、菜单栏快速查看、版本检查与应用内更新已实现
+- 状态：首版产品范围已收敛；Codex、百炼、WorkBuddy、OpenCode Go、Command Code、Antigravity 与 Cursor 额度查询、多账户授权、统一刷新状态层、菜单栏快速查看、版本检查与应用内更新已实现
 - 最近更新：2026-11-03
 
 ## 1. 编写说明
@@ -25,6 +25,7 @@
 - 百炼 Token Plan 个人版与 Coding Plan 中国站已通过控制台浏览器授权接入：应用在本机回环地址接收控制台令牌并存入私有目录，分别查询两类订阅额度；不依赖 `bl` CLI，也不读取其配置。
 - WorkBuddy 已通过官方登录页授权接入：应用向官方接口申请一次性 `state` 与登录页地址，用户在系统浏览器完成登录后由 Rust 轮询获取访问令牌；按官方 `CreditGroups` 分别展示套餐基础、套餐赠送、购买与平台奖励 Credits，各自读取重置或最近到期时间。访问令牌过期时使用 refresh token 自动续期，不读取浏览器 Cookie 或 WorkBuddy 本地凭证。
 - OpenCode Go 与 Command Code 使用用户填写的 API Key，验证成功后才保存到 `api-profiles/<accountId>/credentials.json`；Antigravity 通过本机 `agy -p /usage --output-format json` 读取官方打印结果，不读取其钥匙串、令牌文件或浏览器会话。
+- Cursor 已通过官方 Cursor Agent CLI 接入：每个账户使用隔离的 `HOME` 启动 `agent login`，强制 `AGENT_CLI_CREDENTIAL_STORE=file`，只读取该目录下的 `.cursor/auth.json` 并调用 `api2.cursor.sh` 的套餐用量接口；不读取用户已有 `~/.cursor`、Cursor.app 数据、Keychain 或浏览器 Cookie。接口未公开文档，界面标注为实验性。
 - 菜单栏常驻已实现：左键打开快速查看面板，右键菜单提供打开主窗口、查看额度与退出；关闭管理窗口只隐藏，应用继续后台刷新；macOS 同时隐藏 Dock 图标与 Cmd+Tab 条目，打开主窗口时恢复。
 - 系统级凭证安全存储尚未实现（当前授权材料位于应用数据目录的私有文件）。
 - macOS 打包最低版本配置为 12.0，不代表已验证兼容。
@@ -230,3 +231,4 @@
 | DEC-028 | 中转站扫描改为手动入口：扫描 cc-switch 保存的 provider（Claude Code / Codex）与 Claude Code / Codex 当前配置，只列候选、不联网、不自动登记；用户勾选确认后才查询额度并加入列表 | 用户要求改造 cc-switch 配置扫描，并确认“列出候选、勾选导入” | REQ-003、REQ-004；cc-switch 数据库只读打开，扫描到的密钥不复制到应用目录；导入后只保存来源引用，启动与刷新时重新读取源配置 |
 | DEC-029 | 标题栏按平台分治：macOS 保留 Overlay 原生标题栏，Windows 关闭系统装饰并由前端自绘标题栏，Windows 运行时在 `setup()` 中 `set_decorations(false)` | 用户明确要求 macOS 只用原生标题栏，新增自绘栏是为了 Windows 标题栏与界面一体化 | REQ-005、REQ-007；平台配置走 JSON Merge Patch 不能只覆盖单个窗口，故用运行时而非 `tauri.windows.conf.json`；自绘栏需实机验证 Windows 拖拽、缩放与贴靠布局 |
 | DEC-030 | WorkBuddy 采用官方登录页 + 设备码轮询授权：应用申请 `state` 与登录页地址，用户在系统浏览器登录后由 Rust 轮询获取令牌并保存到 `workbuddy-profiles/<accountId>/credentials.json`；只查询 Credits 周期额度，访问令牌过期时用 refresh token 续期 | 用户要求像百炼一样通过官方页面授权接入，并确认先做最小可用实现 | REQ-001 至 REQ-004；不读取浏览器 Cookie、系统钥匙串或 WorkBuddy 本地凭证；接口未公开文档，需在真实账户上验证额度字段与续期行为 |
+| DEC-031 | Cursor 个人版采用“隔离 HOME + 官方 `agent login` + file credential store”：只读取应用自己创建的 `cursor-profiles/<accountId>/.cursor/auth.json`，用 Bearer 调 `GetCurrentPeriodUsage`；不读取用户现有 Cursor 登录、Cursor.app 数据或浏览器 Cookie | 用户确认可为 Cursor 个人版开特例，并完成隔离登录与额度接口实测 | REQ-001 至 REQ-004；接口未公开文档，需按实验性功能标注；`AGENT_CLI_CREDENTIAL_STORE=file` 必须用于每次 CLI 调用；Windows 路径与行为尚未实机验证 |
