@@ -15,6 +15,7 @@ import {
   addApiKeyAccount as addApiKeyAccountCommand,
   beginAccountLogin,
   beginBailianLogin as beginBailianLoginCommand,
+  beginCursorLogin as beginCursorLoginCommand,
   beginWorkbuddyLogin as beginWorkbuddyLoginCommand,
   cancelAccountLogin,
   checkForUpdate,
@@ -88,6 +89,10 @@ interface AppStateContextValue {
     displayName?: string,
   ) => Promise<LoginAttempt>;
   beginWorkbuddyLogin: (
+    accountId?: string,
+    displayName?: string,
+  ) => Promise<LoginAttempt>;
+  beginCursorLogin: (
     accountId?: string,
     displayName?: string,
   ) => Promise<LoginAttempt>;
@@ -396,6 +401,19 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [desktop],
   );
 
+  const beginCursorLogin = useCallback(
+    async (accountId?: string, displayName?: string): Promise<LoginAttempt> => {
+      if (!desktop) return { start: null, error: '浏览器预览无法发起桌面授权。' };
+      try {
+        const start = await beginCursorLoginCommand(accountId, displayName);
+        return { start, error: null };
+      } catch (err) {
+        return { start: null, error: errorMessage(err) };
+      }
+    },
+    [desktop],
+  );
+
   const addApiKeyAccount = useCallback(
     async (platform: string, displayName: string | undefined, apiKey: string) => {
       if (!desktop) return '浏览器预览无法调用桌面接口。';
@@ -561,6 +579,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       beginLogin,
       beginBailianLogin,
       beginWorkbuddyLogin,
+      beginCursorLogin,
       addApiKeyAccount,
       replaceApiKey,
       addAntigravityAccount,
@@ -587,6 +606,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       beginLogin,
       beginBailianLogin,
       beginWorkbuddyLogin,
+      beginCursorLogin,
       addApiKeyAccount,
       replaceApiKey,
       addAntigravityAccount,

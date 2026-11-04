@@ -39,6 +39,7 @@ macOS 安装包采用 ad-hoc 签名，尚未公证。Windows 安装版与便携�
 | OpenCode&nbsp;Go | API Key |
 | Command&nbsp;Code | API Key |
 | Google&nbsp;Antigravity | 沿用本机 Antigravity CLI（`agy`）登录态 |
+| Cursor | 通过官方 Cursor Agent CLI 在独立目录中登录，读取套餐用量百分比；不读取现有 Cursor 登录、浏览器 Cookie 或 Cursor.app 数据（实验性，额度接口未公开文档） |
 | New&nbsp;API&nbsp;/&nbsp;Sub2API | 在「中转站」手动添加，或从 cc-switch、Claude Code、Codex 的现有配置扫描并勾选导入 |
 
 ## 开始使用
