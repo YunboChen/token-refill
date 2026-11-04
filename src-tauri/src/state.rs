@@ -995,11 +995,9 @@ fn opencode_snapshot(usage: &OpencodeUsage) -> QuotaSnapshot {
 }
 
 /// Cursor 的套餐用量只有百分比，没有金额上限；计费周期两端齐全时才派生窗口时长。
+/// 总用量不单独展示：模型窗口齐全时只列模型，只有总比例时回退到总用量。
 fn cursor_snapshot(usage: &CursorUsage) -> QuotaSnapshot {
     let mut capability_gaps = Vec::new();
-    if usage.total_percent_used.is_none() {
-        capability_gaps.push("Cursor 未返回总用量比例".to_string());
-    }
     if usage.cycle_end_epoch.is_none() {
         capability_gaps.push("Cursor 未返回计费周期重置时间".to_string());
     }
@@ -1008,8 +1006,7 @@ fn cursor_snapshot(usage: &CursorUsage) -> QuotaSnapshot {
         _ => None,
     };
 
-    let windows = [
-        ("total", "总用量", usage.total_percent_used),
+    let mut windows: Vec<QuotaWindow> = [
         ("auto", "Cursor 模型", usage.auto_percent_used),
         ("api", "第三方模型", usage.api_percent_used),
     ]
@@ -1032,6 +1029,48 @@ fn cursor_snapshot(usage: &CursorUsage) -> QuotaSnapshot {
         })
     })
     .collect();
+
+    if windows.is_empty() {
+        // `parse_usage` 已保证三种比例至少返回一种，走到这里时总用量必然存在。
+        if let Some(total) = usage.total_percent_used {
+            windows.push(QuotaWindow {
+                window_id: "cursor-total".to_string(),
+                source_window_id: "total".to_string(),
+                window_name: Some("总用量".to_string()),
+                unit: "percent".to_string(),
+                used_percent: Some(total),
+                remaining_percent: Some(clamp_percent(100 - total)),
+                used_amount: None,
+                total_amount: None,
+                remaining_amount: None,
+                window_duration_mins: duration_mins,
+                resets_at_epoch: usage.cycle_end_epoch,
+                expires_at_epoch: None,
+            });
+        }
+    }
+
+    // Grok Bot 是独立的周额度，重置时间与计费周期无关。
+    if let Some(bot) = &usage.grok_bot {
+        let bot_duration_mins = match (bot.period_start_epoch, bot.period_end_epoch) {
+            (Some(start), Some(end)) if end > start => Some((end - start) / 60),
+            _ => Some(10_080),
+        };
+        windows.push(QuotaWindow {
+            window_id: "cursor-grok-bot".to_string(),
+            source_window_id: "grok-bot".to_string(),
+            window_name: Some("Grok Bot".to_string()),
+            unit: "percent".to_string(),
+            used_percent: Some(bot.percent_used),
+            remaining_percent: Some(clamp_percent(100 - bot.percent_used)),
+            used_amount: None,
+            total_amount: None,
+            remaining_amount: None,
+            window_duration_mins: bot_duration_mins,
+            resets_at_epoch: bot.period_end_epoch,
+            expires_at_epoch: None,
+        });
+    }
 
     QuotaSnapshot {
         checked_at_epoch: usage.checked_at_epoch,
@@ -6083,14 +6122,15 @@ mod tests {
     }
 
     #[test]
-    fn cursor_snapshot_maps_percentages_and_billing_cycle() {
+    fn cursor_snapshot_skips_total_when_model_windows_exist() {
         let usage = CursorUsage {
             checked_at_epoch: 1_792_759_583,
             total_percent_used: Some(25),
             auto_percent_used: Some(10),
-            api_percent_used: None,
+            api_percent_used: Some(40),
             cycle_start_epoch: Some(1_792_728_069),
             cycle_end_epoch: Some(1_795_406_469),
+            grok_bot: None,
         };
 
         let snapshot = cursor_snapshot(&usage);
@@ -6098,20 +6138,72 @@ mod tests {
         assert_eq!(snapshot.groups[0].limit_id.as_deref(), Some("cursor-plan"));
         assert_eq!(snapshot.groups[0].windows.len(), 2);
 
-        let total = &snapshot.groups[0].windows[0];
-        assert_eq!(total.used_percent, Some(25));
-        assert_eq!(total.remaining_percent, Some(75));
-        assert_eq!(total.resets_at_epoch, Some(1_795_406_469));
-        assert_eq!(total.window_duration_mins, Some(44_640));
-
-        let auto = &snapshot.groups[0].windows[1];
+        let auto = &snapshot.groups[0].windows[0];
+        assert_eq!(auto.window_name.as_deref(), Some("Cursor 模型"));
         assert_eq!(auto.used_percent, Some(10));
         assert_eq!(auto.remaining_percent, Some(90));
+        assert_eq!(auto.resets_at_epoch, Some(1_795_406_469));
+        assert_eq!(auto.window_duration_mins, Some(44_640));
+
+        let api = &snapshot.groups[0].windows[1];
+        assert_eq!(api.window_name.as_deref(), Some("第三方模型"));
+        assert_eq!(api.used_percent, Some(40));
         assert!(snapshot.capability_gaps.is_empty());
     }
 
     #[test]
-    fn cursor_snapshot_records_missing_reset_without_filling_zero() {
+    fn cursor_snapshot_appends_grok_bot_weekly_window() {
+        let usage = CursorUsage {
+            checked_at_epoch: 1_792_759_583,
+            total_percent_used: Some(25),
+            auto_percent_used: Some(10),
+            api_percent_used: Some(40),
+            cycle_start_epoch: Some(1_792_728_069),
+            cycle_end_epoch: Some(1_795_406_469),
+            grok_bot: Some(crate::cursor::GrokBotUsage {
+                percent_used: 1,
+                period_start_epoch: Some(1_792_728_069),
+                period_end_epoch: Some(1_793_332_869),
+            }),
+        };
+
+        let snapshot = cursor_snapshot(&usage);
+        let windows = &snapshot.groups[0].windows;
+        assert_eq!(windows.len(), 3);
+
+        let bot = &windows[2];
+        assert_eq!(bot.window_id, "cursor-grok-bot");
+        assert_eq!(bot.window_name.as_deref(), Some("Grok Bot"));
+        assert_eq!(bot.used_percent, Some(1));
+        assert_eq!(bot.remaining_percent, Some(99));
+        assert_eq!(bot.resets_at_epoch, Some(1_793_332_869));
+        assert_eq!(bot.window_duration_mins, Some(10_080));
+    }
+
+    #[test]
+    fn cursor_snapshot_uses_weekly_duration_when_bot_period_is_missing() {
+        let usage = CursorUsage {
+            checked_at_epoch: 1_792_759_583,
+            total_percent_used: Some(25),
+            auto_percent_used: Some(10),
+            api_percent_used: None,
+            cycle_start_epoch: None,
+            cycle_end_epoch: None,
+            grok_bot: Some(crate::cursor::GrokBotUsage {
+                percent_used: 30,
+                period_start_epoch: None,
+                period_end_epoch: None,
+            }),
+        };
+
+        let snapshot = cursor_snapshot(&usage);
+        let bot = &snapshot.groups[0].windows[1];
+        assert_eq!(bot.window_duration_mins, Some(10_080));
+        assert_eq!(bot.resets_at_epoch, None);
+    }
+
+    #[test]
+    fn cursor_snapshot_falls_back_to_total_and_records_missing_reset() {
         let usage = CursorUsage {
             checked_at_epoch: 1_792_759_583,
             total_percent_used: Some(5),
@@ -6119,10 +6211,15 @@ mod tests {
             api_percent_used: None,
             cycle_start_epoch: None,
             cycle_end_epoch: None,
+            grok_bot: None,
         };
 
         let snapshot = cursor_snapshot(&usage);
         assert_eq!(snapshot.groups[0].windows.len(), 1);
+        assert_eq!(
+            snapshot.groups[0].windows[0].window_name.as_deref(),
+            Some("总用量")
+        );
         assert_eq!(snapshot.groups[0].windows[0].resets_at_epoch, None);
         assert_eq!(
             snapshot.capability_gaps,

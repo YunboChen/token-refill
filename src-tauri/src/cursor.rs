@@ -6,7 +6,9 @@
 //! `~/.cursor`、Cursor.app 的 `state.vscdb` 或浏览器 Cookie。
 //!
 //! 额度接口是 Cursor 桌面端使用的 `GetCurrentPeriodUsage`，未公开文档；只解析
-//! 套餐用量百分比与计费周期。令牌、响应正文与登录输出都不进入错误消息或日志。
+//! 套餐用量百分比与计费周期。Grok Bot（内部代号 Sand）有独立的周额度，
+//! 通过 `GetSandUsageStatus` 单独读取，失败时只隐藏该窗口，不影响套餐额度。
+//! 令牌、响应正文与登录输出都不进入错误消息或日志。
 
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -26,7 +28,10 @@ use crate::quota::now_epoch;
 use crate::usage_api::{post_json, ProviderError};
 
 const USAGE_URL: &str = "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
+const GROK_BOT_USAGE_URL: &str =
+    "https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const GROK_BOT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const LOGIN_URL_TIMEOUT: Duration = Duration::from_secs(20);
 const WAIT_POLL: Duration = Duration::from_millis(200);
 const MAX_AUTH_BYTES: u64 = 64 * 1024;
@@ -39,6 +44,15 @@ pub struct CursorUsage {
     pub api_percent_used: Option<i64>,
     pub cycle_start_epoch: Option<i64>,
     pub cycle_end_epoch: Option<i64>,
+    pub grok_bot: Option<GrokBotUsage>,
+}
+
+/// Grok Bot（内部代号 Sand）的周额度；只有套餐内附带该额度时才有值。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrokBotUsage {
+    pub percent_used: i64,
+    pub period_start_epoch: Option<i64>,
+    pub period_end_epoch: Option<i64>,
 }
 
 /// 浏览器授权流程的公开信息：只含流程标识与登录 URL。
@@ -69,7 +83,22 @@ pub fn read_usage(profile: &Path) -> Result<CursorUsage, ProviderError> {
         None => ProviderError::new("network", error.message),
     })?;
 
-    parse_usage(&payload, now_epoch())
+    let mut usage = parse_usage(&payload, now_epoch())?;
+    usage.grok_bot = read_grok_bot_usage(&token);
+    Ok(usage)
+}
+
+/// Grok Bot 额度是可选窗口：请求失败或套餐不含该额度时返回 `None`，不影响主额度。
+fn read_grok_bot_usage(token: &str) -> Option<GrokBotUsage> {
+    let payload = post_json(
+        GROK_BOT_USAGE_URL,
+        token,
+        "{}",
+        GROK_BOT_REQUEST_TIMEOUT,
+        &[("Connect-Protocol-Version", "1")],
+    )
+    .ok()?;
+    parse_grok_bot_usage(&payload)
 }
 
 fn parse_usage(payload: &Value, checked_at_epoch: i64) -> Result<CursorUsage, ProviderError> {
@@ -95,6 +124,38 @@ fn parse_usage(payload: &Value, checked_at_epoch: i64) -> Result<CursorUsage, Pr
         api_percent_used: api,
         cycle_start_epoch: epoch_value(payload.get("billingCycleStart")),
         cycle_end_epoch: epoch_value(payload.get("billingCycleEnd")),
+        grok_bot: None,
+    })
+}
+
+/// 解析 `GetSandUsageStatus`。
+///
+/// 企业共享额度（`usesPooledEnterpriseAllowance`）与未附带额度的套餐没有个人可显示
+/// 的周用量条，保持隐藏；字段缺失时不做猜测。
+fn parse_grok_bot_usage(payload: &Value) -> Option<GrokBotUsage> {
+    let object = payload.as_object()?;
+    if object
+        .get("usesPooledEnterpriseAllowance")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        return None;
+    }
+    if object
+        .get("hasNonZeroIncludedLimit")
+        .and_then(Value::as_bool)
+        == Some(false)
+    {
+        return None;
+    }
+    if object.get("includedLimitZero").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+
+    Some(GrokBotUsage {
+        percent_used: percent(object.get("usagePercent"))?,
+        period_start_epoch: epoch_value(object.get("currentPeriodStart")),
+        period_end_epoch: epoch_value(object.get("nextResetTimestampUtc")),
     })
 }
 
@@ -532,6 +593,44 @@ mod tests {
     fn parse_usage_requires_a_percentage() {
         let payload = json!({ "planUsage": { "totalPercentUsed": null } });
         assert_eq!(parse_usage(&payload, 100).unwrap_err().code, "decode");
+    }
+
+    #[test]
+    fn parse_grok_bot_usage_reads_weekly_percent_and_reset() {
+        let payload = json!({
+            "currentPeriodStart": "2026-11-03T00:00:00Z",
+            "nextResetTimestampUtc": "2026-11-10T00:00:00Z",
+            "usagePercent": 0.4,
+            "hasAvailableUsage": true,
+            "hasNonZeroIncludedLimit": true,
+            "grokPlanLabel": "Grok Bot Plan"
+        });
+        let bot = parse_grok_bot_usage(&payload).unwrap();
+        assert_eq!(bot.percent_used, 1);
+        assert_eq!(bot.period_start_epoch, Some(1_793_664_000));
+        assert_eq!(bot.period_end_epoch, Some(1_794_268_800));
+    }
+
+    #[test]
+    fn parse_grok_bot_usage_hides_plans_without_included_allowance() {
+        let no_limit = json!({ "usagePercent": 10, "hasNonZeroIncludedLimit": false });
+        assert!(parse_grok_bot_usage(&no_limit).is_none());
+
+        let zero_limit = json!({ "usagePercent": 10, "includedLimitZero": true });
+        assert!(parse_grok_bot_usage(&zero_limit).is_none());
+
+        let pooled = json!({
+            "usagePercent": 10,
+            "hasNonZeroIncludedLimit": true,
+            "usesPooledEnterpriseAllowance": true
+        });
+        assert!(parse_grok_bot_usage(&pooled).is_none());
+    }
+
+    #[test]
+    fn parse_grok_bot_usage_requires_a_percent() {
+        let payload = json!({ "hasNonZeroIncludedLimit": true });
+        assert!(parse_grok_bot_usage(&payload).is_none());
     }
 
     #[test]
