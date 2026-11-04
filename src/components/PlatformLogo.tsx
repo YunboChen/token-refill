@@ -1,4 +1,5 @@
 import { useId } from 'react';
+import senseNovaMark from '../assets/sensenova-mark.png';
 import styles from '../App.module.css';
 
 /**
@@ -328,6 +329,18 @@ interface PlatformLogoProps {
 }
 
 export default function PlatformLogo({ platform, fallback }: PlatformLogoProps) {
+  if (platform === 'sensenova') {
+    return (
+      <img
+        className={styles.platformLogo}
+        src={senseNovaMark}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+      />
+    );
+  }
+
   if (platform === 'antigravity') {
     return <AntigravityLogo />;
   }
