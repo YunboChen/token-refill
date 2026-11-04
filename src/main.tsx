@@ -1,6 +1,8 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { domAnimation, LazyMotion, MotionConfig } from 'motion/react';
+// Reorder 的拖动依赖 drag / layout 特性，domAnimation 不包含这两项；
+// 用 domMax 才能让总览与菜单栏面板的拖动排序生效。
+import { domMax, LazyMotion, MotionConfig } from 'motion/react';
 import App from './App';
 import TrayPanel from './panels/TrayPanel';
 import FloatingBall from './panels/FloatingBall';
@@ -41,7 +43,7 @@ function Root() {
   useThemeSync();
   return (
     <StrictMode>
-      <LazyMotion features={domAnimation} strict>
+      <LazyMotion features={domMax} strict>
         <MotionConfig
           reducedMotion="user"
           transition={{ type: 'spring', stiffness: 380, damping: 30 }}
