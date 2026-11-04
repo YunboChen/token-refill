@@ -1,7 +1,7 @@
 # Token Refill 软件设计文档
 
 - 文档版本：0.19
-- 状态：已实现 Codex、百炼、WorkBuddy、OpenCode Go、Command Code、Antigravity 与 Cursor 额度查询、多账户接入、统一状态层、后台刷新调度、菜单栏快速查看、桌面悬浮球与应用内更新
+- 状态：已实现 Codex、百炼、WorkBuddy、OpenCode Go、Command Code、Antigravity、Cursor 与 Kiro 额度查询、多账户接入、统一状态层、后台刷新调度、菜单栏快速查看、桌面悬浮球与应用内更新
 - 最近更新：2026-11-04
 - 需求来源：[需求文档](./requirements.md)
 
@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | 前端界面 | 总览（订阅账户额度 / 中转站账户额度）、账户、中转站账户管理、设置四页；读取统一状态并订阅变更事件 | `src/panels/` |
 | 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences`、`set_overview_order`、`set_relay_order`、账户授权/改名/移除命令、中转站查询/编辑/刷新/移除/访问令牌/标题命令与 `app-state-changed`、`account-login-changed` 事件；中转站账户由 `RelayProvider` 在总览与管理页之间共享 | `src/lib/desktop.ts`、`src/lib/store.tsx`、`src/lib/relay.tsx` |
-| 本地后端 | Rust 状态存储、后台刷新调度、Codex/百炼/WorkBuddy/OpenCode Go/Command Code/Antigravity/Cursor 适配器、中转网关密钥额度适配器、中转站凭证存储与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/bailian.rs`、`src-tauri/src/workbuddy.rs`、`src-tauri/src/opencode.rs`、`src-tauri/src/commandcode.rs`、`src-tauri/src/antigravity.rs`、`src-tauri/src/cursor.rs`、`src-tauri/src/quota/`、`src-tauri/src/relay.rs`、`src-tauri/src/discovery.rs` |
+| 本地后端 | Rust 状态存储、后台刷新调度、Codex/百炼/WorkBuddy/OpenCode Go/Command Code/Antigravity/Cursor/Kiro 适配器、中转网关密钥额度适配器、中转站凭证存储与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/bailian.rs`、`src-tauri/src/workbuddy.rs`、`src-tauri/src/opencode.rs`、`src-tauri/src/commandcode.rs`、`src-tauri/src/antigravity.rs`、`src-tauri/src/cursor.rs`、`src-tauri/src/kiro.rs`、`src-tauri/src/quota/`、`src-tauri/src/relay.rs`、`src-tauri/src/discovery.rs` |
 | 桌面配置 | 窗口、构建、安全策略及打包配置 | `src-tauri/tauri.conf.json` |
 | 权限声明 | 窗口权限与事件监听权限 | `src-tauri/capabilities/` |
 
@@ -33,7 +33,9 @@ WorkBuddy 账户属于独立授权账户：Rust 先向官方接口申请一次�
 
 Cursor 个人订阅账户属于独立授权账户：Rust 为每个账户使用 `cursor-profiles/<accountId>/` 作为子进程的独立 `HOME`，以 `AGENT_CLI_CREDENTIAL_STORE=file`、`NO_OPEN_BROWSER=1` 启动官方 Cursor Agent CLI 的 `agent login`，从 stdout 解析并校验 `https://cursor.com/loginDeepControl?...` 登录地址，再交给系统浏览器。登录完成后只读取该目录下的 `.cursor/auth.json`，每次刷新重新读取 `accessToken`，用 Bearer 调用 `POST https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage`（附 `Connect-Protocol-Version: 1`），解析 `planUsage.totalPercentUsed / autoPercentUsed / apiPercentUsed` 与 `billingCycleStart / billingCycleEnd`；界面只展示 `autoPercentUsed`（Cursor 模型）与 `apiPercentUsed`（第三方模型），只有总比例时回退到总用量。套餐包含 Grok Bot 周额度时，再调用 `GetSandUsageStatus` 解析 `usagePercent` 与 `currentPeriodStart / nextResetTimestampUtc`，作为独立的周额度窗口展示；企业共享额度（`usesPooledEnterpriseAllowance`）或未附带额度的套餐不显示该窗口，该请求失败也只隐藏窗口，不影响主额度。令牌不复制到 `PersistedState`、不进入前端、事件或日志；登录输出中的邮箱也不写入日志。不读取用户已有 `~/.cursor`、Cursor.app 的 `state.vscdb`、Keychain 或浏览器 Cookie。该接口未公开文档，属于实验性接入：401/403 标记需要重新登录，其他失败保留上次成功快照。
 
-启动后 Rust 会在后台探测本机已有登录态：OpenCode 调用官方 `opencode auth export`，存在活动 API Key 时自动创建“本机 OpenCode”账户，并在每次刷新时重新读取 CLI 凭据；Antigravity 先确认 `agy` 可执行，再实际读取一次 `/usage`，成功才创建“本机 Antigravity”账户。未探测到时不创建账户，保持“添加账户”的手动流程。探测只使用官方 CLI 命令，不直接解析 SQLite、钥匙串或浏览器 Cookie。Cursor 不参与自动探测，只通过账户页显式发起隔离登录，避免读取用户已有的 `~/.cursor` 登录态。
+Kiro 是本机账户，只有单个“本机 Kiro”账户：Rust 启动 `kiro-cli acp --agent-engine v3`，按行读写 JSON-RPC，先 `initialize` 再调用 `_kiro/account/getUsage`（与 CLI 自己 `/usage` 界面同源），总预算 45 秒以覆盖 v3 引擎约 10 秒的冷启动；旧版 CLI 没有该引擎时，回退到把 `/usage\n/quit\n` 写入普通 `kiro-cli` 标准输入并解析屏幕文本。额度映射为月度套餐 Credits（`usageBreakdowns`，`hasLimit` 且 `limit > 0`）与每笔赠送额度（`bonusCredits`，按 `daysUntilExpiry` 设为到期时间，不设重置周期）；`billingCycleReset` 统一作为套餐窗口的重置日期，`planName` 进入套餐档位。应用不读取 Kiro IDE 的 `~/.aws/sso/cache/kiro-auth-token.json`、`state.vscdb`、浏览器 Cookie，也不复制、刷新或回写 CLI 令牌；CLI 输出、响应正文与令牌不进入错误消息或日志。该内部方法未公开文档，按实验性接入：未登录标记为需要重新授权，其他失败保留上次成功快照；同一时刻只允许一个 CLI 查询进程。
+
+启动后 Rust 会在后台探测本机已有登录态：OpenCode 调用官方 `opencode auth export`，存在活动 API Key 时自动创建“本机 OpenCode”账户，并在每次刷新时重新读取 CLI 凭据；Antigravity 先确认 `agy` 可执行，再实际读取一次 `/usage`，成功才创建“本机 Antigravity”账户；Kiro 先确认 `kiro-cli` 可执行，再实际读取一次额度，成功才创建“本机 Kiro”账户。未探测到时不创建账户，保持“添加账户”的手动流程。探测只使用官方 CLI 命令，不直接解析 SQLite、钥匙串或浏览器 Cookie。Cursor 不参与自动探测，只通过账户页显式发起隔离登录，避免读取用户已有的 `~/.cursor` 登录态。
 
 Antigravity 是本机账户：应用只调用 `agy -p /usage --output-format json` 读取官方打印结果，不读取 CLI 的钥匙串、令牌文件或浏览器会话。查询前校验 `agy --version` ≥ 1.1.11，并设置 `AGY_CLI_DISABLE_AUTO_UPDATE=true`；查询带超时并能主动结束未登录时等待交互的进程。返回按模型分组展示每周 / 5 小时剩余比例与重置时间。
 
@@ -321,7 +323,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 - 不能可靠识别周期或剩余比例时，记录限制并确定替代规则，不猜测阈值与重置事件。
 - 建议将必要去重状态持久化，避免应用重启后重复提醒；不为此引入历史统计或保存完整响应。
 - 低额度与失效提醒默认开启，低额度阈值默认剩余 20% 可调；重置或恢复提醒默认关闭。通知设置与系统权限分开表达，不能因开关已开启就宣称系统允许通知。
-- Codex、百炼、OpenCode Go、Command Code、Antigravity 与 Cursor 的状态更新统一维护 `reminders.authExpired[accountId]`；百炼本地凭证错误与控制台会话失效均被覆盖，只要仍有一类套餐查询成功就不误报整个账户失效。中转站尚未接入授权失效系统通知。
+- Codex、百炼、OpenCode Go、Command Code、Antigravity、Cursor 与 Kiro 的状态更新统一维护 `reminders.authExpired[accountId]`；百炼本地凭证错误与控制台会话失效均被覆盖，只要仍有一类套餐查询成功就不误报整个账户失效。中转站尚未接入授权失效系统通知。
 - 每次失效保存独立的 `noticeId`、`delivered`、`attempts` 与 `nextAttemptEpoch`，不再用 `authState` 充当发送成功回执。账户恢复、重新授权或移除后清理记录；异步发送结果只允许确认相同 `noticeId`，不能覆盖恢复后新一轮失效。
 - 调度器是授权提醒唯一发送入口，不依赖额度刷新间隔；发送前严格落盘预留下一次尝试时间，落盘失败不发送。失败间隔按 60、120、240、480、960、1920、3600 秒递增，此后封顶 3600 秒；重复查询与重启不能绕过退避。重试不重新调用第三方额度接口，不重复申请系统权限。
 - 系统确认接收后写入成功回执并跨重启去重；提醒关闭时暂停，重新开启时允许尚未成功的提醒在下一次调度尝试，但不会重发已有成功回执的提醒。正在重新授权的账户暂停发送。
@@ -369,7 +371,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 
 ## 10. IPC 与平台适配契约草案
 
-下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`set_overview_order`、`set_relay_order`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_scan`、`relay_import`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`、`download_update`、`downloaded_update_version`、`install_update`。其余仍为计划名称。
+下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`set_overview_order`、`set_relay_order`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`add_kiro_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_scan`、`relay_import`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`、`download_update`、`downloaded_update_version`、`install_update`。其余仍为计划名称。
 
 ### 10.1 前端命令边界
 
@@ -383,6 +385,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | add_api_key_account（已实现） | 平台、可选显示名、API Key | 先真实查询验证，成功后写入 `api-profiles/<accountId>/credentials.json`；密钥不回传前端 | REQ-003 |
 | replace_api_key（已实现） | 本地账户标识、新 API Key | 验证通过才覆盖凭证并更新快照；失败保留原凭证 | REQ-003 |
 | add_antigravity_account（已实现） | 可选显示名 | 登记本机 `agy` 登录态并触发后台刷新；不接收或保存令牌 | REQ-003 |
+| add_kiro_account（已实现） | 可选显示名 | 确认 `kiro-cli` 可执行后登记本机 Kiro 登录态并触发后台刷新；不接收或保存令牌 | REQ-003 |
 | remove_account（已实现） | 本地账户标识 | 移除独立授权账户及其本应用目录；本机 Codex 账户不可移除；Antigravity 仅删除账户记录 | REQ-003 |
 | refresh_usage | 全部账户或指定本地账户 | 返回任务标识或已合并的在途任务，不等待全部查询才响应；后端执行去重与限流 | REQ-004 |
 | update_preferences | 经校验的设置变更 | 保存常规设置并协调系统操作；系统拒绝通知或自启时如实返回实际状态 | REQ-004、REQ-006、REQ-010 |

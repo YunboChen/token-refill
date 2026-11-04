@@ -1,8 +1,8 @@
 # Token Refill 需求文档
 
 - 文档版本：0.17
-- 状态：首版产品范围已收敛；Codex、百炼、WorkBuddy、OpenCode Go、Command Code、Antigravity 与 Cursor 额度查询、多账户授权、统一刷新状态层、菜单栏快速查看、版本检查与应用内更新已实现
-- 最近更新：2026-11-03
+- 状态：首版产品范围已收敛；Codex、百炼、WorkBuddy、OpenCode Go、Command Code、Antigravity、Cursor 与 Kiro 额度查询、多账户授权、统一刷新状态层、菜单栏快速查看、版本检查与应用内更新已实现
+- 最近更新：2026-11-04
 
 ## 1. 编写说明
 
@@ -26,6 +26,7 @@
 - WorkBuddy 已通过官方登录页授权接入：应用向官方接口申请一次性 `state` 与登录页地址，用户在系统浏览器完成登录后由 Rust 轮询获取访问令牌；按官方 `CreditGroups` 分别展示套餐基础、套餐赠送、购买与平台奖励 Credits，各自读取重置或最近到期时间。访问令牌过期时使用 refresh token 自动续期，不读取浏览器 Cookie 或 WorkBuddy 本地凭证。
 - OpenCode Go 与 Command Code 使用用户填写的 API Key，验证成功后才保存到 `api-profiles/<accountId>/credentials.json`；Antigravity 通过本机 `agy -p /usage --output-format json` 读取官方打印结果，不读取其钥匙串、令牌文件或浏览器会话。
 - Cursor 已通过官方 Cursor Agent CLI 接入：每个账户使用隔离的 `HOME` 启动 `agent login`，强制 `AGENT_CLI_CREDENTIAL_STORE=file`，只读取该目录下的 `.cursor/auth.json` 并调用 `api2.cursor.sh` 的套餐用量接口；不读取用户已有 `~/.cursor`、Cursor.app 数据、Keychain 或浏览器 Cookie。接口未公开文档，界面标注为实验性。
+- Kiro 已通过官方 `kiro-cli` 接入：应用启动 `kiro-cli acp --agent-engine v3` 并调用 `_kiro/account/getUsage`，读取月度 Credits、赠送额度与计费周期重置时间；旧版 CLI 没有该引擎时回退到 `/usage` 屏幕输出。不读取 Kiro IDE 的 `~/.aws/sso/cache/kiro-auth-token.json`、`state.vscdb`、浏览器 Cookie，也不复制或刷新 CLI 令牌。该方法未公开文档，界面标注为实验性。
 - 菜单栏常驻已实现：左键打开快速查看面板，右键菜单提供打开主窗口、查看额度与退出；关闭管理窗口只隐藏，应用继续后台刷新；macOS 同时隐藏 Dock 图标与 Cmd+Tab 条目，打开主窗口时恢复。
 - 系统级凭证安全存储尚未实现（当前授权材料位于应用数据目录的私有文件）。
 - macOS 打包最低版本配置为 12.0，不代表已验证兼容。
@@ -232,3 +233,4 @@
 | DEC-029 | 标题栏按平台分治：macOS 保留 Overlay 原生标题栏，Windows 关闭系统装饰并由前端自绘标题栏，Windows 运行时在 `setup()` 中 `set_decorations(false)` | 用户明确要求 macOS 只用原生标题栏，新增自绘栏是为了 Windows 标题栏与界面一体化 | REQ-005、REQ-007；平台配置走 JSON Merge Patch 不能只覆盖单个窗口，故用运行时而非 `tauri.windows.conf.json`；自绘栏需实机验证 Windows 拖拽、缩放与贴靠布局 |
 | DEC-030 | WorkBuddy 采用官方登录页 + 设备码轮询授权：应用申请 `state` 与登录页地址，用户在系统浏览器登录后由 Rust 轮询获取令牌并保存到 `workbuddy-profiles/<accountId>/credentials.json`；只查询 Credits 周期额度，访问令牌过期时用 refresh token 续期 | 用户要求像百炼一样通过官方页面授权接入，并确认先做最小可用实现 | REQ-001 至 REQ-004；不读取浏览器 Cookie、系统钥匙串或 WorkBuddy 本地凭证；接口未公开文档，需在真实账户上验证额度字段与续期行为 |
 | DEC-031 | Cursor 个人版采用“隔离 HOME + 官方 `agent login` + file credential store”：只读取应用自己创建的 `cursor-profiles/<accountId>/.cursor/auth.json`，用 Bearer 调 `GetCurrentPeriodUsage`；不读取用户现有 Cursor 登录、Cursor.app 数据或浏览器 Cookie | 用户确认可为 Cursor 个人版开特例，并完成隔离登录与额度接口实测 | REQ-001 至 REQ-004；接口未公开文档，需按实验性功能标注；`AGENT_CLI_CREDENTIAL_STORE=file` 必须用于每次 CLI 调用；Windows 路径与行为尚未实机验证 |
+| DEC-032 | Kiro 只做本机单账户，通过官方 `kiro-cli acp --agent-engine v3` 的 `_kiro/account/getUsage` 读取额度；旧版 CLI 回退 `/usage` 屏幕解析；不读取 Kiro IDE 的令牌文件、`state.vscdb` 或浏览器 Cookie | 用户确认“直接走单个用户”，接受安装并登录 `kiro-cli` 作为使用前提 | REQ-001 至 REQ-004；CLI 内部方法未公开文档，按实验性标注；CLI 冷启动约 10 秒，查询在后台执行；Windows 参数与响应尚未实机验证 |

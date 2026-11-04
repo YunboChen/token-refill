@@ -18,7 +18,7 @@
   - 渠道由 Rust `channel.rs` 按 identifier 是否以 `.test` 结尾判定；前端只消费 `get_app_info().channel`。测试配置不得自带 `version`，正式配置不得使用测试 identifier 或 prerelease 版本（CI 两侧都有断言）。
   - 本地 `pnpm tauri:dev:test` 使用测试标识，可与已安装的正式版同时运行；它与 CI 测试包共用测试数据目录和单实例锁，不要同时启动。
   - 两个版本共用上游 Codex OAuth 的固定回调端口 1455/1457，不要同时发起 Codex 授权；百炼回调使用临时端口，无此限制。
-- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 / WorkBuddy / OpenCode Go / Command Code / Antigravity 额度查询、中转站（New API / Sub2API）密钥与账户额度查询、从 cc-switch 与 Claude Code / Codex 当前配置手动扫描并勾选导入中转站候选、菜单栏常驻与快速查看面板、桌面悬浮球（默认关闭，设置中开启）、系统提醒、开机自启、版本检查、应用内下载与安装更新（仅 NSIS 安装版，下载与安装两段确认）。
+- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 / WorkBuddy / OpenCode Go / Command Code / Antigravity / Cursor / Kiro 额度查询、中转站（New API / Sub2API）密钥与账户额度查询、从 cc-switch 与 Claude Code / Codex 当前配置手动扫描并勾选导入中转站候选、菜单栏常驻与快速查看面板、桌面悬浮球（默认关闭，设置中开启）、系统提醒、开机自启、版本检查、应用内下载与安装更新（仅 NSIS 安装版，下载与安装两段确认）。
 - 尚未实现：系统级凭证存储、Windows 免安装 exe 的原地更新。
 - 菜单栏行为是产品约定：关闭主窗口只隐藏，应用继续常驻并后台刷新；退出只通过菜单栏菜单或面板中的退出入口。菜单栏面板是独立窗口 `tray-panel`（380×560 点、无边框、透明、置顶），与主窗口共用同一份状态与事件；不要把它扩展成第二个带侧栏的管理窗口。面板在配置里是 `create: false`，第一次点开才创建；面板与主窗口隐藏 60 秒后销毁 WebView 以释放内存，重新打开时重建并等待页面加载。登录流程或更新下载进行期间不得销毁主窗口（前端弹窗与进度只存在于该窗口）。销毁最后一个窗口会让系统请求退出，必须在 `RunEvent::ExitRequested` 里拦截（仅拦截“没有窗口且非程序化退出”的情况），否则应用会在空闲销毁后自行结束。
 - 窗口创建不得在托盘 / 窗口事件回调里就地执行：这些回调本身在主线程，`run_on_main_thread` 会内联执行，而创建窗口要等 WebView2 初始化（零 WebView 状态下冷启动更慢，内部还会自行泵消息），会卡住托盘菜单并让重入的点击走进创建分支。显示请求一律先转到后台线程再回主线程。
@@ -34,6 +34,7 @@
 - 移除账户只清理本应用目录，不触发源工具注销，不影响其他账户。
 - 中转站手动填写的 API Key 与 New API 访问令牌写入 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 按用户 ACL），先写临时文件再原子替换；只保存用户主动填写的凭证。从 cc-switch、Claude Code / Codex 配置扫描到的密钥不得复制到应用目录；勾选导入后只能在 `relay-profiles/<relayId>/source.json` 保存来源引用（来源、provider id、地址、provider 类型与用户主动填写的访问令牌），启动时按引用重新读取源配置，取不到就跳过该账户。扫描只列候选、不联网，必须由用户勾选确认后才查询额度。cc-switch 的 `~/.cc-switch/cc-switch.db` 只能只读打开，不修改、不迁移、不复制其中的数据。New API 访问令牌只用于 `/api/user/self` 与 `/api/subscription/self`，不进入前端状态、日志或错误消息；旧版单令牌需要的 `New-Api-User` 用户 ID 与令牌一并保存，只作为请求头发送，不写入日志。
 - Cursor 的例外边界仅限：应用以隔离的 `HOME` 启动官方 `cursor-agent login`（强制 `AGENT_CLI_CREDENTIAL_STORE=file`），只读取该隔离目录下由这次登录写出的 `.cursor/auth.json` 中的 `accessToken`，用于调用 `api2.cursor.sh` 的额度接口。不得读取用户已有 `~/.cursor`、Cursor.app 的 `state.vscdb`、macOS Keychain 或浏览器 Cookie；登录输出中的邮箱不得写入日志，令牌不得进入 `state.json`、前端状态、事件或错误消息。Cursor 额度接口未公开文档，界面必须标注为实验性，失败时保留上次成功快照并提示重新登录，不做自动重试风暴。
+- Kiro 只通过官方 CLI 读取本机登录态额度：启动 `kiro-cli acp --agent-engine v3`，用 JSON-RPC 调用 `_kiro/account/getUsage`；旧版 CLI 没有该引擎时回退到 `kiro-cli` 的 `/usage` 屏幕输出。不得读取 Kiro IDE 的 `~/.aws/sso/cache/kiro-auth-token.json`、`state.vscdb`、浏览器 Cookie，也不得复制、刷新或回写 CLI 维护的令牌。该方法未公开文档，界面必须标注为实验性；未安装、未登录或查询失败时保留上次成功快照并提示 `kiro-cli login`，不做自动重试风暴。
 - 状态文件是脱敏数据，不是凭证；不要把它改成日志、调试导出或可分享格式。
 - 应用内更新的 minisign 私钥只保存在 GitHub Secrets 与发布者的离线备份中，不得进入仓库、日志、构建产物或应用数据目录；公钥可以公开。
 
@@ -59,6 +60,7 @@
 - Codex 登录回调端口由上游固定为 1455（1457 仅在占用时回退），本应用不能改；遇到 `os error 10013` 只提示用户释放端口，不要尝试修改 CLI 行为。
 - 悬浮球与弹层在 Windows 上通过 `GetWindowLongPtrW` / `SetWindowLongPtrW` 加 `WS_EX_TOOLWINDOW`，球再加 `WS_EX_NOACTIVATE`；弹层需要 `set_focus` 才能收到 Esc 与失焦。透明窗口的渲染、拖动与多显示器吸附必须在 Windows 实机验证。
 - Cursor 的隔离登录依赖 `USERPROFILE` / `APPDATA` 覆盖与 `AGENT_CLI_CREDENTIAL_STORE=file`；官方 Windows 安装器把 CLI 放在 `%LOCALAPPDATA%\cursor-agent`，查找时要在 PATH 之外回退到该目录；取消或超时必须按进程树终止（`cmd.exe → powershell.exe → node.exe`），不能只杀直接子进程。目前只在 macOS 实机验证过，Windows 上的登录与额度查询仍需平台内验证，未验证前不要宣称 Windows 可用。
+- Kiro CLI 查找覆盖 `kiro-cli.exe` / `.cmd` / `.bat` / `.com`、继承的 PATH 与 `%LOCALAPPDATA%` 下的常见安装目录。`kiro-cli acp --agent-engine v3` 的参数兼容性与 ACP 响应仍需 Windows 实机验证，未验证前不要宣称 Windows 可用。
 
 ### macOS
 
@@ -111,7 +113,7 @@
 
 ## 7. 明确不做
 
-- 不读取浏览器 Cookie、系统钥匙串或其他工具的内部凭证文件来替代官方授权；本机登录态只通过工具官方 CLI 命令读取（Codex app-server、`opencode auth export`、`agy /usage`、`cursor-agent login`），或在工具官方登录页完成授权后由应用接收 / 轮询一次性令牌（百炼控制台回环回调、WorkBuddy 设备码轮询）。Cursor 的唯一例外是读取应用自己以隔离 `HOME` 启动的 `cursor-agent login` 写出的 `.cursor/auth.json`；不读取用户已有 Cursor 凭证或浏览器 Cookie。
+- 不读取浏览器 Cookie、系统钥匙串或其他工具的内部凭证文件来替代官方授权；本机登录态只通过工具官方 CLI 命令读取（Codex app-server、`opencode auth export`、`agy /usage`、`cursor-agent login`、`kiro-cli acp`），或在工具官方登录页完成授权后由应用接收 / 轮询一次性令牌（百炼控制台回环回调、WorkBuddy 设备码轮询）。Cursor 的唯一例外是读取应用自己以隔离 `HOME` 启动的 `cursor-agent login` 写出的 `.cursor/auth.json`；不读取用户已有 Cursor 凭证或浏览器 Cookie。
 - 不把「检查到新版本」实现为静默下载或静默安装；后台只做版本检查，下载与安装必须由用户在界面上分别确认。
 - Windows 免安装单文件 exe 不做原地替换（没有安装目录可交换），只提供发布页跳转；应用内更新仅面向 NSIS 安装版，通过注册表 `InstallLocation` 与当前 exe 路径判断安装形态。
 - 不为尚未确认的平台/套餐预建复杂抽象层。

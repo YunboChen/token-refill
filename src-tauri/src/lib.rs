@@ -8,6 +8,7 @@ mod commandcode;
 mod cursor;
 mod discovery;
 mod floating_ball;
+mod kiro;
 mod logging;
 mod notification;
 mod opencode;
@@ -225,6 +226,16 @@ fn add_antigravity_account(
 ) -> Result<PersistedState, String> {
     let store = Arc::clone(&store);
     store.add_antigravity_account(display_name.as_deref())
+}
+
+/// 接入本机 Kiro CLI 登录态；额度在后台刷新。
+#[tauri::command]
+fn add_kiro_account(
+    store: tauri::State<'_, Arc<StateStore>>,
+    display_name: Option<String>,
+) -> Result<PersistedState, String> {
+    let store = Arc::clone(&store);
+    store.add_kiro_account(display_name.as_deref())
 }
 
 #[tauri::command]
@@ -636,6 +647,7 @@ pub fn run() {
             add_api_key_account,
             replace_api_key,
             add_antigravity_account,
+            add_kiro_account,
             remove_account,
             open_external_url,
             send_test_notification,

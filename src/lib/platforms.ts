@@ -52,6 +52,14 @@ const PLATFORMS: Record<string, PlatformMeta> = {
     description: '套餐用量 · 官方 CLI 隔离登录（实验性）',
     available: true,
   },
+  kiro: {
+    key: 'kiro',
+    name: 'Kiro',
+    vendor: 'AWS',
+    mark: 'K',
+    description: 'Credits · 本机 kiro-cli 登录（实验性）',
+    available: true,
+  },
   'opencode-go': {
     key: 'opencode-go',
     name: 'OpenCode Go',
@@ -84,6 +92,7 @@ const PLATFORM_ORDER = [
   'bailian',
   'workbuddy',
   'cursor',
+  'kiro',
   'opencode-go',
   'commandcode',
   'antigravity',

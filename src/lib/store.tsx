@@ -12,6 +12,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { version as packageVersion } from '../../package.json';
 import {
   addAntigravityAccount as addAntigravityAccountCommand,
+  addKiroAccount as addKiroAccountCommand,
   addApiKeyAccount as addApiKeyAccountCommand,
   beginAccountLogin,
   beginBailianLogin as beginBailianLoginCommand,
@@ -103,6 +104,7 @@ interface AppStateContextValue {
   ) => Promise<string | null>;
   replaceApiKey: (accountId: string, apiKey: string) => Promise<string | null>;
   addAntigravityAccount: (displayName?: string) => Promise<string | null>;
+  addKiroAccount: (displayName?: string) => Promise<string | null>;
   cancelLogin: (loginId: string) => Promise<void>;
   renameAccount: (accountId: string, displayName: string) => Promise<boolean>;
   removeAccount: (accountId: string) => Promise<boolean>;
@@ -465,6 +467,23 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [desktop, applyState],
   );
 
+  const addKiroAccount = useCallback(
+    async (displayName?: string) => {
+      if (!desktop) return '浏览器预览无法调用桌面接口。';
+      try {
+        const next = await addKiroAccountCommand(displayName);
+        applyState(next);
+        setError(null);
+        return null;
+      } catch (err) {
+        const message = errorMessage(err);
+        setError(message);
+        return message;
+      }
+    },
+    [desktop, applyState],
+  );
+
   const cancelLogin = useCallback(
     async (loginId: string) => {
       if (!desktop) return;
@@ -583,6 +602,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       addApiKeyAccount,
       replaceApiKey,
       addAntigravityAccount,
+      addKiroAccount,
       cancelLogin,
       renameAccount,
       removeAccount,
@@ -610,6 +630,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       addApiKeyAccount,
       replaceApiKey,
       addAntigravityAccount,
+      addKiroAccount,
       cancelLogin,
       renameAccount,
       removeAccount,

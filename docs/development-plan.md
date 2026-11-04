@@ -43,6 +43,7 @@
 | 菜单栏常驻 | 已实现 | 菜单栏图标左键打开快速查看面板，右键菜单提供打开主窗口、查看额度与退出；关闭管理窗口只隐藏，应用继续后台刷新；macOS 同时隐藏 Dock 图标与 Cmd+Tab 条目，打开主窗口时恢复；面板按屏幕与鼠标位置定位，失焦自动收起 |
 | 桌面悬浮球 | 已实现（macOS 已本机验证） | 设置页默认关闭；60×60 置顶窗口显示当前套餐最低剩余比例，悬停详情、点击切换订阅套餐或中转站；可拖动并按屏幕边缘吸附，位置与选择持久化；macOS 用非激活 NSPanel，Windows 用 `WS_EX_NOACTIVATE` / `WS_EX_TOOLWINDOW`，Windows 实机验收待执行 |
 | 业务实现 | 进行中 | Codex 本机与独立账户链路已跑通；百炼控制台授权、Token Plan 与 Coding Plan 查询、多产品展示与刷新已接入；凭证系统级存储与限流退避仍待实现 |
+| Kiro 额度查询 | 已实现，待真实 CLI 验证 | 本机单账户通过官方 `kiro-cli acp --agent-engine v3` 的 `_kiro/account/getUsage` 读取月度 Credits 与赠送额度，旧版 CLI 回退 `/usage` 屏幕解析；不读取 Kiro IDE 令牌文件；真实 `kiro-cli` 握手与 Windows 行为待验证 |
 
 ## 3. 候选阶段
 

@@ -44,7 +44,8 @@ type DialogPlatform =
   | 'cursor'
   | 'opencode-go'
   | 'commandcode'
-  | 'antigravity';
+  | 'antigravity'
+  | 'kiro';
 
 /** 走浏览器授权流程的平台；其余平台在弹窗内直接提交凭据。 */
 type LoginPlatform = 'codex' | 'bailian' | 'workbuddy' | 'cursor';
@@ -207,6 +208,25 @@ const PLATFORM_CHOICES: Record<DialogPlatform, PlatformChoice> = {
     waitingTitle: '接入 Antigravity',
     waitingText: '正在读取本机 agy 登录态，无需在浏览器中操作。',
   },
+  kiro: {
+    addLabel: '接入本机 Kiro',
+    subtitle: 'Kiro Pro / Pro+ · 本机 kiro-cli 登录 · 实验性',
+    steps: [
+      {
+        title: '确认已登录 kiro-cli',
+        text: '需要已安装 Kiro CLI，并在终端运行过 kiro-cli login',
+      },
+      {
+        title: '读取额度',
+        text: '应用调用官方 CLI 的账户接口读取 Credits 与赠送额度，不读取 Kiro IDE 的令牌',
+      },
+    ],
+    note: '接入后跟随本机 kiro-cli 登录态，不读取 ~/.aws/sso/cache 或 Kiro IDE 数据。',
+    namePlaceholder: '留空则显示为“本机 Kiro”',
+    authorizeLabel: '接入本机 Kiro',
+    waitingTitle: '接入 Kiro',
+    waitingText: '正在通过 kiro-cli 读取额度，首次查询需要等待 CLI 启动。',
+  },
 };
 
 const DIALOG_PLATFORMS = Object.keys(PLATFORM_CHOICES) as DialogPlatform[];
@@ -324,6 +344,7 @@ export default function AccountsPanel() {
     addApiKeyAccount,
     replaceApiKey,
     addAntigravityAccount,
+    addKiroAccount,
     cancelLogin,
     renameAccount,
     removeAccount,
@@ -501,6 +522,15 @@ export default function AccountsPanel() {
       return;
     }
 
+    if (platform === 'kiro') {
+      setStarting(true);
+      const error = await addKiroAccount(draftName.trim() || undefined);
+      setStarting(false);
+      if (error) setToastMessage(error);
+      else setDialog(null);
+      return;
+    }
+
     // 到这里只剩浏览器授权平台；重新授权走 beginReauth，不会停在添加弹窗。
     await startAdd(platform);
   };
@@ -552,8 +582,8 @@ export default function AccountsPanel() {
       });
       return;
     }
-    // Antigravity 跟随本机 agy 登录态，没有应用内重新授权入口。
-    if (account.platform !== 'antigravity') {
+    // Antigravity / Kiro 跟随本机 CLI 登录态，没有应用内重新授权入口。
+    if (account.platform !== 'antigravity' && account.platform !== 'kiro') {
       void startReauth(account.accountId, account.platform);
     }
   };
@@ -648,8 +678,11 @@ export default function AccountsPanel() {
             <div className={styles.accountGrid}>
               {group.accounts.map((account) => {
                 const managed = account.source === 'managed';
-                // Antigravity 跟随本机 agy 登录态，没有应用内重新授权入口。
-                const canReauth = managed && account.platform !== 'antigravity';
+                // Antigravity / Kiro 跟随本机 CLI 登录态，没有应用内重新授权入口。
+                const canReauth =
+                  managed
+                  && account.platform !== 'antigravity'
+                  && account.platform !== 'kiro';
                 // 本机 Codex 账户跟随 CLI 登录态，不能移除。
                 const canRemove = !(account.platform === 'codex' && !managed);
                 const busy = account.products.some(
@@ -967,6 +1000,7 @@ export default function AccountsPanel() {
                           isApiKeyPlatform(dialog.platform)
                             ? '正在验证…'
                             : dialog.platform === 'antigravity'
+                              || dialog.platform === 'kiro'
                               ? '正在接入…'
                               : '正在启动…'
                         ) : (
@@ -975,7 +1009,8 @@ export default function AccountsPanel() {
                               ? '验证并更新'
                               : choice.authorizeLabel}
                             {!isApiKeyPlatform(dialog.platform)
-                            && dialog.platform !== 'antigravity' ? (
+                            && dialog.platform !== 'antigravity'
+                            && dialog.platform !== 'kiro' ? (
                               <ArrowSquareOut size={13} aria-hidden />
                             ) : null}
                           </>

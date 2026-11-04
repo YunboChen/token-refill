@@ -279,6 +279,13 @@ export function addAntigravityAccount(displayName?: string): Promise<AppState> {
   });
 }
 
+/** 接入本机 Kiro CLI 登录态；额度只由 Rust 侧调用官方 CLI 读取。 */
+export function addKiroAccount(displayName?: string): Promise<AppState> {
+  return invoke<AppState>('add_kiro_account', {
+    displayName: displayName ?? null,
+  });
+}
+
 export function renameAccount(accountId: string, displayName: string): Promise<AppState> {
   return invoke<AppState>('rename_account', { accountId, displayName });
 }

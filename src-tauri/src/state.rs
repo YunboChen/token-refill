@@ -27,6 +27,7 @@ use crate::bailian::{
 use crate::codex::{self, CodexIdentity, CodexUsage, UsageError};
 use crate::commandcode::{self, CommandCodeUsage};
 use crate::cursor::{self, CursorUsage};
+use crate::kiro::{self, KiroUsage};
 use crate::opencode::{self, OpencodeUsage};
 use crate::proxy::{self, ProxyMode};
 use crate::usage_api::ProviderError;
@@ -55,6 +56,9 @@ pub const WORKBUDDY_PLATFORM: &str = "workbuddy";
 pub const WORKBUDDY_PRODUCT_ID: &str = "workbuddy-credits";
 pub const CURSOR_PLATFORM: &str = "cursor";
 pub const CURSOR_PRODUCT_ID: &str = "cursor";
+pub const KIRO_PLATFORM: &str = "kiro";
+pub const KIRO_PRODUCT_ID: &str = "kiro";
+pub const KIRO_ACCOUNT_ID: &str = "kiro-local";
 
 /// 与前端设置页的可选项保持一致；后端在这里再次校验，不信任前端传入值。
 pub const REFRESH_OPTIONS: [i64; 5] = [1, 5, 15, 30, 60];
@@ -617,6 +621,10 @@ fn is_cursor_product(product: &ProductState) -> bool {
     product.kind == CURSOR_PRODUCT_ID
 }
 
+fn is_kiro_product(product: &ProductState) -> bool {
+    product.kind == KIRO_PRODUCT_ID
+}
+
 /// 调度与提醒需要覆盖所有已接入的产品；未识别平台不参与自动刷新。
 fn is_refreshable_product(product: &ProductState) -> bool {
     is_codex_product(product)
@@ -626,6 +634,7 @@ fn is_refreshable_product(product: &ProductState) -> bool {
         || is_antigravity_product(product)
         || is_workbuddy_product(product)
         || is_cursor_product(product)
+        || is_kiro_product(product)
 }
 
 fn is_supported_platform(platform: &str) -> bool {
@@ -638,6 +647,7 @@ fn is_supported_platform(platform: &str) -> bool {
             | ANTIGRAVITY_PLATFORM
             | WORKBUDDY_PLATFORM
             | CURSOR_PLATFORM
+            | KIRO_PLATFORM
     )
 }
 
@@ -699,6 +709,18 @@ fn cursor_products() -> Vec<ProductState> {
     }]
 }
 
+fn kiro_products() -> Vec<ProductState> {
+    vec![ProductState {
+        product_id: KIRO_PRODUCT_ID.to_string(),
+        kind: KIRO_PRODUCT_ID.to_string(),
+        display_name: "Credits".to_string(),
+        plan_tier: None,
+        active: None,
+        snapshot: None,
+        query: QueryState::default(),
+    }]
+}
+
 fn platform_display_name(platform: &str) -> &'static str {
     match platform {
         OPENCODE_GO_PLATFORM => "OpenCode Go 账户",
@@ -707,6 +729,7 @@ fn platform_display_name(platform: &str) -> &'static str {
         "bailian" => "百炼账户",
         WORKBUDDY_PLATFORM => "WorkBuddy 账户",
         CURSOR_PLATFORM => "Cursor 账户",
+        KIRO_PLATFORM => "本机 Kiro",
         _ => "Codex 账户",
     }
 }
@@ -942,6 +965,99 @@ fn workbuddy_group_window(group: &CreditGroupUsage) -> QuotaWindow {
     }
 }
 
+/// Kiro 的套餐积分是月度窗口；赠送积分是独立、只会到期的额度，
+/// 每笔单独成组，避免多笔赠送被合并成一个无法区分的数字。
+fn kiro_snapshot(usage: &KiroUsage) -> QuotaSnapshot {
+    let mut capability_gaps = Vec::new();
+    let windows: Vec<QuotaWindow> = usage
+        .breakdowns
+        .iter()
+        .filter(|breakdown| breakdown.has_limit && breakdown.limit > 0.0)
+        .enumerate()
+        .map(|(index, breakdown)| {
+            let used_percent = derived_used_percent(breakdown.limit, breakdown.used);
+            QuotaWindow {
+                window_id: format!("kiro-credits-{index}"),
+                source_window_id: breakdown.display_name.clone(),
+                window_name: Some(breakdown.display_name.clone()),
+                unit: "credits".to_string(),
+                used_percent: Some(used_percent),
+                remaining_percent: Some(clamp_percent(100 - used_percent)),
+                used_amount: Some(breakdown.used),
+                total_amount: Some(breakdown.limit),
+                remaining_amount: Some((breakdown.limit - breakdown.used).max(0.0)),
+                window_duration_mins: None,
+                resets_at_epoch: usage.billing_cycle_reset_epoch,
+                expires_at_epoch: None,
+            }
+        })
+        .collect();
+
+    let mut groups = Vec::new();
+    if !windows.is_empty() {
+        groups.push(QuotaGroup {
+            limit_id: Some("plan".to_string()),
+            limit_name: usage.plan_name.clone(),
+            plan_type: usage.plan_name.clone(),
+            windows,
+        });
+    } else if !usage.breakdowns.is_empty() {
+        capability_gaps.push("Kiro 未返回带上限的套餐额度".to_string());
+    }
+    if !usage.breakdowns.is_empty() && usage.billing_cycle_reset_epoch.is_none() {
+        capability_gaps.push("Kiro 未返回计费周期重置时间".to_string());
+    }
+
+    let bonus_credits: Vec<&crate::kiro::KiroBonusCredit> = usage
+        .bonus_credits
+        .iter()
+        .filter(|bonus| bonus.total > 0.0)
+        .collect();
+    for (index, bonus) in bonus_credits.iter().enumerate() {
+        let used_percent = derived_used_percent(bonus.total, bonus.used);
+        let name = bonus
+            .name
+            .clone()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| {
+                if bonus_credits.len() > 1 {
+                    format!("赠送额度 {}", index + 1)
+                } else {
+                    "赠送额度".to_string()
+                }
+            });
+        groups.push(QuotaGroup {
+            limit_id: Some(format!("bonus-{index}")),
+            limit_name: Some(name),
+            plan_type: None,
+            windows: vec![QuotaWindow {
+                window_id: format!("kiro-bonus-{index}"),
+                source_window_id: format!("bonus-{index}"),
+                // 分组标题已说明这是哪一笔赠送额度。
+                window_name: Some(String::new()),
+                unit: "credits".to_string(),
+                used_percent: Some(used_percent),
+                remaining_percent: Some(clamp_percent(100 - used_percent)),
+                used_amount: Some(bonus.used),
+                total_amount: Some(bonus.total),
+                remaining_amount: Some((bonus.total - bonus.used).max(0.0)),
+                window_duration_mins: None,
+                resets_at_epoch: None,
+                // 赠送额度不会重置，只会在若干天后到期。
+                expires_at_epoch: bonus
+                    .days_until_expiry
+                    .map(|days| usage.checked_at_epoch + days * 86_400),
+            }],
+        });
+    }
+
+    QuotaSnapshot {
+        checked_at_epoch: usage.checked_at_epoch,
+        groups,
+        capability_gaps,
+    }
+}
+
 fn is_product_for_platform(product: &ProductState, platform: &str) -> bool {
     match platform {
         OPENCODE_GO_PLATFORM => is_opencode_product(product),
@@ -949,6 +1065,7 @@ fn is_product_for_platform(product: &ProductState, platform: &str) -> bool {
         ANTIGRAVITY_PLATFORM => is_antigravity_product(product),
         WORKBUDDY_PLATFORM => is_workbuddy_product(product),
         CURSOR_PLATFORM => is_cursor_product(product),
+        KIRO_PLATFORM => is_kiro_product(product),
         _ => false,
     }
 }
@@ -2364,6 +2481,7 @@ impl StateStore {
         let action = match (notice.platform.as_str(), notice.source) {
             ("codex", AccountSource::Local) => "请重新登录本机 Codex CLI 后再刷新。",
             (ANTIGRAVITY_PLATFORM, _) => "请先在终端重新运行 agy 完成登录后再刷新。",
+            (KIRO_PLATFORM, _) => "请先在终端运行 kiro-cli login，完成后再刷新。",
             (OPENCODE_GO_PLATFORM, AccountSource::Local) => {
                 "请先在 opencode 中登录，或在账户页重新填写 API Key。"
             }
@@ -2838,6 +2956,43 @@ impl StateStore {
         Ok(state)
     }
 
+    /// 接入本机 Kiro CLI 登录态。额度查询走 `kiro-cli acp` 的账户接口，
+    /// 应用不读取 Kiro IDE 的令牌文件；查询在后台执行，命令立即返回。
+    pub fn add_kiro_account(
+        self: &Arc<Self>,
+        display_name: Option<&str>,
+    ) -> Result<PersistedState, String> {
+        if self
+            .snapshot()
+            .accounts
+            .iter()
+            .any(|account| account.platform == KIRO_PLATFORM)
+        {
+            return Err("已存在本机 Kiro 账户。".to_string());
+        }
+        // 先确认 CLI 存在；登录状态由后台查询给出明确提示，不在命令里等待。
+        kiro::find_kiro_binary().map_err(|error| error.message)?;
+        let name = display_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| platform_display_name(KIRO_PLATFORM).to_string());
+        let state = self.update_strict(|state| {
+            state.accounts.push(AccountState {
+                account_id: KIRO_ACCOUNT_ID.to_string(),
+                platform: KIRO_PLATFORM.to_string(),
+                display_name: name,
+                auth_state: AuthState::Unknown,
+                source: AccountSource::Local,
+                identity_hint: None,
+                credential_expires_at_epoch: None,
+                products: kiro_products(),
+            });
+        })?;
+        let _ = self.request_refresh(Some(KIRO_ACCOUNT_ID));
+        Ok(state)
+    }
+
     /// 启动时自动接入本机 OpenCode CLI 已保存的凭据。只读取官方
     /// `opencode auth export` 的输出；找不到凭据时保持未接入，由用户手动添加。
     fn detect_local_opencode(self: &Arc<Self>) {
@@ -2934,6 +3089,63 @@ impl StateStore {
                 products,
             });
             notices = low_quota_notices(state, ANTIGRAVITY_ACCOUNT_ID);
+            added = true;
+        });
+        if added {
+            for notice in &notices {
+                self.notify_low_quota(notice);
+            }
+        }
+    }
+
+    /// 启动时检查本机 Kiro CLI 登录态：能读到额度才自动接入；
+    /// 未安装或未登录时保持未接入，避免制造一个必然失败的账户。
+    fn detect_local_kiro(self: &Arc<Self>) {
+        if self
+            .snapshot()
+            .accounts
+            .iter()
+            .any(|account| account.platform == KIRO_PLATFORM)
+        {
+            return;
+        }
+        if kiro::find_kiro_binary().is_err() {
+            return;
+        }
+        let Ok(usage) = kiro::read_usage() else {
+            return;
+        };
+        let snapshot = kiro_snapshot(&usage);
+        let checked_at = snapshot.checked_at_epoch;
+        let plan_tier = usage.plan_name.clone();
+        let mut products = kiro_products();
+        if let Some(product) = products.first_mut() {
+            product.plan_tier = plan_tier;
+            product.active = Some(true);
+            product.snapshot = Some(snapshot);
+            product.query.last_attempt_epoch = Some(checked_at);
+        }
+        let mut notices = Vec::new();
+        let mut added = false;
+        self.update_soft(|state| {
+            if state
+                .accounts
+                .iter()
+                .any(|account| account.platform == KIRO_PLATFORM)
+            {
+                return;
+            }
+            state.accounts.push(AccountState {
+                account_id: KIRO_ACCOUNT_ID.to_string(),
+                platform: KIRO_PLATFORM.to_string(),
+                display_name: platform_display_name(KIRO_PLATFORM).to_string(),
+                auth_state: AuthState::Ok,
+                source: AccountSource::Local,
+                identity_hint: None,
+                credential_expires_at_epoch: None,
+                products,
+            });
+            notices = low_quota_notices(state, KIRO_ACCOUNT_ID);
             added = true;
         });
         if added {
@@ -3630,6 +3842,7 @@ impl StateStore {
                     .ok_or_else(|| "账户标识无效".to_string())?,
             ),
             ANTIGRAVITY_PLATFORM => None,
+            KIRO_PLATFORM => None,
             _ => return Err("未知账户平台".to_string()),
         };
         {
@@ -3786,6 +3999,7 @@ fn spawn_refresh(store: Arc<StateStore>, account_id: String) {
                 }
                 Some(ANTIGRAVITY_PLATFORM) => refresh_antigravity(&store, &account_id),
                 Some(CURSOR_PLATFORM) => refresh_cursor(&store, &account_id),
+                Some(KIRO_PLATFORM) => refresh_kiro(&store, &account_id),
                 // 账户在排队期间被移除：不发起查询，也不回写旧任务。
                 _ => {
                     store.update_soft(|state| clear_refreshing(state, &account_id));
@@ -4148,11 +4362,45 @@ fn refresh_cursor(store: &Arc<StateStore>, account_id: &str) {
     }
 }
 
+/// Kiro 只读取本机 kiro-cli 登录态，不持有应用侧凭证；每次查询重新调用 CLI。
+fn refresh_kiro(store: &Arc<StateStore>, account_id: &str) {
+    match kiro::read_usage() {
+        Ok(usage) => {
+            let snapshot = kiro_snapshot(&usage);
+            let plan_tier = usage.plan_name.clone();
+            let mut low_notices = Vec::new();
+            let mut reset_notices = Vec::new();
+            store.update_soft(|state| {
+                let previous_resets = window_resets(state, account_id);
+                apply_platform_success(
+                    state,
+                    account_id,
+                    KIRO_PLATFORM,
+                    snapshot,
+                    plan_tier,
+                    None,
+                    Some(true),
+                );
+                low_notices = low_quota_notices(state, account_id);
+                reset_notices = collect_reset_notices(state, account_id, &previous_resets);
+            });
+            for notice in &low_notices {
+                store.notify_low_quota(notice);
+            }
+            for notice in &reset_notices {
+                store.notify_reset(notice);
+            }
+        }
+        Err(error) => store.apply_platform_refresh_error(account_id, KIRO_PLATFORM, &error),
+    }
+}
+
 pub fn auto_detect_local_accounts(store: Arc<StateStore>) {
-    // 启动后在后台探测，避免阻塞窗口；Antigravity 首次查询可能耗时十余秒。
+    // 启动后在后台探测，避免阻塞窗口；Kiro 与 Antigravity 首次查询都可能耗时十余秒。
     thread::spawn(move || {
         store.detect_local_opencode();
         store.detect_local_antigravity();
+        store.detect_local_kiro();
     });
 }
 
@@ -6225,5 +6473,58 @@ mod tests {
             snapshot.capability_gaps,
             vec!["Cursor 未返回计费周期重置时间".to_string()]
         );
+    }
+
+    #[test]
+    fn kiro_snapshot_separates_plan_and_bonus_credits() {
+        let usage = KiroUsage {
+            checked_at_epoch: 1_790_000_000,
+            plan_name: Some("KIRO PRO+".to_string()),
+            billing_cycle_reset_epoch: Some(1_796_054_400),
+            breakdowns: vec![
+                crate::kiro::KiroBreakdown {
+                    display_name: "Credits".to_string(),
+                    used: 500.0,
+                    limit: 2000.0,
+                    has_limit: true,
+                },
+                // 没有上限的条目不能猜一个分母。
+                crate::kiro::KiroBreakdown {
+                    display_name: "Unlimited".to_string(),
+                    used: 3.0,
+                    limit: 0.0,
+                    has_limit: false,
+                },
+            ],
+            bonus_credits: vec![crate::kiro::KiroBonusCredit {
+                name: Some("Launch bonus".to_string()),
+                used: 10.0,
+                total: 100.0,
+                days_until_expiry: Some(30),
+            }],
+        };
+
+        let snapshot = kiro_snapshot(&usage);
+        assert_eq!(snapshot.groups.len(), 2);
+
+        let plan = &snapshot.groups[0];
+        assert_eq!(plan.limit_id.as_deref(), Some("plan"));
+        assert_eq!(plan.plan_type.as_deref(), Some("KIRO PRO+"));
+        assert_eq!(plan.windows.len(), 1);
+        let window = &plan.windows[0];
+        assert_eq!(window.unit, "credits");
+        assert_eq!(window.used_amount, Some(500.0));
+        assert_eq!(window.total_amount, Some(2000.0));
+        assert_eq!(window.used_percent, Some(25));
+        assert_eq!(window.remaining_percent, Some(75));
+        assert_eq!(window.resets_at_epoch, Some(1_796_054_400));
+
+        let bonus = &snapshot.groups[1];
+        assert_eq!(bonus.limit_name.as_deref(), Some("Launch bonus"));
+        let window = &bonus.windows[0];
+        assert_eq!(window.used_percent, Some(10));
+        assert_eq!(window.resets_at_epoch, None);
+        assert_eq!(window.expires_at_epoch, Some(1_790_000_000 + 30 * 86_400));
+        assert!(snapshot.capability_gaps.is_empty());
     }
 }

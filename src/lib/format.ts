@@ -158,6 +158,7 @@ export function sourceLabel(account: AccountState): string {
   if (account.platform === 'workbuddy') return 'WorkBuddy 官方授权';
   if (account.platform === 'cursor') return 'Cursor 官方登录';
   if (account.platform === 'antigravity') return '本机 agy 登录';
+  if (account.platform === 'kiro') return '本机 kiro-cli 登录';
   if (account.platform === 'opencode-go') {
     return account.source === 'managed' ? 'API Key 授权' : '本机 CLI 登录';
   }
