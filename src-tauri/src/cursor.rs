@@ -328,6 +328,29 @@ fn find_in_dir(dir: &Path) -> Option<PathBuf> {
         .find(|candidate| is_executable(candidate))
 }
 
+/// PATH 之外仍要检查的安装目录。
+///
+/// 官方 Windows 安装器把 `cursor-agent.cmd` 放在 `%LOCALAPPDATA%\cursor-agent`
+/// 并追加到用户 PATH；如果应用在安装前启动，进程环境不会自动刷新，需要按
+/// 安装位置兜底，否则会误报未找到 CLI。
+fn fallback_dirs(home: Option<PathBuf>, local_appdata: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = home {
+        dirs.push(home.join(".local").join("bin"));
+    }
+    #[cfg(windows)]
+    if let Some(base) = local_appdata {
+        dirs.push(base.join("cursor-agent"));
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = local_appdata;
+        dirs.push(PathBuf::from("/usr/local/bin"));
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+    }
+    dirs
+}
+
 pub fn find_agent_binary() -> Result<PathBuf, ProviderError> {
     if let Ok(explicit) = std::env::var("CURSOR_AGENT_BIN") {
         let path = PathBuf::from(explicit);
@@ -348,18 +371,16 @@ pub fn find_agent_binary() -> Result<PathBuf, ProviderError> {
         }
     }
 
-    let mut dirs = Vec::new();
-    if let Some(home) = home_dir() {
-        dirs.push(home.join(".local").join("bin"));
-    }
-    dirs.push(PathBuf::from("/usr/local/bin"));
-    dirs.push(PathBuf::from("/opt/homebrew/bin"));
-    dirs.iter().find_map(|dir| find_in_dir(dir)).ok_or_else(|| {
-        ProviderError::new(
-            "cli-not-found",
-            "未找到 Cursor Agent CLI（agent）。请先安装 Cursor CLI 后再添加账户。",
-        )
-    })
+    let local_appdata = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    fallback_dirs(home_dir(), local_appdata)
+        .iter()
+        .find_map(|dir| find_in_dir(dir))
+        .ok_or_else(|| {
+            ProviderError::new(
+                "cli-not-found",
+                "未找到 Cursor Agent CLI（agent）。请先安装 Cursor CLI 后再添加账户。",
+            )
+        })
 }
 
 // ---------- 浏览器授权 ----------
@@ -532,9 +553,34 @@ impl LoginSession {
     }
 }
 
+/// 终止登录进程。
+///
+/// Windows 的官方 `.cmd` 启动器会再拉起 `powershell.exe` 与 `node.exe`，
+/// 只终止直接子进程会留下仍在轮询登录结果的 Node 进程。`taskkill /T` 按
+/// 进程树清理；PID 来自本次创建的子进程，不拼接任何用户输入或 URL。
 fn kill_child(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        let pid = child.id().to_string();
+        let mut taskkill = Command::new(taskkill_path());
+        taskkill
+            .args(["/T", "/F", "/PID", pid.as_str()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        crate::cli::apply_no_window(&mut taskkill);
+        let _ = taskkill.status();
+    }
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[cfg(windows)]
+fn taskkill_path() -> PathBuf {
+    std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .map(|root| root.join("System32").join("taskkill.exe"))
+        .unwrap_or_else(|| PathBuf::from("taskkill"))
 }
 
 /// 从 CLI 输出中提取并校验登录地址。只接受 Cursor 官方登录页。
@@ -656,6 +702,21 @@ mod tests {
     fn normalize_epoch_handles_seconds_and_millis() {
         assert_eq!(normalize_epoch(1_792_728_069), 1_792_728_069);
         assert_eq!(normalize_epoch(1_792_728_069_124), 1_792_728_069);
+    }
+
+    #[test]
+    fn fallback_dirs_cover_platform_install_locations() {
+        let home = PathBuf::from("/home/user");
+        let local_appdata = PathBuf::from("/local/appdata");
+        let dirs = fallback_dirs(Some(home.clone()), Some(local_appdata.clone()));
+        assert_eq!(dirs.first(), Some(&home.join(".local").join("bin")));
+        #[cfg(windows)]
+        assert_eq!(dirs.get(1), Some(&local_appdata.join("cursor-agent")));
+        #[cfg(not(windows))]
+        {
+            assert!(dirs.contains(&PathBuf::from("/usr/local/bin")));
+            assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
+        }
     }
 
     #[cfg(unix)]
