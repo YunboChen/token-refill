@@ -14,7 +14,8 @@ import {
   resetLabel,
   windowTimeLabel,
 } from './format';
-import { platformMeta } from './platforms';
+import { applySavedOrder } from './order';
+import { groupAccountsByPlatform, platformMeta } from './platforms';
 import { quotaLevel, type QuotaLevel } from './quotaLevel';
 import { RELAY_MODE_LABELS, RELAY_PROVIDER_LABELS, relayHost, relayPercent } from './relayFormat';
 
@@ -183,7 +184,18 @@ export function planOptions(
 ): FloatPlanOption[] {
   const options: FloatPlanOption[] = [];
 
-  for (const account of state.accounts) {
+  // 与主界面一致：平台分组、组内账户与中转站都按用户保存的顺序展示。
+  const accounts = groupAccountsByPlatform(
+    state.accounts,
+    state.overviewOrder,
+  ).flatMap((group) => group.accounts);
+  const orderedRelays = applySavedOrder(
+    relays,
+    state.relayOrder,
+    (account) => account.id,
+  );
+
+  for (const account of accounts) {
     for (const product of account.products) {
       // active === false 表示平台确认未开通；不把这类套餐放进切换菜单。
       if (product.active === false) continue;
@@ -205,7 +217,7 @@ export function planOptions(
     }
   }
 
-  for (const account of relays) {
+  for (const account of orderedRelays) {
     const quota = account.quota;
     const host = relayHost(account.baseUrl);
     const title = account.label ?? host;
