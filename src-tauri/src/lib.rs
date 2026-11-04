@@ -5,6 +5,7 @@ mod channel;
 mod cli;
 mod codex;
 mod commandcode;
+mod cursor;
 mod discovery;
 mod floating_ball;
 mod logging;
@@ -162,6 +163,20 @@ async fn begin_workbuddy_login(
     })
     .await
     .map_err(|err| format!("发起 WorkBuddy 授权失败：{err}"))?
+}
+
+/// 在隔离目录中发起 Cursor 官方 CLI 登录；令牌由 CLI 写入该目录，不经过前端。
+/// 启动 CLI 与读取登录地址是阻塞操作，放到阻塞线程池。
+#[tauri::command]
+async fn begin_cursor_login(
+    store: tauri::State<'_, Arc<StateStore>>,
+    account_id: Option<String>,
+    display_name: Option<String>,
+) -> Result<LoginStartPayload, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || store.begin_cursor_login(account_id, display_name))
+        .await
+        .map_err(|err| format!("发起 Cursor 登录失败：{err}"))?
 }
 
 #[tauri::command]
@@ -615,6 +630,7 @@ pub fn run() {
             begin_account_login,
             begin_bailian_login,
             begin_workbuddy_login,
+            begin_cursor_login,
             cancel_account_login,
             rename_account,
             add_api_key_account,

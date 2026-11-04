@@ -44,6 +44,14 @@ const PLATFORMS: Record<string, PlatformMeta> = {
     description: 'Credits · 官方登录页授权',
     available: true,
   },
+  cursor: {
+    key: 'cursor',
+    name: 'Cursor',
+    vendor: 'Cursor',
+    mark: 'Cu',
+    description: '套餐用量 · 官方 CLI 隔离登录（实验性）',
+    available: true,
+  },
   'opencode-go': {
     key: 'opencode-go',
     name: 'OpenCode Go',
@@ -75,6 +83,7 @@ const PLATFORM_ORDER = [
   'codex',
   'bailian',
   'workbuddy',
+  'cursor',
   'opencode-go',
   'commandcode',
   'antigravity',

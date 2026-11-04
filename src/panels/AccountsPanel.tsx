@@ -41,12 +41,13 @@ type DialogPlatform =
   | 'codex'
   | 'bailian'
   | 'workbuddy'
+  | 'cursor'
   | 'opencode-go'
   | 'commandcode'
   | 'antigravity';
 
 /** 走浏览器授权流程的平台；其余平台在弹窗内直接提交凭据。 */
-type LoginPlatform = 'codex' | 'bailian' | 'workbuddy';
+type LoginPlatform = 'codex' | 'bailian' | 'workbuddy' | 'cursor';
 
 type DialogMode = 'add' | 'reauth';
 
@@ -130,9 +131,28 @@ const PLATFORM_CHOICES: Record<DialogPlatform, PlatformChoice> = {
     waitingText:
       '请登录要接入的 WorkBuddy 账号并确认授权，完成后应用会自动读取 Credits 额度。',
   },
+  cursor: {
+    addLabel: '添加 Cursor 账户',
+    subtitle: 'Cursor Pro / Ultra · 官方 CLI 授权 · 实验性',
+    steps: [
+      {
+        title: '确认已安装 Cursor CLI',
+        text: '需要已安装 Cursor Agent CLI（agent 命令），应用会在独立目录中发起登录',
+      },
+      {
+        title: '在浏览器登录',
+        text: '登录完成后，凭证只写入该账户的隔离目录，不影响日常 Cursor 登录',
+      },
+    ],
+    note: '不读取你现有的 Cursor 登录、浏览器 Cookie 或 Cursor.app 数据。',
+    namePlaceholder: '留空则显示为“Cursor 账户”',
+    authorizeLabel: '前往浏览器登录',
+    waitingTitle: '登录 Cursor',
+    waitingText:
+      '请在浏览器中完成 Cursor 登录。应用会等待官方 CLI 将凭证写入隔离目录，不会读取你现有的 Cursor 登录态。',
+  },
   'opencode-go': {
-    addLabel: '添加 OpenCode Go 账户',
-    subtitle: 'Go / Go Plus · API Key',
+    addLabel: '添加 OpenCode Go 账户',    subtitle: 'Go / Go Plus · API Key',
     steps: [
       {
         title: '复制 API Key',
@@ -300,6 +320,7 @@ export default function AccountsPanel() {
     beginLogin,
     beginBailianLogin,
     beginWorkbuddyLogin,
+    beginCursorLogin,
     addApiKeyAccount,
     replaceApiKey,
     addAntigravityAccount,
@@ -342,6 +363,7 @@ export default function AccountsPanel() {
     codex: beginLogin,
     bailian: beginBailianLogin,
     workbuddy: beginWorkbuddyLogin,
+    cursor: beginCursorLogin,
   };
 
   // 每次发起授权递增。弹窗在启动请求返回前关闭、或整个面板卸载时，

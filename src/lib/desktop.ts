@@ -239,6 +239,17 @@ export function beginWorkbuddyLogin(
   });
 }
 
+/** 在隔离目录中发起 Cursor 官方 CLI 登录；令牌由 Rust 读取，不经过前端。 */
+export function beginCursorLogin(
+  accountId?: string,
+  displayName?: string,
+): Promise<LoginStart> {
+  return invoke<LoginStart>('begin_cursor_login', {
+    accountId: accountId ?? null,
+    displayName: displayName ?? null,
+  });
+}
+
 export function cancelAccountLogin(loginId: string): Promise<void> {
   return invoke<void>('cancel_account_login', { loginId });
 }
