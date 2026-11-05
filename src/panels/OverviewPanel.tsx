@@ -1,10 +1,13 @@
 import {
   Fragment,
+  useEffect,
+  useMemo,
   useState,
   type CSSProperties,
 } from 'react';
 import {
   ArrowClockwise,
+  CheckCircle,
   Gauge,
   PlugsIcon,
   UsersThree,
@@ -26,15 +29,24 @@ import type {
   QuotaGroup,
   QuotaWindow,
 } from '../lib/desktop';
+import {
+  attentionAccounts,
+  filterGroupsByAttention,
+  isSnapshotFresh,
+  isWindowPeriodValid,
+  type AccountAttention,
+} from '../lib/attention';
 import { platformMeta } from '../lib/platforms';
 import { quotaLevel, type QuotaLevel } from '../lib/quotaLevel';
 import { useOverviewOrder } from '../lib/useOrdering';
 import {
   clockLabel,
   compactQuotaWindowLabel,
+  expiryLabel,
   groupLabel,
   planTierLabel,
   quotaWindowLabel,
+  resetLabel,
   sourceLabel,
   windowTimeLabel,
 } from '../lib/format';
@@ -46,6 +58,7 @@ import ReorderHandle from '../components/ReorderHandle';
 import styles from '../App.module.css';
 
 type OverviewTab = 'subscription' | 'relay';
+type OverviewFilter = 'all' | 'attention';
 
 const OVERVIEW_TABS: { key: OverviewTab; label: string; Icon: Icon }[] = [
   { key: 'subscription', label: '订阅账户额度', Icon: UsersThree },
@@ -282,12 +295,16 @@ function AccountBody({
   desktop,
   threshold,
   lowQuotaEnabled,
+  refreshMinutes,
+  nowEpoch,
   ready,
 }: {
   account: AccountState;
   desktop: boolean;
   threshold: number;
   lowQuotaEnabled: boolean;
+  refreshMinutes: number;
+  nowEpoch: number;
   ready: boolean;
 }) {
   const metrics = buildMetrics(account);
@@ -377,6 +394,14 @@ function AccountBody({
               (part, index, list): part is string =>
                 Boolean(part) && list.indexOf(part) === index,
             );
+            // 只有新鲜且周期仍有效的 0% 才是当前额度用尽；
+            // 旧快照的 0% 继续展示为缓存数据，避免误导。
+            const exhaustedNow =
+              remaining !== null
+              && remaining <= 0
+              && product.snapshot !== null
+              && isSnapshotFresh(product.snapshot, { refreshMinutes, nowEpoch })
+              && isWindowPeriodValid(window, nowEpoch);
 
             return (
               <Fragment key={entry.key}>
@@ -426,7 +451,9 @@ function AccountBody({
                   {level === 'danger' ? (
                     <span className={styles.quotaLowNote}>
                       {remaining !== null && remaining <= 0
-                        ? '额度已用尽'
+                        ? exhaustedNow
+                          ? '额度已用尽'
+                          : '0% 为缓存数据，等待刷新确认'
                         : `低于提醒阈值 ${threshold}%`}
                     </span>
                   ) : null}
@@ -481,10 +508,17 @@ interface AccountPanelProps {
   desktop: boolean;
   threshold: number;
   lowQuotaEnabled: boolean;
+  refreshMinutes: number;
+  nowEpoch: number;
   refresh: (accountId?: string) => Promise<void>;
   ready: boolean;
   /** 只有同平台存在多个账户时才提供排序手柄。 */
   showHandle: boolean;
+  /** 需处理视图关闭拖拽，卡片改用普通 article 渲染。 */
+  sortable: boolean;
+  /** 仅需处理视图传入；为 null 时不展示原因条。 */
+  attention: AccountAttention | null;
+  onLocateAccount: (accountId: string) => void;
   onMove: (delta: -1 | 1) => void;
 }
 
@@ -495,9 +529,14 @@ function AccountPanel({
   desktop,
   threshold,
   lowQuotaEnabled,
+  refreshMinutes,
+  nowEpoch,
   refresh,
   ready,
   showHandle,
+  sortable,
+  attention,
+  onLocateAccount,
   onMove,
   dragControls,
 }: AccountPanelProps & { dragControls: DragControls }) {
@@ -507,18 +546,13 @@ function AccountPanel({
   const tier = accountPlanTier(account);
   const bodyId = `overview-account-${account.accountId}`;
   const summary = accountSummary(account);
+  const hasRefreshFailed =
+    attention?.reasons.some((reason) => reason.key === 'refreshFailed') ?? false;
+  const hasReauth =
+    attention?.reasons.some((reason) => reason.key === 'reauth') ?? false;
 
-  return (
-    <Reorder.Item
-      as="article"
-      value={account.accountId}
-      className={styles.quotaAccount}
-      dragListener={false}
-      dragControls={dragControls}
-      layout="position"
-      tabIndex={-1}
-      aria-live="polite"
-    >
+  const card = (
+    <>
       <header className={styles.quotaAccountHead}>
         <button
           type="button"
@@ -546,7 +580,8 @@ function AccountPanel({
         </button>
 
         <div className={styles.quotaAccountTools}>
-          {open && (updated !== null || busy) ? (
+          {/* 需处理视图即使收起也要能确认数据的新鲜度。 */}
+          {(open || attention !== null) && (updated !== null || busy) ? (
             <span className={styles.updatedAt}>
               {updated !== null ? `更新于 ${clockLabel(updated)}` : '刷新中'}
               {updated !== null && busy ? ' · 刷新中' : ''}
@@ -590,6 +625,55 @@ function AccountPanel({
         </div>
       </header>
 
+      {attention ? (
+        <div className={styles.attentionBar}>
+          <div className={styles.attentionReasons}>
+            {attention.reasons.map((reason) => (
+              <span
+                key={reason.key}
+                className={styles.attentionReason}
+                data-kind={reason.key}
+              >
+                {reason.label}
+                {reason.key === 'exhausted' && reason.resetAtEpoch !== null
+                  ? ` · ${
+                      reason.resetKind === 'expiry'
+                        ? expiryLabel(reason.resetAtEpoch)
+                        : resetLabel(reason.resetAtEpoch)
+                    }`
+                  : null}
+              </span>
+            ))}
+          </div>
+          <div className={styles.attentionActions}>
+            {hasRefreshFailed ? (
+              <button
+                type="button"
+                className={styles.attentionAction}
+                onClick={() => void refresh(account.accountId)}
+                disabled={!desktop || busy}
+                title={
+                  desktop ? '重新查询该账户' : '浏览器预览无法调用 Rust'
+                }
+              >
+                {busy ? '重试中…' : '重试'}
+              </button>
+            ) : null}
+            {hasReauth ? (
+              <button
+                type="button"
+                className={styles.attentionAction}
+                data-primary
+                onClick={() => onLocateAccount(account.accountId)}
+                title="前往账户页查看授权入口"
+              >
+                去授权
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       <AnimatePresence initial={false}>
         {open ? (
           <m.div
@@ -611,12 +695,38 @@ function AccountPanel({
                 desktop={desktop}
                 threshold={threshold}
                 lowQuotaEnabled={lowQuotaEnabled}
+                refreshMinutes={refreshMinutes}
+                nowEpoch={nowEpoch}
                 ready={ready}
               />
             </div>
           </m.div>
         ) : null}
       </AnimatePresence>
+    </>
+  );
+
+  // 需处理视图不提供拖拽排序，卡片本身也不需要 Reorder.Item 的上下文。
+  if (!sortable) {
+    return (
+      <article className={styles.quotaAccount} tabIndex={-1} aria-live="polite">
+        {card}
+      </article>
+    );
+  }
+
+  return (
+    <Reorder.Item
+      as="article"
+      value={account.accountId}
+      className={styles.quotaAccount}
+      dragListener={false}
+      dragControls={dragControls}
+      layout="position"
+      tabIndex={-1}
+      aria-live="polite"
+    >
+      {card}
     </Reorder.Item>
   );
 }
@@ -634,8 +744,13 @@ function PlatformBoard({
   desktop,
   threshold,
   lowQuotaEnabled,
+  refreshMinutes,
+  nowEpoch,
   refresh,
   ready,
+  sortable,
+  attentionById,
+  onLocateAccount,
   dragControls,
   onMovePlatform,
   onMoveAccount,
@@ -646,8 +761,13 @@ function PlatformBoard({
   desktop: boolean;
   threshold: number;
   lowQuotaEnabled: boolean;
+  refreshMinutes: number;
+  nowEpoch: number;
   refresh: (accountId?: string) => Promise<void>;
   ready: boolean;
+  sortable: boolean;
+  attentionById: Map<string, AccountAttention>;
+  onLocateAccount: (accountId: string) => void;
   dragControls: DragControls;
   onMovePlatform: (delta: -1 | 1) => void;
   onMoveAccount: (accountId: string, delta: -1 | 1) => void;
@@ -666,6 +786,31 @@ function PlatformBoard({
         : null;
   const platformName = platformMeta(platform).name;
 
+  const accountCards = accounts.map((account) => (
+    <SortableAccountPanel
+      key={account.accountId}
+      account={account}
+      open={account.accountId === activeId}
+      onToggle={() =>
+        setOpenAccountId(
+          account.accountId === activeId ? null : account.accountId,
+        )
+      }
+      desktop={desktop}
+      threshold={threshold}
+      lowQuotaEnabled={lowQuotaEnabled}
+      refreshMinutes={refreshMinutes}
+      nowEpoch={nowEpoch}
+      refresh={refresh}
+      ready={ready}
+      showHandle={sortable && accounts.length > 1}
+      sortable={sortable}
+      attention={attentionById.get(account.accountId) ?? null}
+      onLocateAccount={onLocateAccount}
+      onMove={(delta) => onMoveAccount(account.accountId, delta)}
+    />
+  ));
+
   return (
     <>
       {/* 与账户页共用同一套平台标题样式：小尺寸品牌图形、无底色，
@@ -676,41 +821,29 @@ function PlatformBoard({
           count={accounts.length}
           active
           action={
-            <ReorderHandle
-              label={`调整 ${platformName} 账户类型的显示顺序`}
-              controls={dragControls}
-              onMove={onMovePlatform}
-            />
+            sortable ? (
+              <ReorderHandle
+                label={`调整 ${platformName} 账户类型的显示顺序`}
+                controls={dragControls}
+                onMove={onMovePlatform}
+              />
+            ) : undefined
           }
         />
       </div>
-      <Reorder.Group
-        as="div"
-        axis="y"
-        values={accounts.map((account) => account.accountId)}
-        onReorder={onReorderAccounts}
-        className={styles.quotaBoard}
-      >
-        {accounts.map((account) => (
-          <SortableAccountPanel
-            key={account.accountId}
-            account={account}
-            open={account.accountId === activeId}
-            onToggle={() =>
-              setOpenAccountId(
-                account.accountId === activeId ? null : account.accountId,
-              )
-            }
-            desktop={desktop}
-            threshold={threshold}
-            lowQuotaEnabled={lowQuotaEnabled}
-            refresh={refresh}
-            ready={ready}
-            showHandle={accounts.length > 1}
-            onMove={(delta) => onMoveAccount(account.accountId, delta)}
-          />
-        ))}
-      </Reorder.Group>
+      {sortable ? (
+        <Reorder.Group
+          as="div"
+          axis="y"
+          values={accounts.map((account) => account.accountId)}
+          onReorder={onReorderAccounts}
+          className={styles.quotaBoard}
+        >
+          {accountCards}
+        </Reorder.Group>
+      ) : (
+        <div className={styles.quotaBoard}>{accountCards}</div>
+      )}
     </>
   );
 }
@@ -722,8 +855,13 @@ function SortablePlatformBoard({
   desktop,
   threshold,
   lowQuotaEnabled,
+  refreshMinutes,
+  nowEpoch,
   refresh,
   ready,
+  sortable,
+  attentionById,
+  onLocateAccount,
   onMovePlatform,
   onMoveAccount,
   onReorderAccounts,
@@ -733,13 +871,43 @@ function SortablePlatformBoard({
   desktop: boolean;
   threshold: number;
   lowQuotaEnabled: boolean;
+  refreshMinutes: number;
+  nowEpoch: number;
   refresh: (accountId?: string) => Promise<void>;
   ready: boolean;
+  sortable: boolean;
+  attentionById: Map<string, AccountAttention>;
+  onLocateAccount: (accountId: string) => void;
   onMovePlatform: (delta: -1 | 1) => void;
   onMoveAccount: (accountId: string, delta: -1 | 1) => void;
   onReorderAccounts: (accountIds: string[]) => void;
 }) {
   const dragControls = useDragControls();
+
+  const board = (
+    <PlatformBoard
+      platform={platform}
+      accounts={accounts}
+      desktop={desktop}
+      threshold={threshold}
+      lowQuotaEnabled={lowQuotaEnabled}
+      refreshMinutes={refreshMinutes}
+      nowEpoch={nowEpoch}
+      refresh={refresh}
+      ready={ready}
+      sortable={sortable}
+      attentionById={attentionById}
+      onLocateAccount={onLocateAccount}
+      dragControls={dragControls}
+      onMovePlatform={onMovePlatform}
+      onMoveAccount={onMoveAccount}
+      onReorderAccounts={onReorderAccounts}
+    />
+  );
+
+  if (!sortable) {
+    return <section className={styles.platformGroup}>{board}</section>;
+  }
 
   return (
     <Reorder.Item
@@ -751,29 +919,28 @@ function SortablePlatformBoard({
       layout="position"
       tabIndex={-1}
     >
-      <PlatformBoard
-        platform={platform}
-        accounts={accounts}
-        desktop={desktop}
-        threshold={threshold}
-        lowQuotaEnabled={lowQuotaEnabled}
-        refresh={refresh}
-        ready={ready}
-        dragControls={dragControls}
-        onMovePlatform={onMovePlatform}
-        onMoveAccount={onMoveAccount}
-        onReorderAccounts={onReorderAccounts}
-      />
+      {board}
     </Reorder.Item>
   );
 }
 
-export default function OverviewPanel({ desktop }: { desktop: boolean }) {
+export default function OverviewPanel({
+  desktop,
+  onLocateAccount,
+}: {
+  desktop: boolean;
+  onLocateAccount: (accountId: string) => void;
+}) {
   const { state, ready, refresh } = useAppState();
   const [tab, setTab] = useState<OverviewTab>('subscription');
+  const [filter, setFilter] = useState<OverviewFilter>('all');
+  // 快照新鲜度随时间衰减；页面停留期间每分钟重算一次待处理账户。
+  const [nowEpoch, setNowEpoch] = useState(() => Math.floor(Date.now() / 1000));
   const tabIndex = Math.max(0, OVERVIEW_TABS.findIndex(({ key }) => key === tab));
+  const filterIndex = filter === 'attention' ? 1 : 0;
   const threshold = state.preferences.lowQuotaThreshold;
   const lowOn = state.preferences.lowQuotaEnabled;
+  const refreshMinutes = state.preferences.refreshMinutes;
   const {
     groups,
     commitPlatforms,
@@ -781,6 +948,31 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
     movePlatform,
     moveAccount,
   } = useOverviewOrder(state.accounts);
+
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => setNowEpoch(Math.floor(Date.now() / 1000)),
+      60_000,
+    );
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const attention = useMemo(
+    () => attentionAccounts(state.accounts, { refreshMinutes, nowEpoch }),
+    [state.accounts, refreshMinutes, nowEpoch],
+  );
+  const attentionById = useMemo(
+    () => new Map(attention.map((item) => [item.accountId, item])),
+    [attention],
+  );
+  const visibleGroups = useMemo(
+    () =>
+      filter === 'attention'
+        ? filterGroupsByAttention(groups, attention)
+        : groups,
+    [filter, groups, attention],
+  );
+  const sortable = filter === 'all';
 
   return (
     <section>
@@ -818,6 +1010,46 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
           role="tabpanel"
           aria-labelledby="overview-tab-subscription"
         >
+          {state.accounts.length > 0 ? (
+            <div className={styles.overviewFilter}>
+              <div
+                className={styles.pills}
+                role="radiogroup"
+                aria-label="订阅账户筛选"
+                style={{
+                  '--pill-index': filterIndex,
+                  '--pill-count': 2,
+                } as CSSProperties}
+              >
+                <span className={styles.pillThumb} aria-hidden="true" />
+                <label className={styles.pill}>
+                  <input
+                    type="radio"
+                    name="overview-filter"
+                    value="all"
+                    checked={filter === 'all'}
+                    onChange={() => setFilter('all')}
+                    aria-label="显示全部账户"
+                  />
+                  <span className={styles.pillText}>全部</span>
+                </label>
+                <label className={styles.pill}>
+                  <input
+                    type="radio"
+                    name="overview-filter"
+                    value="attention"
+                    checked={filter === 'attention'}
+                    onChange={() => setFilter('attention')}
+                    aria-label={`只看需处理的账户，共 ${attention.length} 个`}
+                  />
+                  <span className={styles.pillText}>
+                    需处理（{attention.length}）
+                  </span>
+                </label>
+              </div>
+            </div>
+          ) : null}
+
           {state.accounts.length === 0 ? (
             <div className={styles.overviewStack}>
               <div className={styles.overviewEmpty}>
@@ -830,7 +1062,19 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
                 </p>
               </div>
             </div>
-          ) : (
+          ) : filter === 'attention' && visibleGroups.length === 0 ? (
+            <div className={styles.overviewStack}>
+              <div className={styles.overviewEmpty}>
+                <span className={styles.emptyGlyph} aria-hidden="true">
+                  <CheckCircle size={24} weight="duotone" />
+                </span>
+                <h2 className={styles.emptyTitle}>目前没有需要处理的账户</h2>
+                <p className={styles.usageNote}>
+                  所有账户的授权、刷新与额度状态正常。切换回“全部”可查看完整额度。
+                </p>
+              </div>
+            </div>
+          ) : sortable ? (
             <Reorder.Group
               as="div"
               axis="y"
@@ -838,7 +1082,7 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
               onReorder={(platforms) => commitPlatforms(platforms)}
               className={styles.overviewStack}
             >
-              {groups.map((group) => (
+              {visibleGroups.map((group) => (
                 <SortablePlatformBoard
                   key={group.platform}
                   platform={group.platform}
@@ -846,8 +1090,13 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
                   desktop={desktop}
                   threshold={threshold}
                   lowQuotaEnabled={lowOn}
+                  refreshMinutes={refreshMinutes}
+                  nowEpoch={nowEpoch}
                   refresh={refresh}
                   ready={ready}
+                  sortable
+                  attentionById={attentionById}
+                  onLocateAccount={onLocateAccount}
                   onMovePlatform={(delta) =>
                     movePlatform(group.platform, delta)
                   }
@@ -860,6 +1109,35 @@ export default function OverviewPanel({ desktop }: { desktop: boolean }) {
                 />
               ))}
             </Reorder.Group>
+          ) : (
+            <div className={styles.overviewStack}>
+              {visibleGroups.map((group) => (
+                <SortablePlatformBoard
+                  key={group.platform}
+                  platform={group.platform}
+                  accounts={group.accounts}
+                  desktop={desktop}
+                  threshold={threshold}
+                  lowQuotaEnabled={lowOn}
+                  refreshMinutes={refreshMinutes}
+                  nowEpoch={nowEpoch}
+                  refresh={refresh}
+                  ready={ready}
+                  sortable={false}
+                  attentionById={attentionById}
+                  onLocateAccount={onLocateAccount}
+                  onMovePlatform={(delta) =>
+                    movePlatform(group.platform, delta)
+                  }
+                  onMoveAccount={(accountId, delta) =>
+                    moveAccount(group.platform, accountId, delta)
+                  }
+                  onReorderAccounts={(accountIds) =>
+                    commitAccounts(group.platform, accountIds)
+                  }
+                />
+              ))}
+            </div>
           )}
         </div>
       ) : (

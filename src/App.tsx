@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import {
   ArrowUp,
@@ -69,6 +69,8 @@ function platformHint(): string | null {
 
 export default function App() {
   const [active, setActive] = useState<PanelKey>('overview');
+  // 从总览「去授权」跳到账户页时带上的账户标识；账户页定位并高亮后清除。
+  const [focusAccountId, setFocusAccountId] = useState<string | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
   const { error, stateFileNotice, update, openExternal, appInfo } = useAppState();
   const desktop = isTauri();
@@ -76,6 +78,15 @@ export default function App() {
   // 兜底平台，避免 Windows 自绘标题栏与关闭装饰的窗口在首帧错位。
   const platform = appInfo?.platform ?? platformHint();
   const current = PANELS.find((panel) => panel.key === active) ?? PANELS[0];
+
+  const locateAccount = useCallback((accountId: string) => {
+    setFocusAccountId(accountId);
+    setActive('accounts');
+  }, []);
+
+  const clearFocusedAccount = useCallback(() => {
+    setFocusAccountId(null);
+  }, []);
   // 启动检查只在有正式新版本时提示；设置页仍可手动重新检查。
   // 侧栏页脚只放一个轻量入口，详细状态仍在设置页。
   const updateAvailable =
@@ -112,7 +123,11 @@ export default function App() {
       aria-controls={`panel-${panel.key}`}
       className={styles.navItem}
       data-active={active === panel.key || undefined}
-      onClick={() => setActive(panel.key)}
+      onClick={() => {
+        // 手动切换页面时不再保留上一次的定位目标。
+        setFocusAccountId(null);
+        setActive(panel.key);
+      }}
     >
       <span className={styles.navLabel}>
         <panel.Icon size={17} className={styles.navIcon} aria-hidden />
@@ -212,8 +227,18 @@ export default function App() {
               aria-labelledby={`tab-${active}`}
               className={styles.panelWrap}
             >
-              {active === 'overview' ? <OverviewPanel desktop={desktop} /> : null}
-              {active === 'accounts' ? <AccountsPanel /> : null}
+              {active === 'overview' ? (
+                <OverviewPanel
+                  desktop={desktop}
+                  onLocateAccount={locateAccount}
+                />
+              ) : null}
+              {active === 'accounts' ? (
+                <AccountsPanel
+                  focusAccountId={focusAccountId}
+                  onFocusHandled={clearFocusedAccount}
+                />
+              ) : null}
               {active === 'relay' ? <RelayPanel /> : null}
               {active === 'settings' ? <SettingsPanel /> : null}
             </div>
