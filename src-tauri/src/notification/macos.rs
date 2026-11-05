@@ -47,8 +47,27 @@ static DELEGATE_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// 未打包的开发运行没有 bundle identifier，`UNUserNotificationCenter` 无法工作；
 /// 调用方应退回插件实现。
+///
+/// 只检查 `bundleIdentifier` 不够：首次通知触发 AppKit 初始化后，未打包进程的
+/// identifier 也可能变成非空，但进程仍没有 bundle proxy，下一次调用
+/// `UNUserNotificationCenter` 会抛 `NSInternalInconsistencyException` 直接终止应用。
+/// 因此同时要求主 bundle 是 `.app` 容器。
 pub fn available() -> bool {
-    NSBundle::mainBundle().bundleIdentifier().is_some()
+    let bundle = NSBundle::mainBundle();
+    if bundle.bundleIdentifier().is_none() {
+        return false;
+    }
+    bundle
+        .bundleURL()
+        .path()
+        .is_some_and(|path| is_app_bundle_path(&path.to_string()))
+}
+
+/// 只有 `.app` 目录才是打包形态；`target/debug/` 这类普通目录不算。
+fn is_app_bundle_path(path: &str) -> bool {
+    std::path::Path::new(path.trim_end_matches('/'))
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("app"))
 }
 
 /// 应用启动时提前申请授权；已决定过时系统不会再弹框。
@@ -232,6 +251,22 @@ fn notification_identifier() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_bundle_detection_requires_app_container() {
+        assert!(is_app_bundle_path("/Applications/Token Refill.app"));
+        assert!(is_app_bundle_path("/Applications/Token Refill.app/"));
+        assert!(is_app_bundle_path("/Users/me/Build/Token Refill.APP"));
+        // 开发运行的主 bundle 是普通目录，不是 .app 容器。
+        assert!(!is_app_bundle_path(
+            "/Users/me/project/src-tauri/target/debug"
+        ));
+        assert!(!is_app_bundle_path(
+            "/Users/me/project/src-tauri/target/debug/"
+        ));
+        assert!(!is_app_bundle_path("/tmp/Token Refill.app.backup"));
+        assert!(!is_app_bundle_path(""));
+    }
 
     #[test]
     fn delivery_requires_successful_completion() {
