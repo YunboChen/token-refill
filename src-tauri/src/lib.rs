@@ -350,6 +350,30 @@ fn broadcast_relay_accounts(app: &tauri::AppHandle) {
     let _ = app.emit(relay::RELAY_ACCOUNTS_EVENT, store.view_with_revision());
 }
 
+/// 成功查询后统一判定中转站低余额提醒。判定以状态里的 `low` 标记去重，
+/// 后台线程与手动刷新同时到达也只会通知一次；查询失败时不调用，保留旧标记。
+/// 锁顺序固定：先读 relay 注册表，释放后再写状态，不嵌套持有两把锁。
+fn check_relay_low_balance(
+    state: &StateStore,
+    relay: &relay::RelayStore,
+    account: &relay::RelayAccount,
+) {
+    // 查询期间条目可能已被移除；以注册表当前状态为准。
+    let Some(account) = relay.get(&account.id) else {
+        return;
+    };
+    if account.last_error.is_some() {
+        return;
+    }
+    let Some(quota) = account.quota.as_ref() else {
+        return;
+    };
+    let site_name = account.display_name();
+    if let Some(notice) = state.record_relay_balance(&account.id, &site_name, quota) {
+        state.notify_relay_low_balance(&notice);
+    }
+}
+
 /// 自动识别上游（New API / Sub2API）并查询密钥额度。
 /// 手动输入的凭证由 Rust 保存到 `relay-profiles/`，不经过前端。
 #[tauri::command]
@@ -362,9 +386,11 @@ async fn relay_query(
     new_api_user_id: Option<String>,
     label: Option<String>,
 ) -> Result<relay::RelayAccount, String> {
-    let store = Arc::clone(&store);
+    let relay_store = Arc::clone(&store);
+    let state_store = app.state::<Arc<StateStore>>().inner().clone();
+    let worker = Arc::clone(&relay_store);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        store.query(
+        worker.query(
             &base_url,
             &api_key,
             account_token.as_deref(),
@@ -374,7 +400,8 @@ async fn relay_query(
     })
     .await
     .map_err(|err| format!("查询中转站额度失败：{err}"))?;
-    if result.is_ok() {
+    if let Ok(account) = &result {
+        check_relay_low_balance(&state_store, &relay_store, account);
         broadcast_relay_accounts(&app);
     }
     result
@@ -389,13 +416,16 @@ async fn relay_set_account_token(
     account_token: String,
     new_api_user_id: Option<String>,
 ) -> Result<relay::RelayAccount, String> {
-    let store = Arc::clone(&store);
+    let relay_store = Arc::clone(&store);
+    let state_store = app.state::<Arc<StateStore>>().inner().clone();
+    let worker = Arc::clone(&relay_store);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        store.set_account_token(&id, &account_token, new_api_user_id.as_deref())
+        worker.set_account_token(&id, &account_token, new_api_user_id.as_deref())
     })
     .await
     .map_err(|err| format!("保存访问令牌失败：{err}"))?;
-    if result.is_ok() {
+    if let Ok(account) = &result {
+        check_relay_low_balance(&state_store, &relay_store, account);
         broadcast_relay_accounts(&app);
     }
     result
@@ -410,13 +440,16 @@ async fn relay_update(
     base_url: String,
     api_key: Option<String>,
 ) -> Result<relay::RelayAccount, String> {
-    let store = Arc::clone(&store);
+    let relay_store = Arc::clone(&store);
+    let state_store = app.state::<Arc<StateStore>>().inner().clone();
+    let worker = Arc::clone(&relay_store);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        store.update(&id, &base_url, api_key.as_deref())
+        worker.update(&id, &base_url, api_key.as_deref())
     })
     .await
     .map_err(|err| format!("更新中转站账户失败：{err}"))?;
-    if result.is_ok() {
+    if let Ok(account) = &result {
+        check_relay_low_balance(&state_store, &relay_store, account);
         broadcast_relay_accounts(&app);
     }
     result
@@ -493,10 +526,15 @@ async fn relay_import(
     store: tauri::State<'_, Arc<relay::RelayStore>>,
     ids: Vec<String>,
 ) -> Result<relay::DiscoveryReport, String> {
-    let store = Arc::clone(&store);
-    let result = tauri::async_runtime::spawn_blocking(move || store.import(&ids))
+    let relay_store = Arc::clone(&store);
+    let state_store = app.state::<Arc<StateStore>>().inner().clone();
+    let worker = Arc::clone(&relay_store);
+    let result = tauri::async_runtime::spawn_blocking(move || worker.import(&ids))
         .await
         .map_err(|err| format!("导入本地配置失败：{err}"))?;
+    for account in &result.accounts {
+        check_relay_low_balance(&state_store, &relay_store, account);
+    }
     broadcast_relay_accounts(&app);
     Ok(result)
 }
@@ -507,11 +545,14 @@ async fn relay_refresh(
     store: tauri::State<'_, Arc<relay::RelayStore>>,
     id: String,
 ) -> Result<relay::RelayAccount, String> {
-    let store = Arc::clone(&store);
-    let result = tauri::async_runtime::spawn_blocking(move || store.refresh(&id))
+    let relay_store = Arc::clone(&store);
+    let state_store = app.state::<Arc<StateStore>>().inner().clone();
+    let worker = Arc::clone(&relay_store);
+    let result = tauri::async_runtime::spawn_blocking(move || worker.refresh(&id))
         .await
         .map_err(|err| format!("刷新中转站额度失败：{err}"))?;
-    if result.is_ok() {
+    if let Ok(account) = &result {
+        check_relay_low_balance(&state_store, &relay_store, account);
         broadcast_relay_accounts(&app);
     }
     result

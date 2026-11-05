@@ -2486,7 +2486,7 @@ impl StateStore {
     }
 
     /// 通知只显示站点名称、余额与阈值，不包含服务地址或凭证。
-    fn notify_relay_low_balance(&self, notice: &LowBalanceNotice) {
+    pub(crate) fn notify_relay_low_balance(&self, notice: &LowBalanceNotice) {
         let body = format!(
             "{} · 余额 {:.2} {}，低于提醒阈值 {:.2} {}",
             notice.site_name, notice.balance, notice.currency, notice.threshold, notice.currency
@@ -6701,6 +6701,15 @@ mod tests {
         assert!(validate_relay_threshold(f64::INFINITY).is_err());
         assert!(validate_relay_threshold(1_000_000.01).is_err());
         assert!(validate_relay_threshold(5.001).is_err());
+    }
+
+    #[test]
+    fn relay_low_balance_duplicate_check_is_idempotent() {
+        let mut state = relay_reminder_state(5.0, "USD");
+        let quota = relay_quota(Some(4.0), Some("USD"), false);
+        assert!(relay_low_balance_notice(&mut state, "relay-1", "站点 A", &quota).is_some());
+        // 手动刷新与后台线程可能同时判定；第二次只看到已置位的 low，不重复通知。
+        assert!(relay_low_balance_notice(&mut state, "relay-1", "站点 A", &quota).is_none());
     }
 
     #[test]
