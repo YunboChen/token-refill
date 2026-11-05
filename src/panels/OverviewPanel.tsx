@@ -8,6 +8,7 @@ import {
 import {
   ArrowClockwise,
   CheckCircle,
+  FunnelSimple,
   Gauge,
   PlugsIcon,
   UsersThree,
@@ -297,6 +298,7 @@ function AccountBody({
   lowQuotaEnabled,
   refreshMinutes,
   nowEpoch,
+  attention,
   ready,
 }: {
   account: AccountState;
@@ -305,6 +307,8 @@ function AccountBody({
   lowQuotaEnabled: boolean;
   refreshMinutes: number;
   nowEpoch: number;
+  /** 需处理视图里的问题原因；为 null 时只显示产品级刷新错误。 */
+  attention: AccountAttention | null;
   ready: boolean;
 }) {
   const metrics = buildMetrics(account);
@@ -318,6 +322,10 @@ function AccountBody({
   const failedProducts = account.products.filter(
     (product) => product.snapshot === null && product.query.lastError !== null,
   );
+  const reauthReason =
+    attention?.reasons.find((reason) => reason.key === 'reauth') ?? null;
+  const exhaustedReason =
+    attention?.reasons.find((reason) => reason.key === 'exhausted') ?? null;
   const gaps = [
     ...new Set(snapshots.flatMap((snapshot) => snapshot.capabilityGaps)),
   ];
@@ -335,10 +343,45 @@ function AccountBody({
 
   return (
     <>
-      {staleProducts.length > 0 || failedProducts.length > 0 ? (
+      {reauthReason
+      || exhaustedReason
+      || staleProducts.length > 0
+      || failedProducts.length > 0 ? (
         <div className={styles.quotaNotices}>
+          {reauthReason ? (
+            <p
+              className={styles.attentionNotice}
+              data-kind="reauth"
+              role="status"
+            >
+              需要重新授权：请在「账户」页重新授权或重新登录，完成后刷新即可恢复。
+            </p>
+          ) : null}
+          {exhaustedReason && exhaustedReason.key === 'exhausted' ? (
+            <p
+              className={styles.attentionNotice}
+              data-kind="exhausted"
+              role="status"
+            >
+              额度已用尽
+              {exhaustedReason.resetAtEpoch !== null
+                ? ` · ${
+                    exhaustedReason.resetKind === 'expiry'
+                      ? expiryLabel(exhaustedReason.resetAtEpoch)
+                      : resetLabel(exhaustedReason.resetAtEpoch)
+                  }`
+                : null}
+              。
+            </p>
+          ) : null}
           {staleProducts.map((product) => (
-            <p className={styles.noticeStale} role="status" key={product.productId}>
+            <p
+              className={styles.attentionNotice}
+              data-kind="refreshFailed"
+              data-stale
+              role="status"
+              key={product.productId}
+            >
               {product.displayName}：刷新失败，{product.query.lastError?.message}
               <span className={styles.noticeAside}>
                 （错误码：{product.query.lastError?.code}）
@@ -349,7 +392,12 @@ function AccountBody({
             </p>
           ))}
           {failedProducts.map((product) => (
-            <p className={styles.noticeDanger} role="alert" key={product.productId}>
+            <p
+              className={styles.attentionNotice}
+              data-kind="refreshFailed"
+              role="alert"
+              key={product.productId}
+            >
               {product.displayName}：{product.query.lastError?.message}
               <span className={styles.noticeAside}>
                 （错误码：{product.query.lastError?.code}）
@@ -516,9 +564,8 @@ interface AccountPanelProps {
   showHandle: boolean;
   /** 需处理视图关闭拖拽，卡片改用普通 article 渲染。 */
   sortable: boolean;
-  /** 仅需处理视图传入；为 null 时不展示原因条。 */
+  /** 仅需处理视图传入；为 null 时只展示产品级刷新错误。 */
   attention: AccountAttention | null;
-  onLocateAccount: (accountId: string) => void;
   onMove: (delta: -1 | 1) => void;
 }
 
@@ -536,7 +583,6 @@ function AccountPanel({
   showHandle,
   sortable,
   attention,
-  onLocateAccount,
   onMove,
   dragControls,
 }: AccountPanelProps & { dragControls: DragControls }) {
@@ -546,10 +592,6 @@ function AccountPanel({
   const tier = accountPlanTier(account);
   const bodyId = `overview-account-${account.accountId}`;
   const summary = accountSummary(account);
-  const hasRefreshFailed =
-    attention?.reasons.some((reason) => reason.key === 'refreshFailed') ?? false;
-  const hasReauth =
-    attention?.reasons.some((reason) => reason.key === 'reauth') ?? false;
 
   const card = (
     <>
@@ -625,55 +667,6 @@ function AccountPanel({
         </div>
       </header>
 
-      {attention ? (
-        <div className={styles.attentionBar}>
-          <div className={styles.attentionReasons}>
-            {attention.reasons.map((reason) => (
-              <span
-                key={reason.key}
-                className={styles.attentionReason}
-                data-kind={reason.key}
-              >
-                {reason.label}
-                {reason.key === 'exhausted' && reason.resetAtEpoch !== null
-                  ? ` · ${
-                      reason.resetKind === 'expiry'
-                        ? expiryLabel(reason.resetAtEpoch)
-                        : resetLabel(reason.resetAtEpoch)
-                    }`
-                  : null}
-              </span>
-            ))}
-          </div>
-          <div className={styles.attentionActions}>
-            {hasRefreshFailed ? (
-              <button
-                type="button"
-                className={styles.attentionAction}
-                onClick={() => void refresh(account.accountId)}
-                disabled={!desktop || busy}
-                title={
-                  desktop ? '重新查询该账户' : '浏览器预览无法调用 Rust'
-                }
-              >
-                {busy ? '重试中…' : '重试'}
-              </button>
-            ) : null}
-            {hasReauth ? (
-              <button
-                type="button"
-                className={styles.attentionAction}
-                data-primary
-                onClick={() => onLocateAccount(account.accountId)}
-                title="前往账户页查看授权入口"
-              >
-                去授权
-              </button>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-
       <AnimatePresence initial={false}>
         {open ? (
           <m.div
@@ -697,6 +690,7 @@ function AccountPanel({
                 lowQuotaEnabled={lowQuotaEnabled}
                 refreshMinutes={refreshMinutes}
                 nowEpoch={nowEpoch}
+                attention={attention}
                 ready={ready}
               />
             </div>
@@ -750,7 +744,6 @@ function PlatformBoard({
   ready,
   sortable,
   attentionById,
-  onLocateAccount,
   dragControls,
   onMovePlatform,
   onMoveAccount,
@@ -767,7 +760,6 @@ function PlatformBoard({
   ready: boolean;
   sortable: boolean;
   attentionById: Map<string, AccountAttention>;
-  onLocateAccount: (accountId: string) => void;
   dragControls: DragControls;
   onMovePlatform: (delta: -1 | 1) => void;
   onMoveAccount: (accountId: string, delta: -1 | 1) => void;
@@ -806,7 +798,6 @@ function PlatformBoard({
       showHandle={sortable && accounts.length > 1}
       sortable={sortable}
       attention={attentionById.get(account.accountId) ?? null}
-      onLocateAccount={onLocateAccount}
       onMove={(delta) => onMoveAccount(account.accountId, delta)}
     />
   ));
@@ -861,7 +852,6 @@ function SortablePlatformBoard({
   ready,
   sortable,
   attentionById,
-  onLocateAccount,
   onMovePlatform,
   onMoveAccount,
   onReorderAccounts,
@@ -877,7 +867,6 @@ function SortablePlatformBoard({
   ready: boolean;
   sortable: boolean;
   attentionById: Map<string, AccountAttention>;
-  onLocateAccount: (accountId: string) => void;
   onMovePlatform: (delta: -1 | 1) => void;
   onMoveAccount: (accountId: string, delta: -1 | 1) => void;
   onReorderAccounts: (accountIds: string[]) => void;
@@ -897,7 +886,6 @@ function SortablePlatformBoard({
       ready={ready}
       sortable={sortable}
       attentionById={attentionById}
-      onLocateAccount={onLocateAccount}
       dragControls={dragControls}
       onMovePlatform={onMovePlatform}
       onMoveAccount={onMoveAccount}
@@ -924,20 +912,13 @@ function SortablePlatformBoard({
   );
 }
 
-export default function OverviewPanel({
-  desktop,
-  onLocateAccount,
-}: {
-  desktop: boolean;
-  onLocateAccount: (accountId: string) => void;
-}) {
+export default function OverviewPanel({ desktop }: { desktop: boolean }) {
   const { state, ready, refresh } = useAppState();
   const [tab, setTab] = useState<OverviewTab>('subscription');
   const [filter, setFilter] = useState<OverviewFilter>('all');
   // 快照新鲜度随时间衰减；页面停留期间每分钟重算一次待处理账户。
   const [nowEpoch, setNowEpoch] = useState(() => Math.floor(Date.now() / 1000));
   const tabIndex = Math.max(0, OVERVIEW_TABS.findIndex(({ key }) => key === tab));
-  const filterIndex = filter === 'attention' ? 1 : 0;
   const threshold = state.preferences.lowQuotaThreshold;
   const lowOn = state.preferences.lowQuotaEnabled;
   const refreshMinutes = state.preferences.refreshMinutes;
@@ -965,43 +946,82 @@ export default function OverviewPanel({
     () => new Map(attention.map((item) => [item.accountId, item])),
     [attention],
   );
+  // 没有待处理账户时整个入口都不显示；筛选进行中数量归零则自动回到「全部」，
+  // 避免入口消失后停留在空筛选里。渲染时也按「有可筛项」判断，避免闪一帧空状态。
+  const attentionFilter = filter === 'attention' && attention.length > 0;
   const visibleGroups = useMemo(
     () =>
-      filter === 'attention'
+      attentionFilter
         ? filterGroupsByAttention(groups, attention)
         : groups,
-    [filter, groups, attention],
+    [attentionFilter, groups, attention],
   );
-  const sortable = filter === 'all';
+  const sortable = !attentionFilter;
+  const showAttentionToggle =
+    tab === 'subscription' && state.accounts.length > 0 && attention.length > 0;
+  useEffect(() => {
+    if (filter === 'attention' && attention.length === 0) setFilter('all');
+  }, [filter, attention.length]);
 
   return (
     <section>
-      <div
-        className={styles.overviewTabs}
-        role="tablist"
-        aria-label="总览类别"
-        style={{
-          '--pill-index': tabIndex,
-          '--pill-count': OVERVIEW_TABS.length,
-        } as CSSProperties}
-      >
-        <span className={styles.pillThumb} aria-hidden="true" />
-        {OVERVIEW_TABS.map(({ key, label, Icon }) => (
+      <div className={styles.overviewToolbar}>
+        <div
+          className={styles.overviewTabs}
+          role="tablist"
+          aria-label="总览类别"
+          style={{
+            '--pill-index': tabIndex,
+            '--pill-count': OVERVIEW_TABS.length,
+          } as CSSProperties}
+        >
+          <span className={styles.pillThumb} aria-hidden="true" />
+          {OVERVIEW_TABS.map(({ key, label, Icon }) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              id={`overview-tab-${key}`}
+              aria-selected={tab === key}
+              aria-controls={`overview-panel-${key}`}
+              className={styles.overviewTab}
+              data-active={tab === key || undefined}
+              onClick={() => setTab(key)}
+            >
+              <Icon size={15} aria-hidden />
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* 需处理筛选只作用于订阅额度；窄窗口下按钮换行后仍靠右。 */}
+        {showAttentionToggle ? (
           <button
-            key={key}
             type="button"
-            role="tab"
-            id={`overview-tab-${key}`}
-            aria-selected={tab === key}
-            aria-controls={`overview-panel-${key}`}
-            className={styles.overviewTab}
-            data-active={tab === key || undefined}
-            onClick={() => setTab(key)}
+            className={styles.attentionToggle}
+            data-active={attentionFilter || undefined}
+            aria-pressed={attentionFilter}
+            aria-label={
+              attentionFilter
+                ? '当前只显示需处理账户，点击恢复全部'
+                : `只看需处理的账户，共 ${attention.length} 个`
+            }
+            title={
+              attentionFilter ? '恢复显示全部账户' : '只看需要处理的账户'
+            }
+            onClick={() =>
+              setFilter((current) =>
+                current === 'attention' ? 'all' : 'attention',
+              )
+            }
           >
-            <Icon size={15} aria-hidden />
-            {label}
+            <FunnelSimple size={14} aria-hidden />
+            <span>{filter === 'attention' ? '仅看需处理' : '需处理'}</span>
+            <span className={styles.attentionBadge} aria-hidden="true">
+              {attention.length}
+            </span>
           </button>
-        ))}
+        ) : null}
       </div>
 
       {tab === 'subscription' ? (
@@ -1010,46 +1030,6 @@ export default function OverviewPanel({
           role="tabpanel"
           aria-labelledby="overview-tab-subscription"
         >
-          {state.accounts.length > 0 ? (
-            <div className={styles.overviewFilter}>
-              <div
-                className={styles.pills}
-                role="radiogroup"
-                aria-label="订阅账户筛选"
-                style={{
-                  '--pill-index': filterIndex,
-                  '--pill-count': 2,
-                } as CSSProperties}
-              >
-                <span className={styles.pillThumb} aria-hidden="true" />
-                <label className={styles.pill}>
-                  <input
-                    type="radio"
-                    name="overview-filter"
-                    value="all"
-                    checked={filter === 'all'}
-                    onChange={() => setFilter('all')}
-                    aria-label="显示全部账户"
-                  />
-                  <span className={styles.pillText}>全部</span>
-                </label>
-                <label className={styles.pill}>
-                  <input
-                    type="radio"
-                    name="overview-filter"
-                    value="attention"
-                    checked={filter === 'attention'}
-                    onChange={() => setFilter('attention')}
-                    aria-label={`只看需处理的账户，共 ${attention.length} 个`}
-                  />
-                  <span className={styles.pillText}>
-                    需处理（{attention.length}）
-                  </span>
-                </label>
-              </div>
-            </div>
-          ) : null}
-
           {state.accounts.length === 0 ? (
             <div className={styles.overviewStack}>
               <div className={styles.overviewEmpty}>
@@ -1062,7 +1042,7 @@ export default function OverviewPanel({
                 </p>
               </div>
             </div>
-          ) : filter === 'attention' && visibleGroups.length === 0 ? (
+          ) : attentionFilter && visibleGroups.length === 0 ? (
             <div className={styles.overviewStack}>
               <div className={styles.overviewEmpty}>
                 <span className={styles.emptyGlyph} aria-hidden="true">
@@ -1096,7 +1076,6 @@ export default function OverviewPanel({
                   ready={ready}
                   sortable
                   attentionById={attentionById}
-                  onLocateAccount={onLocateAccount}
                   onMovePlatform={(delta) =>
                     movePlatform(group.platform, delta)
                   }
@@ -1125,7 +1104,6 @@ export default function OverviewPanel({
                   ready={ready}
                   sortable={false}
                   attentionById={attentionById}
-                  onLocateAccount={onLocateAccount}
                   onMovePlatform={(delta) =>
                     movePlatform(group.platform, delta)
                   }

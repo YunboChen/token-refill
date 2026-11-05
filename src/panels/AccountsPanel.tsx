@@ -312,17 +312,9 @@ function accountMark(name: string): string {
   return /[a-z]/i.test(first) ? first.toUpperCase() : first;
 }
 
-export default function AccountsPanel({
-  focusAccountId = null,
-  onFocusHandled,
-}: {
-  /** 从总览「去授权」跳转时定位的账户；定位完成后由父级清除。 */
-  focusAccountId?: string | null;
-  onFocusHandled?: () => void;
-}) {
+export default function AccountsPanel() {
   const {
     state,
-    ready,
     desktop,
     refresh,
     beginLogin,
@@ -353,37 +345,6 @@ export default function AccountsPanel({
         account.platform === 'bailian' &&
         account.credentialExpiresAtEpoch !== null,
     ) ?? false;
-
-  // 从总览跳转过来的账户：滚动到卡片并短暂高亮，随后交还父级清除目标。
-  const tileRefs = useRef(new Map<string, HTMLElement>());
-  const [focusedAccountId, setFocusedAccountId] = useState<string | null>(null);
-  const handledFocusRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!focusAccountId) {
-      handledFocusRef.current = null;
-      return;
-    }
-    if (handledFocusRef.current === focusAccountId) return;
-    const tile = tileRefs.current.get(focusAccountId);
-    if (!tile) {
-      // 状态还没加载完时等下一次渲染；确认账户已不存在时直接放弃定位。
-      if (ready) onFocusHandled?.();
-      return;
-    }
-    handledFocusRef.current = focusAccountId;
-    setFocusedAccountId(focusAccountId);
-    tile.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  }, [focusAccountId, ready, state.accounts, onFocusHandled]);
-
-  useEffect(() => {
-    if (!focusedAccountId) return;
-    const timer = window.setTimeout(() => {
-      setFocusedAccountId(null);
-      onFocusHandled?.();
-    }, 2400);
-    return () => window.clearTimeout(timer);
-  }, [focusedAccountId, onFocusHandled]);
 
   useEffect(() => {
     if (!hasBailianExpiry) return;
@@ -702,17 +663,7 @@ export default function AccountsPanel({
                 const plans = activated.length > 0 ? activated : account.products;
                 const credential = credentialExpiry(account, nowEpoch);
                 return (
-                  <article
-                    className={styles.accountTile}
-                    key={account.accountId}
-                    data-focused={
-                      focusedAccountId === account.accountId || undefined
-                    }
-                    ref={(node) => {
-                      if (node) tileRefs.current.set(account.accountId, node);
-                      else tileRefs.current.delete(account.accountId);
-                    }}
-                  >
+                  <article className={styles.accountTile} key={account.accountId}>
                     <div className={styles.accountIdentityCell}>
                       <span className={styles.accountMark} aria-hidden="true">
                         {accountMark(account.displayName)}

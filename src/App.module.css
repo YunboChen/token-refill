@@ -563,6 +563,16 @@
 /* ---------- 总览：平台分组、账户额度卡与剩余额度环 ---------- */
 
 /* 总览类别切换：沿用设置页分段控件的视觉语言，但使用 tab 语义。 */
+/* 总览顶部工具条：类别标签靠左，需处理筛选靠右；窄窗口下换行后仍靠右。 */
+.overviewToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
 /* 与设置页分段控件共用同一个滑块（.pillThumb）：
    等宽列保证滑块宽度可算，切换时按 --pill-index 平移。 */
 .overviewTabs {
@@ -572,24 +582,62 @@
   grid-auto-columns: 1fr;
   max-width: 100%;
   gap: 2px;
-  margin-bottom: 20px;
   padding: 3px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--sunken);
 }
 
-/* 总览筛选：全部 / 需处理。沿用单选药丸组，选项等宽以匹配滑块宽度。 */
-.overviewFilter {
-  display: flex;
+/* 需处理筛选：默认中性文字 + 细边框；选中后用一层中性底色标记，
+   深浅主题都由 token 决定，不写死颜色。 */
+.attentionToggle {
+  display: inline-flex;
   align-items: center;
-  margin-bottom: 18px;
+  gap: 6px;
+  margin-left: auto;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 150ms ease-out, background-color 150ms ease-out,
+    color 150ms ease-out;
 }
 
-.overviewFilter .pills {
-  display: inline-grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
+.attentionToggle:hover {
+  border-color: var(--border-strong);
+  background: var(--hover);
+}
+
+.attentionToggle[data-active] {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: var(--border-strong);
+}
+
+.attentionToggle[data-active]:hover {
+  background: var(--border-strong);
+  filter: brightness(1.08);
+}
+
+/* 有待处理账户时的数量徽标：实心琥珀底 + 与主题相反的深/浅字；为 0 时不渲染。 */
+.attentionBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  color: var(--sunken);
+  background: var(--warning);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .overviewTab {
@@ -900,87 +948,33 @@
   border-top: 1px solid var(--border);
 }
 
-/* 需处理原因条：收起状态也可见，具体原因与操作分开两侧。 */
-.attentionBar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-  padding: 8px 10px;
+/* 需处理原因沿用原有错误提示的版式，按类型区分颜色：
+   授权失效与额度用尽用危险色，刷新失败用警告色（无缓存时升级为危险色）。 */
+.attentionNotice {
+  margin: 16px 0 0;
+  padding: 10px 12px;
   border-radius: var(--radius-control);
-  background: var(--sunken);
-}
-
-.attentionReasons {
-  display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
-}
-
-.attentionReason {
-  padding: 1px 8px;
-  border-radius: var(--radius-pill);
   color: var(--text);
-  background: var(--surface);
-  font-size: 11.5px;
-  font-weight: 600;
-  line-height: 18px;
+  background: var(--sunken);
+  font-size: 12.5px;
+  line-height: 1.7;
 }
 
-.attentionReason[data-kind='reauth'],
-.attentionReason[data-kind='exhausted'] {
+.attentionNotice[data-kind='reauth'],
+.attentionNotice[data-kind='exhausted'],
+.attentionNotice[data-kind='refreshFailed'] {
   color: var(--danger);
   background: var(--danger-soft);
 }
 
-.attentionReason[data-kind='refreshFailed'] {
+.attentionNotice[data-kind='refreshFailed'][data-stale='true'] {
   color: var(--warning);
   background: var(--warning-soft);
 }
 
-.attentionActions {
-  display: flex;
-  flex-shrink: 0;
-  gap: 6px;
-  margin-left: auto;
-}
-
-.attentionAction {
-  min-height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  color: var(--text);
-  background: var(--surface);
-  font-size: 11.5px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color 150ms ease-out, background-color 150ms ease-out;
-}
-
-.attentionAction:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: var(--hover);
-}
-
-.attentionAction[data-primary] {
-  border-color: transparent;
-  color: var(--accent-text);
-  background: var(--accent-strong);
-}
-
-.attentionAction[data-primary]:hover:not(:disabled) {
-  background: var(--accent-strong-hover);
-}
-
-.attentionAction:disabled {
-  color: var(--muted);
-  background: var(--surface);
-  cursor: not-allowed;
-  opacity: 0.7;
+.attentionNotice .noticeAside {
+  color: inherit;
+  opacity: 0.72;
 }
 
 .quotaAccountHead {
@@ -1970,12 +1964,6 @@
 
 .accountTile:hover {
   border-color: var(--border-strong);
-}
-
-/* 从总览「去授权」定位到的账户：短暂描边提示位置，随后由页面清除。 */
-.accountTile[data-focused] {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .accountIdentityCell {
