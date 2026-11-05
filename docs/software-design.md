@@ -149,7 +149,7 @@ Rust 侧实现两类中转平台适配器，代码在 `src-tauri/src/quota/`（`
 - 手动填写的服务地址、API Key、New API 访问令牌与用户 ID 保存在 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 的按用户 ACL），先写临时文件再原子替换。凭证只在 Rust 侧读取，不进入前端状态、事件、日志或错误消息。用户设置的账户标题（最多 40 个字符，非凭证）与凭证同文件保存；扫描导入的条目保存在 `source.json` 的来源引用里，重启后优先使用已保存的标题。编辑手动账户的服务地址或 API Key 会立即重新识别并刷新额度；来源引用账户的地址与密钥始终从源配置读取，界面只允许修改标题，避免应用内的值覆盖真实来源。
 - 从 cc-switch、Claude Code / Codex 配置扫描到的密钥不复制到应用目录。用户勾选导入后，`relay-profiles/<relayId>/source.json` 只保存来源引用（来源、app_type、provider id、导入时的地址、provider 类型与用户主动填写的访问令牌），同一目录的 `snapshot.json` 保存脱敏额度快照；启动与每次刷新前按引用重新读取源配置取出密钥；启动时取不到就跳过该账户，刷新时记录错误并保留上次快照。界面用「凭证已保存 / 来源已保存 / 凭证仅本次运行」区分手动凭证、来源引用与仅内存条目。
 - 扫描是管理页上的手动入口：点击「扫描本地配置」后只列出候选（来源、provider 名称、地址、是否已在列表中），不发起网络请求、不自动登记；用户勾选并确认导入后，Rust 才对选中的候选识别上游并查询额度。扫描候选的密钥保留在 Rust 内存中，前端只拿到不含密钥的视图。
-- 打开“中转站账户管理”页，或切到总览的「中转站账户额度」标签页时，只加载已保存条目及上次成功快照；启动时仅在存在 `source.json` 的情况下读取对应源配置（只读、不发网络请求），随后每次刷新（含自动刷新）前也会重新读取来源账户的源配置；没有来源账户时不扫描。随后把距上次成功查询已超过刷新间隔（沿用设置中的分钟数）的账户批量刷新一次；自动刷新失败按同一间隔退避，切换页面不会重复请求。两处共用同一份前端状态，添加、扫描导入、编辑地址与密钥、手动刷新、补充令牌、设置标题或移除后立即同步。主窗口与菜单栏面板各自持有前端副本，真正共享的是 Rust 侧注册表：条目变化后广播 `relay-accounts-changed`（带修订号与完整脱敏视图），另一侧据此更新；窗口重新显示时再读取一次列表与状态快照，兜底隐藏期间可能漏掉的事件。手动刷新失败保留旧快照并记录脱敏错误。移除条目会删除对应的 `relay-profiles/<relayId>/` 目录。
+- 打开“中转站账户管理”页，或切到总览的「中转站账户额度」标签页时，只加载已保存条目及上次成功快照；启动时仅在存在 `source.json` 的情况下读取对应源配置（只读、不发网络请求），随后每次刷新（含自动刷新）前也会重新读取来源账户的源配置；没有来源账户时不扫描。随后把距上次成功查询已超过刷新间隔（沿用设置中的分钟数）的账户批量刷新一次；自动刷新失败按同一间隔退避，切换页面不会重复请求。两处共用同一份前端状态，添加、扫描导入、编辑地址与密钥、手动刷新、补充令牌、设置标题或移除后立即同步。主窗口与菜单栏面板各自持有前端副本，真正共享的是 Rust 侧注册表：条目变化后广播 `relay-accounts-changed`（带修订号与完整脱敏视图），另一侧据此更新；窗口重新显示时再读取一次列表与状态快照，兜底隐藏期间可能漏掉的事件。手动刷新失败保留旧快照并记录脱敏错误。移除条目会删除对应的 `relay-profiles/<relayId>/` 目录，并清理该条目的余额提醒配置与轮次标记。开启余额提醒的条目另由 Rust 后台线程按同一刷新间隔顺序查询，失败按 60 秒起指数退避（上限 30 分钟）；刷新成功后按设置的币种与阈值判定并发送一次系统通知，关闭提醒或移除条目后停止刷新。后台线程只处理已开启提醒的条目，不改变其他中转站“未打开页面不发起请求”的行为。
 - 访问令牌只对 New API 生效；Sub2API 账户不接受或保存访问令牌。
 
 New API 二开兼容策略（响应字段不是上游协议的一部分，按“可缺省、可别名、未知即忽略”解析）：
@@ -212,6 +212,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | Preferences | 刷新间隔、三类提醒开关、低额度阈值、自启意图 | 初始值采用已确认需求；OS 实际通知和自启状态另行查询，不能只信本地开关 |
 | OverviewOrder | 用户拖动后的平台键顺序与账户标识顺序 | 只保存标识与相对顺序，不含账户名、邮箱或凭证；未列出的标识保持默认顺序并排在已列出项之后；重复提交相同顺序不写盘；菜单栏面板的中转站分组以固定标识 `relay` 记在其中，总览只排列平台分组并保留该标识的原槽位 |
 | RelayOrder | 总览「中转站账户额度」中的账户标识顺序 | 只含中转站注册表标识，不含标题、地址、密钥或额度；不影响注册表本身与凭证；未列出的账户保持注册表顺序并排在后面 |
+| RelayReminder | 按 `relayId` 保存的余额提醒：是否开启、金额阈值、设置时币种、当前低余额轮次标记 | 只含脱敏金额与币种，不含服务地址、密钥或额度原文；币种缺失或与查询结果不一致时不比较；同一低余额轮次跨刷新、跨重启去重 |
 | NotificationReceipt | 账户、产品、窗口、提醒类型、可靠周期标识或经确认的退化标识、已发送状态 | 支持重启去重；周期未知时不能构造虚假的周期身份 |
 
 ### 5.4 规范化与一致性规则
@@ -320,6 +321,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 - 启用重置或恢复提醒时，应依据新查询结果与可识别周期变化确认，不仅因本地倒计时归零就宣称额度恢复。
 - 不能可靠识别周期或剩余比例时，记录限制并确定替代规则，不猜测阈值与重置事件。
 - 建议将必要去重状态持久化，避免应用重启后重复提醒；不为此引入历史统计或保存完整响应。
+- 中转站低余额提醒以 `relayReminders[relayId].low` 表示当前轮次：余额首次低于阈值时置位并通知，持续低于阈值或重启后不重复；余额回升到阈值或以上时清除，允许下一轮再次提醒。查询失败、额度不受限制、余额或币种缺失、币种与设置不一致时跳过比较，且不改变轮次标记。通知只显示站点名称、余额与阈值。
 - 低额度与失效提醒默认开启，低额度阈值默认剩余 20% 可调；重置或恢复提醒默认关闭。通知设置与系统权限分开表达，不能因开关已开启就宣称系统允许通知。
 - Codex、百炼、OpenCode Go、Command Code、Antigravity 与 Cursor 的状态更新统一维护 `reminders.authExpired[accountId]`；百炼本地凭证错误与控制台会话失效均被覆盖，只要仍有一类套餐查询成功就不误报整个账户失效。中转站尚未接入授权失效系统通知。
 - 每次失效保存独立的 `noticeId`、`delivered`、`attempts` 与 `nextAttemptEpoch`，不再用 `authState` 充当发送成功回执。账户恢复、重新授权或移除后清理记录；异步发送结果只允许确认相同 `noticeId`，不能覆盖恢复后新一轮失效。
@@ -369,7 +371,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 
 ## 10. IPC 与平台适配契约草案
 
-下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`set_overview_order`、`set_relay_order`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_scan`、`relay_import`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`、`download_update`、`downloaded_update_version`、`install_update`。其余仍为计划名称。
+下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`set_overview_order`、`set_relay_order`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_set_reminder`、`relay_scan`、`relay_import`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`、`download_update`、`downloaded_update_version`、`install_update`。其余仍为计划名称。
 
 ### 10.1 前端命令边界
 
@@ -388,6 +390,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | update_preferences | 经校验的设置变更 | 保存常规设置并协调系统操作；系统拒绝通知或自启时如实返回实际状态 | REQ-004、REQ-006、REQ-010 |
 | set_overview_order（已实现） | 平台键列表与账户标识列表 | 去重、去空白并限制条目数与单项长度后写入状态文件；只改变展示顺序，不改账户或额度数据，并向两个界面广播 | REQ-001、REQ-005 |
 | set_relay_order（已实现） | 中转站账户标识列表 | 同样清洗后写入状态文件；只改变总览与快速面板的展示顺序，不改注册表、凭证或额度 | REQ-001、REQ-005 |
+| relay_set_reminder（已实现） | 中转站标识、开关、金额阈值 | 先确认条目仍存在；开启时要求最近一次成功查询能明确给出余额与币种，并校验金额为有限正数、上限 100 万、最多两位小数；关闭时清除当前低余额轮次标记；写入状态并广播 | REQ-006 |
 | get_system_permissions / request_notification_permission | 读取状态或用户明确触发的权限请求 | 区分应用设置与系统许可；不在额度查询失败时反复弹出权限申请 | REQ-006、REQ-010 |
 | open_management_window / quit_app | 用户明确操作 | 窗口复用或退出清理，不能把关闭管理窗口等同于退出 | REQ-005、REQ-009 |
 | check_for_update（已实现） | 无敏感输入 | 读取 GitHub Releases 最新正式版本的版本号与发布页地址；只比较与展示，不下载、不安装。测试渠道直接返回“无更新”，不发起网络请求 | REQ-012 |

@@ -440,6 +440,41 @@ async fn relay_set_label(
     result
 }
 
+/// 保存中转站低余额提醒。开启时要求最近一次成功查询能明确给出余额与币种；
+/// 币种随配置保存，之后查询结果币种不一致时跳过比较、不提醒。
+#[tauri::command]
+fn relay_set_reminder(
+    relay_store: tauri::State<'_, Arc<relay::RelayStore>>,
+    store: tauri::State<'_, Arc<StateStore>>,
+    id: String,
+    enabled: bool,
+    threshold: f64,
+) -> Result<PersistedState, String> {
+    // 先读 relay 再写状态，两次加锁顺序固定且不嵌套，避免与后台刷新互相等待。
+    let account = relay_store
+        .get(&id)
+        .ok_or_else(|| "找不到这条中转站账户，请重新添加。".to_string())?;
+    let currency = if enabled {
+        let quota = account
+            .quota
+            .as_ref()
+            .ok_or_else(|| "该站点还没有可用的额度数据，请先刷新后再开启余额提醒。".to_string())?;
+        if quota.unlimited {
+            return Err("该站点的额度不受限制，无法比较余额，暂不能开启余额提醒。".to_string());
+        }
+        if state::relay_quota_balance(quota).is_none() {
+            return Err("无法识别该站点的账户余额，暂不能开启余额提醒。".to_string());
+        }
+        Some(
+            state::relay_quota_currency(quota)
+                .ok_or_else(|| "无法识别该站点的余额币种，暂不能开启余额提醒。".to_string())?,
+        )
+    } else {
+        None
+    };
+    store.set_relay_reminder(&id, enabled, threshold, currency.as_deref())
+}
+
 /// 扫描 cc-switch、Claude Code / Codex 的本地配置，只返回候选，不发起网络请求。
 #[tauri::command]
 async fn relay_scan(
@@ -510,13 +545,18 @@ fn quit_app(app: tauri::AppHandle) {
 async fn relay_remove(
     app: tauri::AppHandle,
     store: tauri::State<'_, Arc<relay::RelayStore>>,
+    state: tauri::State<'_, Arc<StateStore>>,
     id: String,
 ) -> Result<(), String> {
-    let store = Arc::clone(&store);
-    let result = tauri::async_runtime::spawn_blocking(move || store.remove(&id))
+    let relay_store = Arc::clone(&store);
+    let state_store = Arc::clone(&state);
+    let remove_id = id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || relay_store.remove(&remove_id))
         .await
         .map_err(|err| format!("移除中转站账户失败：{err}"))?;
     if result.is_ok() {
+        // relay 锁已释放后再写状态，避免两个 store 的锁嵌套。
+        state_store.clear_relay_reminder(&id);
         broadcast_relay_accounts(&app);
     }
     result
@@ -564,9 +604,8 @@ pub fn run() {
                 data_dir.join("state.json"),
             ));
             app.manage(Arc::clone(&store));
-            app.manage(Arc::new(relay::RelayStore::load(
-                data_dir.join("relay-profiles"),
-            )));
+            let relay_store = Arc::new(relay::RelayStore::load(data_dir.join("relay-profiles")));
+            app.manage(Arc::clone(&relay_store));
             app.manage(update::UpdateStore::default());
 
             // 自启以系统登录项为准：启动时回写实际状态，避免本地开关与系统不一致。
@@ -616,6 +655,8 @@ pub fn run() {
             floating_ball::restore(app.handle());
 
             state::start_scheduler(Arc::clone(&store));
+            // 中转站余额提醒由 Rust 后台驱动：窗口销毁后前端定时器会停止。
+            state::start_relay_reminder_scheduler(Arc::clone(&store), relay_store);
             state::auto_detect_local_accounts(store);
             Ok(())
         })
@@ -648,6 +689,7 @@ pub fn run() {
             relay_update,
             relay_set_label,
             relay_set_account_token,
+            relay_set_reminder,
             relay_scan,
             relay_import,
             relay_refresh,

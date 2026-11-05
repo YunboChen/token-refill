@@ -83,6 +83,27 @@ pub struct RelayAccount {
     pub new_api_user_id: Option<String>,
 }
 
+impl RelayAccount {
+    /// 通知与界面使用的站点显示名：优先用户标题，其次去掉协议的地址。
+    /// 地址只含主机与路径，不含密钥。
+    pub fn display_name(&self) -> String {
+        if let Some(label) = self
+            .label
+            .as_deref()
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+        {
+            return label.to_string();
+        }
+        let base_url = self.base_url.trim();
+        let host = base_url
+            .strip_prefix("https://")
+            .or_else(|| base_url.strip_prefix("http://"))
+            .unwrap_or(base_url);
+        host.trim_end_matches('/').to_string()
+    }
+}
+
 /// 扫描到、但没能识别为 New API / Sub2API 的本地配置。不含密钥。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -312,6 +333,14 @@ impl RelayStore {
     /// 判断标识是否仍指向一个已保存的中转站账户；悬浮球选择校验使用。
     pub fn has(&self, id: &str) -> bool {
         self.lock().iter().any(|entry| entry.id == id)
+    }
+
+    /// 读取单条账户的脱敏视图；提醒配置需要确认条目仍存在并取得当前币种。
+    pub fn get(&self, id: &str) -> Option<RelayAccount> {
+        self.lock()
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(RelayEntry::view)
     }
 
     /// 读取每个账户目录；损坏或权限不符的条目直接跳过并记录，不影响启动。
