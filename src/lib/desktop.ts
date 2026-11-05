@@ -31,6 +31,8 @@ export interface Preferences {
   autoLaunchEnabled: boolean;
   /** 桌面悬浮球；默认关闭，由独立命令切换。 */
   floatingBallEnabled: boolean;
+  /** 本地额度统计；默认关闭，开启后才记录走势并显示统计菜单。 */
+  statisticsEnabled: boolean;
   /** system：跟随系统；none：直连；manual：使用 proxyUrl。 */
   proxyMode: ProxyMode;
   proxyUrl: string | null;
@@ -176,6 +178,35 @@ export function getAppState(): Promise<AppState> {
 /** 状态文件由更高版本写入时返回只读提示；正常可读写时返回 null。 */
 export function getStateFileNotice(): Promise<string | null> {
   return invoke<string | null>('get_state_file_notice');
+}
+
+/** 一条额度走势采样；只有成功查询才会产生。 */
+export interface QuotaHistorySample {
+  at: number;
+  /** 按比例计量时的剩余百分比。 */
+  remainingPercent: number | null;
+  /** 按金额/次数计量时的剩余量。 */
+  remainingAmount: number | null;
+  /** 平台给出的重置时间；变化即为新周期。 */
+  resetsAtEpoch: number | null;
+}
+
+/** 单个额度窗口的历史序列，键形如 `分组/窗口`。 */
+export interface QuotaHistoryWindow {
+  key: string;
+  unit: string;
+  durationMins: number | null;
+  samples: QuotaHistorySample[];
+}
+
+export interface QuotaHistoryProduct {
+  productId: string;
+  windows: QuotaHistoryWindow[];
+}
+
+/** 按需读取单个账户最近 7 天的走势；历史不进入状态事件。 */
+export function getQuotaHistory(accountId: string): Promise<QuotaHistoryProduct[]> {
+  return invoke<QuotaHistoryProduct[]>('get_quota_history', { accountId });
 }
 
 /** 只提交刷新请求；查询在 Rust 后台执行，结果通过 app-state-changed 推送。 */

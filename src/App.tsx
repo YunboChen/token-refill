@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import {
   ArrowUp,
+  ChartLineUp,
   Gauge,
   GearSix,
   PlugsIcon,
@@ -11,13 +12,14 @@ import {
 import logoWordmark from './assets/logo-text.png';
 import { useAppState } from './lib/store';
 import OverviewPanel from './panels/OverviewPanel';
+import StatisticsPanel from './panels/StatisticsPanel';
 import AccountsPanel from './panels/AccountsPanel';
 import RelayPanel from './panels/RelayPanel';
 import SettingsPanel from './panels/SettingsPanel';
 import TitleBar from './components/TitleBar';
 import styles from './App.module.css';
 
-type PanelKey = 'overview' | 'accounts' | 'relay' | 'settings';
+type PanelKey = 'overview' | 'statistics' | 'accounts' | 'relay' | 'settings';
 
 interface PanelDef {
   key: PanelKey;
@@ -35,6 +37,13 @@ const PANELS: PanelDef[] = [
     Icon: Gauge,
     title: '总览',
     subtitle: '订阅账户与中转站账户的额度、周期与重置时间，一处看清。',
+  },
+  {
+    key: 'statistics',
+    label: '统计',
+    Icon: ChartLineUp,
+    title: '统计',
+    subtitle: '回看账户额度在最近 7 天内的变化与已知重置点。',
   },
   {
     key: 'accounts',
@@ -70,12 +79,22 @@ function platformHint(): string | null {
 export default function App() {
   const [active, setActive] = useState<PanelKey>('overview');
   const [isMaximized, setIsMaximized] = useState(false);
-  const { error, stateFileNotice, update, openExternal, appInfo } = useAppState();
+  const { error, stateFileNotice, update, openExternal, appInfo, state } = useAppState();
   const desktop = isTauri();
+  // 统计默认关闭：关闭时不显示菜单，也不记录历史；开启后立即出现。
+  const statisticsEnabled = state.preferences.statisticsEnabled;
+  const panels = statisticsEnabled
+    ? PANELS
+    : PANELS.filter((panel) => panel.key !== 'statistics');
+  useEffect(() => {
+    if (!statisticsEnabled && active === 'statistics') {
+      setActive('overview');
+    }
+  }, [statisticsEnabled, active]);
   // 应用信息（名称、版本、渠道、平台）统一来自 Rust 合并后的配置；首帧先用 UA
   // 兜底平台，避免 Windows 自绘标题栏与关闭装饰的窗口在首帧错位。
   const platform = appInfo?.platform ?? platformHint();
-  const current = PANELS.find((panel) => panel.key === active) ?? PANELS[0];
+  const current = panels.find((panel) => panel.key === active) ?? panels[0];
   // 启动检查只在有正式新版本时提示；设置页仍可手动重新检查。
   // 侧栏页脚只放一个轻量入口，详细状态仍在设置页。
   const updateAvailable =
@@ -152,7 +171,7 @@ export default function App() {
             role="tablist"
             aria-orientation="vertical"
           >
-            {PANELS.map(renderNavItem)}
+            {panels.map(renderNavItem)}
           </nav>
 
           {/* 侧栏底部：版本号 + 可选的升级入口。分隔线只负责分隔导航与应用信息。
@@ -213,6 +232,9 @@ export default function App() {
               className={styles.panelWrap}
             >
               {active === 'overview' ? <OverviewPanel desktop={desktop} /> : null}
+              {active === 'statistics' && statisticsEnabled ? (
+                <StatisticsPanel desktop={desktop} />
+              ) : null}
               {active === 'accounts' ? <AccountsPanel /> : null}
               {active === 'relay' ? <RelayPanel /> : null}
               {active === 'settings' ? <SettingsPanel /> : null}

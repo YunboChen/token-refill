@@ -1576,6 +1576,16 @@
   transition: color 150ms ease-out;
 }
 
+/* 等宽模式：不同长度的标签也均分宽度，保证滑块与文字对齐。 */
+.pillsEqual .pill {
+  flex: 1 1 0;
+}
+
+.pillsEqual .pillText {
+  width: 100%;
+  min-width: 88px;
+}
+
 .pill:hover .pillText {
   color: var(--text);
 }
@@ -2777,3 +2787,466 @@
   line-height: 1.6;
 }
 
+/* ---------- 统计：额度走势 ---------- */
+
+.statisticsToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+/* ---------- 自绘下拉菜单 ---------- */
+
+.selectMenu {
+  position: relative;
+  display: inline-flex;
+}
+
+.selectMenuTrigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  max-width: 240px;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.selectMenuTrigger:hover:not(:disabled) {
+  background: var(--sunken);
+}
+
+.selectMenuTrigger:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.selectMenuTrigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* 只有一个选项时保持控件外观，但不可展开。 */
+.selectMenuTrigger[data-static] {
+  cursor: default;
+}
+
+.selectMenuTrigger[data-static]:hover {
+  background: var(--surface);
+}
+
+.selectMenuTrigger .chevronIcon {
+  position: absolute;
+  right: 10px;
+  color: var(--muted);
+  transition: transform 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.selectMenuTrigger[data-open] .chevronIcon {
+  transform: rotate(180deg);
+}
+
+.selectMenuIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+
+.selectMenuValue {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selectMenuList {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 100%;
+  max-width: 320px;
+  max-height: 280px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 12%);
+  transform-origin: top left;
+  /* 关闭时保留在 DOM 中以便播放收起动画，visibility 延迟切换避免闪烁。 */
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-4px) scale(0.98);
+  transition:
+    opacity 120ms ease-out,
+    transform 160ms cubic-bezier(0.16, 1, 0.3, 1),
+    visibility 0s linear 160ms;
+}
+
+.selectMenuList[data-open] {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+  transition:
+    opacity 140ms ease-out,
+    transform 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    visibility 0s;
+}
+
+.selectMenuList[data-align='end'] {
+  right: 0;
+  left: auto;
+  transform-origin: top right;
+}
+
+.selectMenuOption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.selectMenuOption[data-active]:not([data-selected]) {
+  background: var(--sunken);
+}
+
+/* 与胶囊切换的选中态一致：强调色底 + 反白文字。 */
+.selectMenuOption[data-selected] {
+  background: var(--accent-strong);
+  color: var(--accent-text);
+}
+
+.selectMenuOption[data-selected] .selectMenuIcon {
+  color: var(--accent-text);
+}
+
+.selectMenuOptionLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.statisticsCard {
+  padding: 18px 20px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.statisticsCard + .statisticsCard {
+  margin-top: 14px;
+}
+
+.statisticsCardHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.statisticsCardTitle {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.statisticsSubheading {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.statisticsLegend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.statisticsLegendDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.statisticsCurrent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.statisticsCurrentValue {
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.statisticsUpdated {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.statisticsRefresh {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.statisticsRefresh:hover:not(:disabled) {
+  border-color: var(--border);
+  color: var(--text);
+  background: var(--sunken);
+}
+
+.statisticsRefresh:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.statisticsChart {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 6px;
+}
+
+.statisticsGrid {
+  stroke: var(--border);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.statisticsAxis {
+  fill: var(--muted);
+  font-size: 10.5px;
+}
+
+.statisticsAxisLabel {
+  fill: var(--muted);
+  font-size: 10.5px;
+}
+
+.statisticsLine {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.statisticsDot {
+  fill: var(--accent);
+}
+
+.statisticsGapLine {
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+  opacity: 0.55;
+}
+
+.statisticsBadge {
+  fill: var(--sunken);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.statisticsBadgeText {
+  fill: var(--muted);
+  font-size: 9.5px;
+}
+
+.statisticsReset {
+  stroke: var(--text);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+  opacity: 0.45;
+}
+
+.statisticsResetDot {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.statisticsGuide {
+  stroke: var(--muted);
+  stroke-width: 1;
+  opacity: 0.4;
+}
+
+.statisticsHoverDot {
+  fill: var(--accent);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.statisticsTooltip {
+  fill: var(--surface);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.statisticsTooltipTime {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.statisticsTooltipValue {
+  fill: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.statisticsCardFoot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.statisticsEmpty {
+  margin: 14px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+/* 没有采样时用一块与图表同宽的占位区，而不是缩成一行文字。 */
+.statisticsEmptyState {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  margin: 8px 0 4px;
+  padding: 34px 16px 30px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-control);
+  text-align: center;
+}
+
+.statisticsEmptyIcon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 2px;
+  border-radius: 50%;
+  background: var(--sunken);
+  color: var(--muted);
+}
+
+.statisticsEmptyTitle {
+  margin: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.statisticsEmptyText {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.statisticsEmptyAction {
+  margin-top: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.statisticsEmptyAction:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.statisticsEmptyAction:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.statisticsResetList {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.statisticsResetList li {
+  display: grid;
+  grid-template-columns: 120px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.statisticsResetList li:first-child {
+  border-top: 0;
+  padding-top: 4px;
+}
+
+.statisticsResetTime {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.statisticsResetLabel {
+  color: var(--text);
+}
+
+.statisticsResetValue {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}

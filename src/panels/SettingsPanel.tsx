@@ -477,6 +477,19 @@ export default function SettingsPanel() {
         </div>
       </section>
 
+      <h2 id="settings-statistics" className={styles.groupTitle}>统计</h2>
+      <section
+        className={`${styles.card} ${styles.listCard}`}
+        aria-labelledby="settings-statistics"
+      >
+        <Toggle
+          checked={prefs.statisticsEnabled}
+          onChange={(next) => update({ statisticsEnabled: next })}
+          label="本地额度统计"
+          hint="默认关闭。开启后记录各账户最近 7 天的剩余额度，并在侧栏显示「统计」菜单；数据只保存在本机，不含名称与凭证。"
+        />
+      </section>
+
       <h2 id="settings-reminders" className={styles.groupTitle}>提醒</h2>
       <section
         className={`${styles.card} ${styles.listCard}`}

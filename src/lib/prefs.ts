@@ -11,7 +11,7 @@ export const THEME_LABELS: Record<ThemePref, string> = {
 };
 
 // 与 Rust `Preferences::default` 保持一致：5 分钟刷新、低额度 20% 且默认开、
-// 失效提醒默认开、重置提醒与自启默认关。
+// 失效提醒默认开、重置提醒与自启、本地统计默认关。
 export const DEFAULT_PREFERENCES: Preferences = {
   refreshMinutes: 5,
   lowQuotaEnabled: true,
@@ -20,6 +20,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   resetNoticeEnabled: false,
   autoLaunchEnabled: false,
   floatingBallEnabled: false,
+  statisticsEnabled: false,
   proxyMode: 'system',
   proxyUrl: null,
 };
@@ -138,8 +139,9 @@ export function readLegacyPreferences(): Preferences | null {
     autoLaunchEnabled: typeof legacy.autoLaunchEnabled === 'boolean'
       ? legacy.autoLaunchEnabled
       : DEFAULT_PREFERENCES.autoLaunchEnabled,
-    // 悬浮球是新增功能，旧草稿里没有对应值，一律保持默认关闭。
+    // 悬浮球与本地统计是新增功能，旧草稿里没有对应值，一律保持默认关闭。
     floatingBallEnabled: false,
+    statisticsEnabled: false,
     proxyMode:
       legacy.proxyMode === 'system'
       || legacy.proxyMode === 'none'

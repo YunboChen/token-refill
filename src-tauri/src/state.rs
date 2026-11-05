@@ -27,6 +27,7 @@ use crate::bailian::{
 use crate::codex::{self, CodexIdentity, CodexUsage, UsageError};
 use crate::commandcode::{self, CommandCodeUsage};
 use crate::cursor::{self, CursorUsage};
+use crate::history::QuotaHistoryStore;
 use crate::opencode::{self, OpencodeUsage};
 use crate::proxy::{self, ProxyMode};
 use crate::usage_api::ProviderError;
@@ -75,6 +76,8 @@ const BAILIAN_PROFILES_DIR_NAME: &str = "bailian-profiles";
 const WORKBUDDY_PROFILES_DIR_NAME: &str = "workbuddy-profiles";
 const CURSOR_PROFILES_DIR_NAME: &str = "cursor-profiles";
 const API_PROFILES_DIR_NAME: &str = "api-profiles";
+/// 额度走势的独立状态文件；与 `state.json` 同目录。
+const HISTORY_FILE_NAME: &str = "quota-history.json";
 static ACCOUNT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 // ---------- 脱敏状态模型 ----------
@@ -91,6 +94,9 @@ pub struct Preferences {
     /// 桌面悬浮球；默认关闭，只能通过设置页的独立命令切换。
     #[serde(default)]
     pub floating_ball_enabled: bool,
+    /// 本地额度走势；默认关闭，开启后才记录并在侧栏显示统计页。
+    #[serde(default)]
+    pub statistics_enabled: bool,
     /// 网络代理模式；旧状态文件缺省为跟随系统。
     #[serde(default)]
     pub proxy_mode: ProxyMode,
@@ -111,6 +117,7 @@ impl Default for Preferences {
             reset_notice_enabled: false,
             auto_launch_enabled: false,
             floating_ball_enabled: false,
+            statistics_enabled: false,
             proxy_mode: ProxyMode::System,
             proxy_url: None,
         }
@@ -2251,6 +2258,8 @@ pub struct StateStore {
     in_flight: Mutex<HashSet<String>>,
     logins: Mutex<HashMap<String, PendingLogin>>,
     shutdown: AtomicBool,
+    /// 额度走势；独立文件、独立锁，按需查询，不进入状态事件。
+    history: QuotaHistoryStore,
     /// 状态文件由更高版本写入时为 `Some(版本号)`：本次运行不落盘，
     /// 只保留内存中的查看与查询结果，避免旧版本覆盖较新的文件。
     newer_schema_version: Option<u32>,
@@ -2294,6 +2303,10 @@ impl StateStore {
         let api_dir = parent
             .map(|parent| parent.join(API_PROFILES_DIR_NAME))
             .unwrap_or_else(|| PathBuf::from(API_PROFILES_DIR_NAME));
+        // 走势与状态文件同目录、独立文件；损坏或更高版本都只影响历史展示。
+        let history_path = parent
+            .map(|parent| parent.join(HISTORY_FILE_NAME))
+            .unwrap_or_else(|| PathBuf::from(HISTORY_FILE_NAME));
         Self {
             inner: Mutex::new(state),
             path,
@@ -2306,6 +2319,7 @@ impl StateStore {
             in_flight: Mutex::new(HashSet::new()),
             logins: Mutex::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
+            history: QuotaHistoryStore::load(history_path, epoch_now()),
             newer_schema_version: loaded.newer_schema_version,
         }
     }
@@ -2520,6 +2534,8 @@ impl StateStore {
         sync_auth_expired_marks(&mut next);
         next.revision = next.revision.saturating_add(1);
         write_state(&self.path, &next)?;
+        // 状态成功落盘后再记走势：历史与实际展示的数据保持一致。
+        self.record_quota_history(&guard, &next);
         *guard = next.clone();
         drop(guard);
         self.emit(&next);
@@ -2543,10 +2559,68 @@ impl StateStore {
                 eprintln!("保存应用状态失败：{err}");
             }
         }
+        self.record_quota_history(&guard, &next);
         *guard = next.clone();
         drop(guard);
         self.emit(&next);
         next
+    }
+
+    /// 状态更新后记录新增的成功查询样本。只处理查询成功（`last_error` 为空）
+    /// 且 `checkedAt` 前进的套餐；失败、被跳过或没有可比较值的窗口不产样本。
+    ///
+    /// 写历史是尽力而为：不改变状态更新结果，也不因历史文件异常阻断额度刷新。
+    fn record_quota_history(&self, previous: &PersistedState, next: &PersistedState) {
+        // 统计默认关闭：只有用户在设置里开启后才记录，关闭后不再新增样本。
+        if !next.preferences.statistics_enabled {
+            return;
+        }
+        let now = epoch_now();
+        for account in &next.accounts {
+            let previous_products = previous
+                .accounts
+                .iter()
+                .find(|candidate| candidate.account_id == account.account_id)
+                .map(|candidate| &candidate.products);
+            for product in &account.products {
+                if product.query.last_error.is_some() {
+                    continue;
+                }
+                let Some(snapshot) = product.snapshot.as_ref() else {
+                    continue;
+                };
+                let previous_checked = previous_products
+                    .and_then(|products| {
+                        products
+                            .iter()
+                            .find(|candidate| candidate.product_id == product.product_id)
+                    })
+                    .and_then(|candidate| candidate.snapshot.as_ref())
+                    .map(|snapshot| snapshot.checked_at_epoch);
+                if previous_checked == Some(snapshot.checked_at_epoch) {
+                    continue;
+                }
+                let windows = crate::history::snapshot_windows(snapshot);
+                if windows.is_empty() {
+                    continue;
+                }
+                self.history.record(
+                    &account.account_id,
+                    &product.product_id,
+                    snapshot.checked_at_epoch,
+                    windows,
+                    now,
+                );
+            }
+        }
+    }
+
+    /// 统计页按需读取单个账户的走势；统计关闭时返回空，不在状态事件里携带。
+    pub fn quota_history(&self, account_id: &str) -> Vec<crate::history::ProductHistoryView> {
+        if !self.snapshot().preferences.statistics_enabled {
+            return Vec::new();
+        }
+        self.history.account_view(account_id)
     }
 
     pub fn update_preferences(&self, preferences: Preferences) -> Result<PersistedState, String> {
@@ -3648,12 +3722,15 @@ impl StateStore {
                     .map_err(|err| format!("删除账户授权目录失败：{err}"))?;
             }
         }
-        self.update_strict(|state| {
+        let next = self.update_strict(|state| {
             state
                 .accounts
                 .retain(|account| account.account_id != account_id);
             clear_reminder_marks(state, account_id);
-        })
+        })?;
+        // 移除账户后不再保留它的走势；历史写盘失败不影响移除结果。
+        self.history.clear_account(account_id);
+        Ok(next)
     }
 
     /// Some(Some(home)) 为独立授权账户；Some(None) 为本机账户；
@@ -5051,6 +5128,23 @@ mod tests {
         let state: PersistedState = serde_json::from_value(value).expect("legacy state parses");
         assert!(!state.preferences.floating_ball_enabled);
         assert_eq!(state.floating_ball, FloatingBallState::default());
+    }
+
+    #[test]
+    fn statistics_is_disabled_by_default_and_old_files_default_off() {
+        assert!(!default_state().preferences.statistics_enabled);
+
+        // 旧状态文件没有该字段时按关闭处理，不用统计也不显示菜单。
+        let mut value = serde_json::to_value(default_state()).expect("serialize");
+        let preferences = value
+            .as_object_mut()
+            .and_then(|object| object.get_mut("preferences"))
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("preferences object");
+        preferences.remove("statisticsEnabled");
+
+        let state: PersistedState = serde_json::from_value(value).expect("legacy state parses");
+        assert!(!state.preferences.statistics_enabled);
     }
 
     #[test]

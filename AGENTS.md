@@ -10,7 +10,7 @@
 - 应用标识 `dev.tokenrefill.desktop`；数据目录由 Tauri `app_data_dir()` 决定：
   - macOS `~/Library/Application Support/dev.tokenrefill.desktop/`
   - Windows `%APPDATA%\dev.tokenrefill.desktop\`
-  - 目录内：`state.json`（设置、账户、额度快照、提醒去重、悬浮球当前套餐与位置）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）、`workbuddy-profiles/<accountId>/`（WorkBuddy 访问令牌与续期令牌）、`cursor-profiles/<accountId>/`（隔离的 Cursor Agent CLI `HOME`，含 `.cursor/auth.json`）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
+  - 目录内：`state.json`（设置、账户、额度快照、提醒去重、悬浮球当前套餐与位置）、`quota-history.json`（额度走势：按账号/套餐/窗口保存时间戳、剩余比例或金额与已知重置时间，只保留最近 7 天，仅在设置开启「本地额度统计」后写入，不含名称与凭证）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）、`workbuddy-profiles/<accountId>/`（WorkBuddy 访问令牌与续期令牌）、`cursor-profiles/<accountId>/`（隔离的 Cursor Agent CLI `HOME`，含 `.cursor/auth.json`）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
   - `logs/` 只写固定文案、窗口标签与耗时，用途是排查发布包没有控制台（Windows GUI 子系统丢弃 `eprintln!`）时的“点了没反应”。令牌、Cookie、邮箱、密钥、请求内容一律不得写入。
 - 分发渠道分正式版（pro）与测试版（test），共用代码、靠 `src-tauri/tauri.test.conf.json` 覆盖身份：
   - 正式版：`productName` `Token Refill`、identifier `dev.tokenrefill.desktop`、版本 `X.Y.Z`，由 `release.yml` 发布并参与应用内更新。

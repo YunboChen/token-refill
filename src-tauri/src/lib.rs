@@ -8,6 +8,7 @@ mod commandcode;
 mod cursor;
 mod discovery;
 mod floating_ball;
+mod history;
 mod logging;
 mod notification;
 mod opencode;
@@ -80,6 +81,16 @@ fn get_app_state(store: tauri::State<'_, Arc<StateStore>>) -> PersistedState {
 #[tauri::command]
 fn get_state_file_notice(store: tauri::State<'_, Arc<StateStore>>) -> Option<String> {
     store.state_file_notice()
+}
+
+/// 统计页按需读取单个账户最近 7 天的额度走势。历史不进入状态事件，
+/// 也不随 `get_app_state` 广播；返回的只有时间戳、数值与已知重置时间。
+#[tauri::command]
+fn get_quota_history(
+    store: tauri::State<'_, Arc<StateStore>>,
+    account_id: String,
+) -> Vec<history::ProductHistoryView> {
+    store.quota_history(&account_id)
 }
 
 /// 接受刷新请求后立即返回；实际查询在后台线程执行，结果通过事件广播。
@@ -623,6 +634,7 @@ pub fn run() {
             get_app_info,
             get_app_state,
             get_state_file_notice,
+            get_quota_history,
             refresh_usage,
             update_preferences,
             set_overview_order,
