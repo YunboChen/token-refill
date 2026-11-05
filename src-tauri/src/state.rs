@@ -1654,6 +1654,36 @@ pub fn validate_relay_threshold(threshold: f64) -> Result<f64, String> {
     Ok(scaled.round() / 100.0)
 }
 
+/// 关闭提醒时不校验阈值：保留原值即可，避免用户为了关闭而先修正输入。
+/// 开启时才要求合法金额。
+pub fn relay_reminder_threshold(enabled: bool, threshold: f64) -> Result<Option<f64>, String> {
+    if enabled {
+        validate_relay_threshold(threshold).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+/// 开启提醒时的币种：优先本次查询结果，缺失时沿用已保存的币种。
+/// 站点临时查询失败时仍能调整阈值，但不会切换成无法识别的币种。
+pub fn relay_reminder_currency(
+    incoming: Option<&str>,
+    existing: Option<&str>,
+) -> Result<String, String> {
+    fn normalize(value: &str) -> Option<String> {
+        let normalized = value.trim().to_ascii_uppercase();
+        let valid = !normalized.is_empty()
+            && normalized.chars().count() <= RELAY_CURRENCY_MAX_CHARS
+            && normalized.chars().all(|ch| ch.is_ascii_alphanumeric());
+        valid.then_some(normalized)
+    }
+
+    incoming
+        .and_then(normalize)
+        .or_else(|| existing.and_then(normalize))
+        .ok_or_else(|| "无法识别该站点的余额币种，暂不能开启余额提醒。".to_string())
+}
+
 /// 规范化平台返回的币种。平台没有明确给出币种时返回 `None`；
 /// 只有可识别的字母数字币种才允许开启提醒与参与比较。
 pub fn relay_quota_currency(quota: &KeyQuota) -> Option<String> {
@@ -2756,9 +2786,10 @@ impl StateStore {
         self.update_strict(move |state| state.relay_order = order)
     }
 
-    /// 保存中转站余额提醒配置。调用方需先确认 relay 仍存在；开启时还必须
-    /// 提供可识别的币种（来自最近一次成功查询）。关闭时保留阈值并清除
-    /// 当前低余额轮次标记，重新开启后可以再次提醒。
+    /// 保存中转站余额提醒配置。调用方需先确认 relay 仍存在；开启时优先使用
+    /// 本次查询的币种，本次查不到可比较数据时沿用已保存的币种，避免站点临时
+    /// 失败后连阈值都改不了。关闭时不校验阈值，保留原值并清除当前低余额轮次
+    /// 标记，重新开启后可以再次提醒。
     pub fn set_relay_reminder(
         &self,
         relay_id: &str,
@@ -2766,23 +2797,33 @@ impl StateStore {
         threshold: f64,
         currency: Option<&str>,
     ) -> Result<PersistedState, String> {
-        let threshold = validate_relay_threshold(threshold)?;
-        let currency = currency.map(str::trim).unwrap_or_default().to_string();
-        if enabled {
-            let normalized = currency.to_ascii_uppercase();
-            let valid = !normalized.is_empty()
-                && normalized.chars().count() <= RELAY_CURRENCY_MAX_CHARS
-                && normalized.chars().all(|ch| ch.is_ascii_alphanumeric());
-            if !valid {
-                return Err("无法识别该站点的余额币种，暂不能开启余额提醒。".to_string());
-            }
-        }
+        let threshold = relay_reminder_threshold(enabled, threshold)?;
+        // 只有已开启的配置才能沿用币种；关闭状态下重新开启仍要求可比较的数据。
+        let existing_currency = if enabled {
+            lock(&self.inner)
+                .relay_reminders
+                .get(relay_id)
+                .filter(|reminder| reminder.enabled)
+                .map(|reminder| reminder.currency.clone())
+        } else {
+            None
+        };
+        let currency = if enabled {
+            Some(relay_reminder_currency(
+                currency,
+                existing_currency.as_deref(),
+            )?)
+        } else {
+            None
+        };
         self.update_strict(move |state| match state.relay_reminders.get_mut(relay_id) {
             Some(reminder) => {
                 if enabled {
                     reminder.enabled = true;
-                    reminder.threshold = threshold;
-                    reminder.currency = currency.to_ascii_uppercase();
+                    reminder.threshold = threshold.unwrap_or(reminder.threshold);
+                    if let Some(currency) = &currency {
+                        reminder.currency = currency.clone();
+                    }
                 } else {
                     reminder.enabled = false;
                     reminder.low = false;
@@ -2794,8 +2835,8 @@ impl StateStore {
                         relay_id.to_string(),
                         RelayReminder {
                             enabled: true,
-                            threshold,
-                            currency: currency.to_ascii_uppercase(),
+                            threshold: threshold.unwrap_or_default(),
+                            currency: currency.clone().unwrap_or_default(),
                             low: false,
                         },
                     );
@@ -6701,6 +6742,33 @@ mod tests {
         assert!(validate_relay_threshold(f64::INFINITY).is_err());
         assert!(validate_relay_threshold(1_000_000.01).is_err());
         assert!(validate_relay_threshold(5.001).is_err());
+    }
+
+    #[test]
+    fn relay_reminder_disabling_skips_threshold_validation() {
+        // 关闭提醒不应被输入框里的残留值挡住；开启时仍按原规则校验。
+        assert_eq!(relay_reminder_threshold(false, f64::NAN).unwrap(), None);
+        assert_eq!(relay_reminder_threshold(false, -1.0).unwrap(), None);
+        assert_eq!(relay_reminder_threshold(false, 5.0).unwrap(), None);
+        assert!(relay_reminder_threshold(true, 0.0).is_err());
+        assert_eq!(relay_reminder_threshold(true, 5.0).unwrap(), Some(5.0));
+    }
+
+    #[test]
+    fn relay_reminder_currency_prefers_query_and_falls_back_to_saved() {
+        assert_eq!(relay_reminder_currency(Some("usd"), None).unwrap(), "USD");
+        assert_eq!(relay_reminder_currency(None, Some("usd")).unwrap(), "USD");
+        // 本次查询没给币种或给了无法识别的值：沿用已保存的币种。
+        assert_eq!(
+            relay_reminder_currency(Some(""), Some("CNY")).unwrap(),
+            "CNY"
+        );
+        assert_eq!(
+            relay_reminder_currency(Some("US D"), Some("CNY")).unwrap(),
+            "CNY"
+        );
+        assert!(relay_reminder_currency(None, None).is_err());
+        assert!(relay_reminder_currency(Some("US D"), None).is_err());
     }
 
     #[test]

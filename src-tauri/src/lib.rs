@@ -473,7 +473,8 @@ async fn relay_set_label(
     result
 }
 
-/// 保存中转站低余额提醒。开启时要求最近一次成功查询能明确给出余额与币种；
+/// 保存中转站低余额提醒。开启时优先采用最近一次成功查询给出的余额与币种；
+/// 已开启的提醒在本次查不到可比较数据时沿用保存的币种，只更新阈值。
 /// 币种随配置保存，之后查询结果币种不一致时跳过比较、不提醒。
 #[tauri::command]
 fn relay_set_reminder(
@@ -488,20 +489,39 @@ fn relay_set_reminder(
         .get(&id)
         .ok_or_else(|| "找不到这条中转站账户，请重新添加。".to_string())?;
     let currency = if enabled {
-        let quota = account
-            .quota
-            .as_ref()
-            .ok_or_else(|| "该站点还没有可用的额度数据，请先刷新后再开启余额提醒。".to_string())?;
-        if quota.unlimited {
-            return Err("该站点的额度不受限制，无法比较余额，暂不能开启余额提醒。".to_string());
-        }
-        if state::relay_quota_balance(quota).is_none() {
-            return Err("无法识别该站点的账户余额，暂不能开启余额提醒。".to_string());
-        }
-        Some(
+        let detected = account.quota.as_ref().and_then(|quota| {
+            if quota.unlimited || state::relay_quota_balance(quota).is_none() {
+                return None;
+            }
             state::relay_quota_currency(quota)
-                .ok_or_else(|| "无法识别该站点的余额币种，暂不能开启余额提醒。".to_string())?,
-        )
+        });
+        match detected {
+            Some(currency) => Some(currency),
+            // 已开启的提醒允许沿用保存的币种改阈值，避免站点临时查询失败时
+            // 只能先关闭提醒再重新开启。
+            None if store
+                .snapshot()
+                .relay_reminders
+                .get(&id)
+                .is_some_and(|reminder| reminder.enabled) =>
+            {
+                None
+            }
+            None => {
+                let quota = account.quota.as_ref().ok_or_else(|| {
+                    "该站点还没有可用的额度数据，请先刷新后再开启余额提醒。".to_string()
+                })?;
+                if quota.unlimited {
+                    return Err(
+                        "该站点的额度不受限制，无法比较余额，暂不能开启余额提醒。".to_string()
+                    );
+                }
+                if state::relay_quota_balance(quota).is_none() {
+                    return Err("无法识别该站点的账户余额，暂不能开启余额提醒。".to_string());
+                }
+                return Err("无法识别该站点的余额币种，暂不能开启余额提醒。".to_string());
+            }
+        }
     } else {
         None
     };

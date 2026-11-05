@@ -2365,6 +2365,7 @@
 }
 
 .miniButton {
+  position: relative;
   display: grid;
   place-items: center;
   width: 26px;
@@ -2403,6 +2404,28 @@
 .miniButton:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+/* 提醒已开启但当前数据不可比较：铃铛用警示色加一个小圆点 */
+.miniButton[data-paused] {
+  color: var(--warning);
+}
+
+.miniButton[data-paused]:hover:not(:disabled) {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: transparent;
+}
+
+.reminderPausedDot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+  box-shadow: 0 0 0 1.5px var(--surface);
 }
 
 .dangerButton {
@@ -2681,6 +2704,14 @@
   font-weight: 500;
   line-height: 1.6;
   vertical-align: 1px;
+}
+
+/* 字段内的即时校验提示：与输入框同组，避免只在提交后才看到错误 */
+.fieldError {
+  margin: -2px 0 0;
+  color: var(--danger);
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 
 .textInput {
