@@ -1,7 +1,7 @@
 {
   "name": "token-refill",
   "private": true,
-  "version": "0.8.1",
+  "version": "0.9.0",
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@12.15.0",
@@ -17,7 +17,8 @@
     "tauri": "tauri",
     "tauri:dev:test": "tauri dev --config src-tauri/tauri.test.conf.json",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml --locked",
-    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --locked"
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --locked",
+    "test:web": "node --experimental-strip-types --test src/lib/attention.test.ts"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

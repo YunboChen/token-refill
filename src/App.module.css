@@ -563,6 +563,16 @@
 /* ---------- 总览：平台分组、账户额度卡与剩余额度环 ---------- */
 
 /* 总览类别切换：沿用设置页分段控件的视觉语言，但使用 tab 语义。 */
+/* 总览顶部工具条：类别标签靠左，需处理筛选靠右；窄窗口下换行后仍靠右。 */
+.overviewToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
 /* 与设置页分段控件共用同一个滑块（.pillThumb）：
    等宽列保证滑块宽度可算，切换时按 --pill-index 平移。 */
 .overviewTabs {
@@ -572,11 +582,62 @@
   grid-auto-columns: 1fr;
   max-width: 100%;
   gap: 2px;
-  margin-bottom: 20px;
   padding: 3px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--sunken);
+}
+
+/* 需处理筛选：默认中性文字 + 细边框；选中后用一层中性底色标记，
+   深浅主题都由 token 决定，不写死颜色。 */
+.attentionToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 150ms ease-out, background-color 150ms ease-out,
+    color 150ms ease-out;
+}
+
+.attentionToggle:hover {
+  border-color: var(--border-strong);
+  background: var(--hover);
+}
+
+.attentionToggle[data-active] {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: var(--border-strong);
+}
+
+.attentionToggle[data-active]:hover {
+  background: var(--border-strong);
+  filter: brightness(1.08);
+}
+
+/* 有待处理账户时的数量徽标：实心琥珀底 + 与主题相反的深/浅字；为 0 时不渲染。 */
+.attentionBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  color: var(--sunken);
+  background: var(--warning);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .overviewTab {
@@ -885,6 +946,35 @@
 
 .quotaAccount + .quotaAccount {
   border-top: 1px solid var(--border);
+}
+
+/* 需处理原因沿用原有错误提示的版式，按类型区分颜色：
+   授权失效与额度用尽用危险色，刷新失败用警告色（无缓存时升级为危险色）。 */
+.attentionNotice {
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  color: var(--text);
+  background: var(--sunken);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.attentionNotice[data-kind='reauth'],
+.attentionNotice[data-kind='exhausted'],
+.attentionNotice[data-kind='refreshFailed'] {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.attentionNotice[data-kind='refreshFailed'][data-stale='true'] {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.attentionNotice .noticeAside {
+  color: inherit;
+  opacity: 0.72;
 }
 
 .quotaAccountHead {
@@ -1869,7 +1959,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
   background: var(--surface);
-  transition: border-color 160ms ease-out;
+  transition: border-color 160ms ease-out, box-shadow 160ms ease-out;
 }
 
 .accountTile:hover {
@@ -2365,6 +2455,7 @@
 }
 
 .miniButton {
+  position: relative;
   display: grid;
   place-items: center;
   width: 26px;
@@ -2403,6 +2494,28 @@
 .miniButton:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+/* 提醒已开启但当前数据不可比较：铃铛用警示色加一个小圆点 */
+.miniButton[data-paused] {
+  color: var(--warning);
+}
+
+.miniButton[data-paused]:hover:not(:disabled) {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: transparent;
+}
+
+.reminderPausedDot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+  box-shadow: 0 0 0 1.5px var(--surface);
 }
 
 .dangerButton {
@@ -2681,6 +2794,14 @@
   font-weight: 500;
   line-height: 1.6;
   vertical-align: 1px;
+}
+
+/* 字段内的即时校验提示：与输入框同组，避免只在提交后才看到错误 */
+.fieldError {
+  margin: -2px 0 0;
+  color: var(--danger);
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 
 .textInput {

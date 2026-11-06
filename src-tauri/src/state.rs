@@ -29,6 +29,7 @@ use crate::commandcode::{self, CommandCodeUsage};
 use crate::cursor::{self, CursorUsage};
 use crate::opencode::{self, OpencodeUsage};
 use crate::proxy::{self, ProxyMode};
+use crate::quota::KeyQuota;
 use crate::usage_api::ProviderError;
 use crate::workbuddy::{self, CreditGroupUsage, CreditsUsage, WorkbuddyError, WorkbuddyReadout};
 
@@ -65,6 +66,12 @@ const REMINDER_KEY_SEP: char = '\u{1f}';
 const SCHEDULER_TICK: Duration = Duration::from_secs(5);
 const AUTH_NOTICE_RETRY_BASE_SECS: i64 = 60;
 const AUTH_NOTICE_RETRY_MAX_SECS: i64 = 3600;
+/// 中转站余额提醒的后台刷新失败退避：60s 起翻倍，最多 30 分钟。
+const RELAY_REFRESH_RETRY_BASE_SECS: i64 = 60;
+const RELAY_REFRESH_RETRY_MAX_SECS: i64 = 1800;
+/// 金额阈值上限；避免用户误填超大值后永远无法触发或撑大状态文件。
+const RELAY_THRESHOLD_MAX: f64 = 1_000_000.0;
+const RELAY_CURRENCY_MAX_CHARS: usize = 16;
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 const DISPLAY_NAME_MAX_CHARS: usize = 60;
 /// 总览排序只保存标识与相对顺序；限制条目数与单项长度，避免状态文件被撑大。
@@ -322,6 +329,24 @@ pub struct AuthExpiringMark {
     pub next_attempt_epoch: Option<i64>,
 }
 
+/// 中转站低余额提醒：按 relayId 保存用户设置的阈值与当前提醒轮次。
+/// 金额是阈值本身，不包含任何凭证；币种记录设置时的值，查询结果币种不一致时
+/// 不参与比较。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayReminder {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub threshold: f64,
+    #[serde(default)]
+    pub currency: String,
+    /// 是否处于「已提醒的低余额轮次」。余额回升到阈值或以上时清除，
+    /// 下一次跌破阈值才会再次提醒；跨刷新、跨重启都靠这个标记去重。
+    #[serde(default)]
+    pub low: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LowQuotaMark {
@@ -397,6 +422,9 @@ pub struct PersistedState {
     /// 悬浮球的当前套餐与位置；旧版本状态文件缺省为未选择、默认位置。
     #[serde(default)]
     pub floating_ball: FloatingBallState,
+    /// 中转站低余额提醒配置；旧版本状态文件缺省为空（全部关闭）。
+    #[serde(default)]
+    pub relay_reminders: HashMap<String, RelayReminder>,
 }
 
 pub fn default_state() -> PersistedState {
@@ -409,6 +437,7 @@ pub fn default_state() -> PersistedState {
         overview_order: OverviewOrder::default(),
         relay_order: Vec::new(),
         floating_ball: FloatingBallState::default(),
+        relay_reminders: HashMap::new(),
     }
 }
 
@@ -1596,6 +1625,133 @@ pub struct LowQuotaNotice {
     pub threshold: i64,
 }
 
+/// 一条中转站低余额提醒；只含站点名称、余额与阈值，不含地址或凭证。
+#[derive(Debug, Clone, PartialEq)]
+pub struct LowBalanceNotice {
+    pub relay_id: String,
+    pub site_name: String,
+    pub balance: f64,
+    pub threshold: f64,
+    pub currency: String,
+}
+
+/// 校验用户填写的提醒金额：有限正数、上限 100 万、最多两位小数。
+/// 错误信息可以直接展示在弹窗里。
+pub fn validate_relay_threshold(threshold: f64) -> Result<f64, String> {
+    if !threshold.is_finite() {
+        return Err("提醒金额必须是有效数字。".to_string());
+    }
+    if threshold <= 0.0 {
+        return Err("提醒金额必须大于 0。".to_string());
+    }
+    if threshold > RELAY_THRESHOLD_MAX {
+        return Err("提醒金额不能超过 1,000,000。".to_string());
+    }
+    let scaled = threshold * 100.0;
+    if (scaled - scaled.round()).abs() > 1e-6 {
+        return Err("提醒金额最多保留两位小数。".to_string());
+    }
+    Ok(scaled.round() / 100.0)
+}
+
+/// 关闭提醒时不校验阈值：保留原值即可，避免用户为了关闭而先修正输入。
+/// 开启时才要求合法金额。
+pub fn relay_reminder_threshold(enabled: bool, threshold: f64) -> Result<Option<f64>, String> {
+    if enabled {
+        validate_relay_threshold(threshold).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+/// 开启提醒时的币种：优先本次查询结果，缺失时沿用已保存的币种。
+/// 站点临时查询失败时仍能调整阈值，但不会切换成无法识别的币种。
+pub fn relay_reminder_currency(
+    incoming: Option<&str>,
+    existing: Option<&str>,
+) -> Result<String, String> {
+    fn normalize(value: &str) -> Option<String> {
+        let normalized = value.trim().to_ascii_uppercase();
+        let valid = !normalized.is_empty()
+            && normalized.chars().count() <= RELAY_CURRENCY_MAX_CHARS
+            && normalized.chars().all(|ch| ch.is_ascii_alphanumeric());
+        valid.then_some(normalized)
+    }
+
+    incoming
+        .and_then(normalize)
+        .or_else(|| existing.and_then(normalize))
+        .ok_or_else(|| "无法识别该站点的余额币种，暂不能开启余额提醒。".to_string())
+}
+
+/// 规范化平台返回的币种。平台没有明确给出币种时返回 `None`；
+/// 只有可识别的字母数字币种才允许开启提醒与参与比较。
+pub fn relay_quota_currency(quota: &KeyQuota) -> Option<String> {
+    let currency = quota.currency.as_deref()?.trim().to_ascii_uppercase();
+    let valid = !currency.is_empty()
+        && currency.chars().count() <= RELAY_CURRENCY_MAX_CHARS
+        && currency.chars().all(|ch| ch.is_ascii_alphanumeric());
+    valid.then_some(currency)
+}
+
+/// 提醒使用的余额口径：优先账户余额，其次密钥余额。缺失或非有限值返回 `None`。
+pub fn relay_quota_balance(quota: &KeyQuota) -> Option<f64> {
+    let balance = quota
+        .account
+        .as_ref()
+        .and_then(|account| account.remaining_usd)
+        .or(quota.remaining_usd)?;
+    balance.is_finite().then_some(balance)
+}
+
+/// 根据最新一次成功查询判断是否需要发送中转站低余额提醒，并同步 `low` 标记。
+///
+/// - 未开启提醒、额度不受限制、余额或币种无法识别、币种与设置不一致时跳过，
+///   且不改变 `low` 标记；
+/// - 余额低于阈值且此前未提醒过：置 `low = true` 并返回通知；
+/// - 余额回到阈值或以上：清除 `low`，恢复下一次跌破的提醒资格；
+/// - 余额持续低于阈值（含重启后）不重复通知。
+pub fn relay_low_balance_notice(
+    state: &mut PersistedState,
+    relay_id: &str,
+    site_name: &str,
+    quota: &KeyQuota,
+) -> Option<LowBalanceNotice> {
+    let reminder = state.relay_reminders.get_mut(relay_id)?;
+    if !reminder.enabled || quota.unlimited {
+        return None;
+    }
+    let balance = relay_quota_balance(quota)?;
+    let currency = relay_quota_currency(quota)?;
+    // 币种严格比较；旧文件或手工编辑的大小写差异按规范化后的值处理。
+    if currency != reminder.currency.trim().to_ascii_uppercase() {
+        return None;
+    }
+    if balance < reminder.threshold {
+        if reminder.low {
+            return None;
+        }
+        reminder.low = true;
+        Some(LowBalanceNotice {
+            relay_id: relay_id.to_string(),
+            site_name: site_name.to_string(),
+            balance,
+            threshold: reminder.threshold,
+            currency,
+        })
+    } else {
+        if reminder.low {
+            reminder.low = false;
+        }
+        None
+    }
+}
+
+fn relay_refresh_backoff_secs(failures: u32) -> i64 {
+    let exponent = failures.saturating_sub(1).min(16);
+    (RELAY_REFRESH_RETRY_BASE_SECS << exponent).min(RELAY_REFRESH_RETRY_MAX_SECS)
+}
+
 /// 一条已预留发送机会的授权失效提醒；不包含凭证。
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuthExpiredNotice {
@@ -2359,6 +2515,15 @@ impl StateStore {
         self.show_notification("额度重置提醒", body);
     }
 
+    /// 通知只显示站点名称、余额与阈值，不包含服务地址或凭证。
+    pub(crate) fn notify_relay_low_balance(&self, notice: &LowBalanceNotice) {
+        let body = format!(
+            "{} · 余额 {:.2} {}，低于提醒阈值 {:.2} {}",
+            notice.site_name, notice.balance, notice.currency, notice.threshold, notice.currency
+        );
+        self.show_notification("中转站余额提醒", body);
+    }
+
     fn notify_auth_expired(&self, notice: &AuthExpiredNotice) -> Result<(), String> {
         let fallback = format!("请打开 {} 重新授权。", self.app.package_info().name);
         let action = match (notice.platform.as_str(), notice.source) {
@@ -2619,6 +2784,116 @@ impl StateStore {
             return Ok(current);
         }
         self.update_strict(move |state| state.relay_order = order)
+    }
+
+    /// 保存中转站余额提醒配置。调用方需先确认 relay 仍存在；开启时优先使用
+    /// 本次查询的币种，本次查不到可比较数据时沿用已保存的币种，避免站点临时
+    /// 失败后连阈值都改不了。关闭时不校验阈值，保留原值并清除当前低余额轮次
+    /// 标记，重新开启后可以再次提醒。
+    pub fn set_relay_reminder(
+        &self,
+        relay_id: &str,
+        enabled: bool,
+        threshold: f64,
+        currency: Option<&str>,
+    ) -> Result<PersistedState, String> {
+        let threshold = relay_reminder_threshold(enabled, threshold)?;
+        // 只有已开启的配置才能沿用币种；关闭状态下重新开启仍要求可比较的数据。
+        let existing_currency = if enabled {
+            lock(&self.inner)
+                .relay_reminders
+                .get(relay_id)
+                .filter(|reminder| reminder.enabled)
+                .map(|reminder| reminder.currency.clone())
+        } else {
+            None
+        };
+        let currency = if enabled {
+            Some(relay_reminder_currency(
+                currency,
+                existing_currency.as_deref(),
+            )?)
+        } else {
+            None
+        };
+        self.update_strict(move |state| match state.relay_reminders.get_mut(relay_id) {
+            Some(reminder) => {
+                if enabled {
+                    reminder.enabled = true;
+                    reminder.threshold = threshold.unwrap_or(reminder.threshold);
+                    if let Some(currency) = &currency {
+                        reminder.currency = currency.clone();
+                    }
+                } else {
+                    reminder.enabled = false;
+                    reminder.low = false;
+                }
+            }
+            None => {
+                if enabled {
+                    state.relay_reminders.insert(
+                        relay_id.to_string(),
+                        RelayReminder {
+                            enabled: true,
+                            threshold: threshold.unwrap_or_default(),
+                            currency: currency.clone().unwrap_or_default(),
+                            low: false,
+                        },
+                    );
+                }
+            }
+        })
+    }
+
+    /// 后台提醒线程使用的轻量读取：刷新间隔与已开启提醒的 relayId。
+    /// 不复制账户与额度快照，避免每个 tick 都克隆整份状态。
+    pub fn relay_reminder_targets(&self) -> (i64, Vec<String>) {
+        let state = lock(&self.inner);
+        let ids = state
+            .relay_reminders
+            .iter()
+            .filter(|(_, reminder)| reminder.enabled)
+            .map(|(id, _)| id.clone())
+            .collect();
+        (state.preferences.refresh_minutes, ids)
+    }
+
+    /// 移除中转站账户时清理对应提醒配置与标记；没有配置时不写盘。
+    pub fn clear_relay_reminder(&self, relay_id: &str) {
+        let exists = lock(&self.inner).relay_reminders.contains_key(relay_id);
+        if !exists {
+            return;
+        }
+        self.update_soft(|state| {
+            state.relay_reminders.remove(relay_id);
+        });
+    }
+
+    /// 后台刷新成功后判断是否发送中转站低余额提醒。只在 `low` 标记真的变化时
+    /// 落盘，避免每次成功刷新都重写整份状态文件。
+    pub fn record_relay_balance(
+        &self,
+        relay_id: &str,
+        site_name: &str,
+        quota: &KeyQuota,
+    ) -> Option<LowBalanceNotice> {
+        let mut guard = lock(&self.inner);
+        let mut next = guard.clone();
+        let notice = relay_low_balance_notice(&mut next, relay_id, site_name, quota);
+        if next.relay_reminders == guard.relay_reminders {
+            return notice;
+        }
+        sync_auth_expired_marks(&mut next);
+        next.revision = next.revision.saturating_add(1);
+        if self.newer_schema_version.is_none() {
+            if let Err(err) = write_state(&self.path, &next) {
+                eprintln!("保存应用状态失败：{err}");
+            }
+        }
+        *guard = next.clone();
+        drop(guard);
+        self.emit(&next);
+        notice
     }
 
     /// 悬浮球开关由设置页的独立命令写入：窗口创建与销毁由调用方负责，
@@ -4171,6 +4446,109 @@ pub fn start_scheduler(store: Arc<StateStore>) {
         }
         thread::sleep(SCHEDULER_TICK);
     });
+}
+
+/// 中转站余额提醒的后台刷新。前端定时器在窗口销毁后停止，因此提醒必须由
+/// Rust 驱动；只处理已开启提醒的条目，按偏好间隔顺序查询，失败按指数退避。
+pub fn start_relay_reminder_scheduler(
+    state: Arc<StateStore>,
+    relay: Arc<crate::relay::RelayStore>,
+) {
+    thread::spawn(move || {
+        // 退避记录只保存在内存：重启后按上次成功查询时间重新判断。
+        let mut attempts: HashMap<String, RelayRefreshAttempt> = HashMap::new();
+        loop {
+            if state.shutdown.load(Ordering::SeqCst) {
+                break;
+            }
+            run_relay_reminder_tick(&state, &relay, &mut attempts);
+            thread::sleep(SCHEDULER_TICK);
+        }
+    });
+}
+
+struct RelayRefreshAttempt {
+    last_attempt_epoch: i64,
+    failures: u32,
+}
+
+fn run_relay_reminder_tick(
+    state: &Arc<StateStore>,
+    relay: &Arc<crate::relay::RelayStore>,
+    attempts: &mut HashMap<String, RelayRefreshAttempt>,
+) {
+    let (refresh_minutes, enabled) = state.relay_reminder_targets();
+    if enabled.is_empty() {
+        attempts.clear();
+        return;
+    }
+    // 合法选项最小为 1 分钟；兜底成 0 会让每个 tick 都请求接口。
+    let interval_secs = (refresh_minutes.max(1) * 60).max(60);
+    // 已移除或已关闭提醒的条目不再刷新，同时清理内存中的退避记录。
+    attempts.retain(|id, _| enabled.iter().any(|candidate| candidate == id));
+
+    let now = epoch_now();
+    for id in enabled {
+        let Some(account) = relay.get(&id) else {
+            continue;
+        };
+        if !relay_refresh_due(now, interval_secs, &account, attempts.get(&id)) {
+            continue;
+        }
+        // 阻塞网络查询，必须留在后台线程；一次只刷新一个，避免并发打满。
+        let result = relay.refresh(&id);
+        let attempt = attempts.entry(id.clone()).or_insert(RelayRefreshAttempt {
+            last_attempt_epoch: 0,
+            failures: 0,
+        });
+        attempt.last_attempt_epoch = now;
+        let account = match result {
+            Ok(account) if account.last_error.is_none() && account.quota.is_some() => {
+                attempt.failures = 0;
+                account
+            }
+            // 查询失败保留上次成功快照，等下一次成功查询再判断。
+            _ => {
+                attempt.failures = attempt.failures.saturating_add(1);
+                continue;
+            }
+        };
+        let site_name = account.display_name();
+        if let Some(quota) = account.quota.as_ref() {
+            if let Some(notice) = state.record_relay_balance(&id, &site_name, quota) {
+                state.notify_relay_low_balance(&notice);
+            }
+        }
+        // 窗口打开时同步后台刷新结果；锁顺序与状态写入不重叠。
+        let _ = state.app.emit(
+            crate::relay::RELAY_ACCOUNTS_EVENT,
+            relay.view_with_revision(),
+        );
+    }
+}
+
+fn relay_refresh_due(
+    now: i64,
+    interval_secs: i64,
+    account: &crate::relay::RelayAccount,
+    attempt: Option<&RelayRefreshAttempt>,
+) -> bool {
+    match attempt {
+        Some(attempt) if attempt.failures > 0 => {
+            now - attempt.last_attempt_epoch >= relay_refresh_backoff_secs(attempt.failures)
+        }
+        _ => {
+            // 以「上次成功查询」和「本线程上次尝试」中较晚者为基准，避免启动或
+            // 前端刚刷新过时立刻重复请求。
+            let baseline = attempt
+                .map(|attempt| attempt.last_attempt_epoch)
+                .into_iter()
+                .chain(account.checked_at_epoch)
+                .max()
+                .unwrap_or(0);
+            now - baseline >= interval_secs
+        }
+    }
 }
 
 #[cfg(test)]
@@ -6225,5 +6603,189 @@ mod tests {
             snapshot.capability_gaps,
             vec!["Cursor 未返回计费周期重置时间".to_string()]
         );
+    }
+
+    fn relay_reminder_state(threshold: f64, currency: &str) -> PersistedState {
+        let mut state = default_state();
+        state.relay_reminders.insert(
+            "relay-1".to_string(),
+            RelayReminder {
+                enabled: true,
+                threshold,
+                currency: currency.to_string(),
+                low: false,
+            },
+        );
+        state
+    }
+
+    fn relay_quota(balance: Option<f64>, currency: Option<&str>, unlimited: bool) -> KeyQuota {
+        KeyQuota {
+            provider: crate::quota::QuotaProvider::Sub2Api,
+            mode: crate::quota::QuotaMode::Key,
+            key_name: None,
+            plan_name: None,
+            currency: currency.map(str::to_string),
+            valid: true,
+            unlimited,
+            limit_usd: None,
+            used_usd: None,
+            remaining_usd: balance,
+            account: None,
+            account_error: None,
+            expires_at_epoch: None,
+            windows: Vec::new(),
+            checked_at_epoch: 0,
+        }
+    }
+
+    #[test]
+    fn relay_low_balance_notifies_once_per_low_round() {
+        let mut state = relay_reminder_state(5.0, "USD");
+        let mut notices = 0;
+        for balance in [6.0, 4.0, 3.0, 5.0, 4.0] {
+            if relay_low_balance_notice(
+                &mut state,
+                "relay-1",
+                "站点 A",
+                &relay_quota(Some(balance), Some("USD"), false),
+            )
+            .is_some()
+            {
+                notices += 1;
+            }
+        }
+        // 6 不提醒；4 提醒；3 同一轮不重复；5 恢复；4 再次提醒。
+        assert_eq!(notices, 2);
+        assert!(state.relay_reminders["relay-1"].low);
+    }
+
+    #[test]
+    fn relay_low_balance_mark_survives_restart() {
+        let mut state = relay_reminder_state(5.0, "USD");
+        assert!(relay_low_balance_notice(
+            &mut state,
+            "relay-1",
+            "站点 A",
+            &relay_quota(Some(4.0), Some("USD"), false),
+        )
+        .is_some());
+
+        // 模拟重启：配置与 low 标记一起反序列化，持续低余额不重复提醒。
+        let encoded = serde_json::to_string(&state).unwrap();
+        let mut reloaded: PersistedState = serde_json::from_str(&encoded).unwrap();
+        assert!(reloaded.relay_reminders["relay-1"].low);
+        assert!(relay_low_balance_notice(
+            &mut reloaded,
+            "relay-1",
+            "站点 A",
+            &relay_quota(Some(3.0), Some("USD"), false),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn relay_low_balance_skips_unusable_quota_without_changing_mark() {
+        let mut state = relay_reminder_state(5.0, "USD");
+
+        // 余额缺失、币种缺失、币种不一致、额度不受限制都不触发，也不消耗提醒资格。
+        for quota in [
+            relay_quota(None, Some("USD"), false),
+            relay_quota(Some(1.0), None, false),
+            relay_quota(Some(1.0), Some("CNY"), false),
+            relay_quota(Some(1.0), Some("USD"), true),
+        ] {
+            assert!(relay_low_balance_notice(&mut state, "relay-1", "站点 A", &quota).is_none());
+            assert!(!state.relay_reminders["relay-1"].low);
+        }
+    }
+
+    #[test]
+    fn relay_low_balance_prefers_account_balance() {
+        let mut state = relay_reminder_state(5.0, "USD");
+        let mut quota = relay_quota(Some(100.0), Some("USD"), false);
+        quota.account = Some(crate::quota::AccountQuota {
+            total_usd: Some(100.0),
+            used_usd: Some(96.0),
+            remaining_usd: Some(4.0),
+            source: crate::quota::AccountSource::AccessToken,
+            windows: Vec::new(),
+        });
+
+        let notice = relay_low_balance_notice(&mut state, "relay-1", "站点 A", &quota).unwrap();
+        assert_eq!(notice.balance, 4.0);
+        assert_eq!(notice.threshold, 5.0);
+        assert_eq!(notice.currency, "USD");
+    }
+
+    #[test]
+    fn relay_low_balance_does_nothing_when_disabled() {
+        let mut state = relay_reminder_state(5.0, "USD");
+        state.relay_reminders.get_mut("relay-1").unwrap().enabled = false;
+        assert!(relay_low_balance_notice(
+            &mut state,
+            "relay-1",
+            "站点 A",
+            &relay_quota(Some(1.0), Some("USD"), false),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn relay_threshold_validation_covers_bounds_and_precision() {
+        assert_eq!(validate_relay_threshold(5.0).unwrap(), 5.0);
+        assert_eq!(validate_relay_threshold(0.01).unwrap(), 0.01);
+        assert_eq!(validate_relay_threshold(1_000_000.0).unwrap(), 1_000_000.0);
+        assert!(validate_relay_threshold(0.0).is_err());
+        assert!(validate_relay_threshold(-1.0).is_err());
+        assert!(validate_relay_threshold(f64::NAN).is_err());
+        assert!(validate_relay_threshold(f64::INFINITY).is_err());
+        assert!(validate_relay_threshold(1_000_000.01).is_err());
+        assert!(validate_relay_threshold(5.001).is_err());
+    }
+
+    #[test]
+    fn relay_reminder_disabling_skips_threshold_validation() {
+        // 关闭提醒不应被输入框里的残留值挡住；开启时仍按原规则校验。
+        assert_eq!(relay_reminder_threshold(false, f64::NAN).unwrap(), None);
+        assert_eq!(relay_reminder_threshold(false, -1.0).unwrap(), None);
+        assert_eq!(relay_reminder_threshold(false, 5.0).unwrap(), None);
+        assert!(relay_reminder_threshold(true, 0.0).is_err());
+        assert_eq!(relay_reminder_threshold(true, 5.0).unwrap(), Some(5.0));
+    }
+
+    #[test]
+    fn relay_reminder_currency_prefers_query_and_falls_back_to_saved() {
+        assert_eq!(relay_reminder_currency(Some("usd"), None).unwrap(), "USD");
+        assert_eq!(relay_reminder_currency(None, Some("usd")).unwrap(), "USD");
+        // 本次查询没给币种或给了无法识别的值：沿用已保存的币种。
+        assert_eq!(
+            relay_reminder_currency(Some(""), Some("CNY")).unwrap(),
+            "CNY"
+        );
+        assert_eq!(
+            relay_reminder_currency(Some("US D"), Some("CNY")).unwrap(),
+            "CNY"
+        );
+        assert!(relay_reminder_currency(None, None).is_err());
+        assert!(relay_reminder_currency(Some("US D"), None).is_err());
+    }
+
+    #[test]
+    fn relay_low_balance_duplicate_check_is_idempotent() {
+        let mut state = relay_reminder_state(5.0, "USD");
+        let quota = relay_quota(Some(4.0), Some("USD"), false);
+        assert!(relay_low_balance_notice(&mut state, "relay-1", "站点 A", &quota).is_some());
+        // 手动刷新与后台线程可能同时判定；第二次只看到已置位的 low，不重复通知。
+        assert!(relay_low_balance_notice(&mut state, "relay-1", "站点 A", &quota).is_none());
+    }
+
+    #[test]
+    fn relay_refresh_backoff_doubles_and_caps() {
+        assert_eq!(relay_refresh_backoff_secs(1), 60);
+        assert_eq!(relay_refresh_backoff_secs(2), 120);
+        assert_eq!(relay_refresh_backoff_secs(3), 240);
+        assert_eq!(relay_refresh_backoff_secs(6), 1800);
+        assert_eq!(relay_refresh_backoff_secs(20), 1800);
     }
 }

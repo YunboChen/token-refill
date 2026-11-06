@@ -58,6 +58,7 @@ export function defaultAppState(): AppState {
     preferences: DEFAULT_PREFERENCES,
     overviewOrder: { platforms: [], accounts: [] },
     relayOrder: [],
+    relayReminders: {},
     floatingBall: { selected: null, position: null },
   };
 }
