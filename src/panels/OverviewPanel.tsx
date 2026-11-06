@@ -2,6 +2,7 @@ import {
   Fragment,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
 } from 'react';
@@ -56,6 +57,7 @@ import ChevronIcon from '../components/ChevronIcon';
 import PlatformHeading from '../components/PlatformHeading';
 import RelayQuotaBoard from '../components/RelayQuotaBoard';
 import ReorderHandle from '../components/ReorderHandle';
+import ResetCreditsDialog from '../components/ResetCreditsDialog';
 import styles from '../App.module.css';
 
 type OverviewTab = 'subscription' | 'relay';
@@ -592,17 +594,31 @@ function AccountPanel({
   const tier = accountPlanTier(account);
   const bodyId = `overview-account-${account.accountId}`;
   const summary = accountSummary(account);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const resetDialogTrigger = useRef<HTMLElement | null>(null);
+  // Codex 各套餐共用同一份额度快照；后台刷新只读取可用数量。
+  const resetCreditCount =
+    account.platform === 'codex'
+      ? account.products.reduce<number | null>(
+          (count, product) =>
+            count ?? product.snapshot?.resetCredits?.availableCount ?? null,
+          null,
+        ) ?? 0
+      : 0;
 
   const card = (
     <>
       <header className={styles.quotaAccountHead}>
-        <button
-          type="button"
-          className={styles.quotaAccountToggle}
-          onClick={onToggle}
-          aria-expanded={open}
-          aria-controls={bodyId}
-        >
+        <div className={styles.quotaAccountLead}>
+          {/* 透明覆盖层负责整块展开/收起；内容层可点击的只有重置卡胶囊。 */}
+          <button
+            type="button"
+            className={styles.quotaAccountToggle}
+            onClick={onToggle}
+            aria-expanded={open}
+            aria-controls={bodyId}
+            aria-label={`${open ? '收起' : '展开'} ${account.displayName}`}
+          />
           <span className={styles.quotaAccountInfo}>
             <span className={styles.quotaAccountIdentity}>
               <span className={styles.quotaAccountName}>
@@ -610,6 +626,23 @@ function AccountPanel({
               </span>
               {tier ? (
                 <span className={styles.planTier}>{planTierLabel(tier)}</span>
+              ) : null}
+              {resetCreditCount > 0 ? (
+                <button
+                  type="button"
+                  className={styles.resetCreditsPill}
+                  onClick={(event) => {
+                    resetDialogTrigger.current = event.currentTarget;
+                    setResetDialogOpen(true);
+                  }}
+                  disabled={!desktop}
+                  aria-haspopup="dialog"
+                  aria-label={`查看 ${account.displayName} 的重置卡，可用 ${resetCreditCount} 张`}
+                  title={desktop ? '查看重置卡' : '浏览器预览无法调用 Rust'}
+                >
+                  重置卡 {resetCreditCount}
+                  <ChevronIcon direction="right" />
+                </button>
               ) : null}
             </span>
             {/* 身份/来源常驻第二行：头部高度在展开与收起时不变，
@@ -619,7 +652,7 @@ function AccountPanel({
             </span>
           </span>
           {!open ? <span className={styles.quotaSummary}>{summary}</span> : null}
-        </button>
+        </div>
 
         <div className={styles.quotaAccountTools}>
           {/* 需处理视图即使收起也要能确认数据的新鲜度。 */}
@@ -697,6 +730,15 @@ function AccountPanel({
           </m.div>
         ) : null}
       </AnimatePresence>
+
+      {resetDialogOpen ? (
+        <ResetCreditsDialog
+          accountId={account.accountId}
+          accountName={account.displayName}
+          trigger={resetDialogTrigger.current}
+          onClose={() => setResetDialogOpen(false)}
+        />
+      ) : null}
     </>
   );
 
