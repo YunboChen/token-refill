@@ -731,14 +731,19 @@ function AccountPanel({
         ) : null}
       </AnimatePresence>
 
-      {resetDialogOpen ? (
-        <ResetCreditsDialog
-          accountId={account.accountId}
-          accountName={account.displayName}
-          trigger={resetDialogTrigger.current}
-          onClose={() => setResetDialogOpen(false)}
-        />
-      ) : null}
+      {/* 弹窗自己用 portal 挂到 body，退场动画需要 AnimatePresence 保持子树存活；
+          它必须包在组件外层，不能放进组件内部的 portal 里，否则组件被父级卸载时动画不会播放。 */}
+      <AnimatePresence>
+        {resetDialogOpen ? (
+          <ResetCreditsDialog
+            key="reset-credits-dialog"
+            accountId={account.accountId}
+            accountName={account.displayName}
+            trigger={resetDialogTrigger.current}
+            onClose={() => setResetDialogOpen(false)}
+          />
+        ) : null}
+      </AnimatePresence>
     </>
   );
 
