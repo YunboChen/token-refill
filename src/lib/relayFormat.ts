@@ -1,4 +1,5 @@
 import type {
+  KeyQuota,
   KeyQuotaWindow,
   QuotaMode,
   QuotaProvider,
@@ -47,6 +48,27 @@ export function relayErrorText(error: unknown): string {
 /** 卡片标题只显示主机名，完整地址留在 title 里。 */
 export function relayHost(baseUrl: string): string {
   return baseUrl.replace(/^https?:\/\//, '');
+}
+
+/** 余额提醒可比较的余额与币种；任一无法识别时返回 null。 */
+export interface RelayReminderBalance {
+  balance: number;
+  currency: string;
+}
+
+/**
+ * 只有平台明确返回余额和可识别币种时才允许开启提醒并参与比较；
+ * 额度不受限制、余额缺失或币种缺失都返回 null。
+ */
+export function relayReminderBalance(
+  quota: KeyQuota | null,
+): RelayReminderBalance | null {
+  if (!quota || quota.unlimited) return null;
+  const balance = quota.account?.remainingUsd ?? quota.remainingUsd;
+  const currency = quota.currency?.trim().toUpperCase() ?? '';
+  if (balance === null || !Number.isFinite(balance)) return null;
+  if (!/^[A-Z0-9]{1,16}$/.test(currency)) return null;
+  return { balance, currency };
 }
 
 export function formatRelayMoney(

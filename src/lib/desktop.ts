@@ -143,6 +143,15 @@ export interface FloatingBallState {
   position: FloatingBallPosition | null;
 }
 
+/** 中转站低余额提醒配置；金额与币种都是脱敏数据，不含任何凭证。 */
+export interface RelayReminder {
+  enabled: boolean;
+  threshold: number;
+  currency: string;
+  /** 是否处于「已提醒的低余额轮次」；余额回升后恢复提醒资格。 */
+  low: boolean;
+}
+
 export interface AppState {
   schemaVersion: number;
   revision: number;
@@ -151,6 +160,8 @@ export interface AppState {
   overviewOrder: OverviewOrder;
   /** 中转站账户的展示顺序；未列出的保持注册表顺序。 */
   relayOrder: string[];
+  /** 按 relayId 保存的低余额提醒；没有配置的站点不出现。 */
+  relayReminders: Record<string, RelayReminder>;
   floatingBall: FloatingBallState;
 }
 
@@ -634,6 +645,18 @@ export function setRelayAccountLabel(
 
 export function refreshRelayAccount(id: string): Promise<RelayAccount> {
   return invoke<RelayAccount>('relay_refresh', { id });
+}
+
+/**
+ * 保存中转站低余额提醒。开启时由 Rust 按最近一次成功查询的币种写入配置；
+ * 余额或币种无法识别时命令返回可直接展示的原因。
+ */
+export function setRelayReminder(
+  id: string,
+  enabled: boolean,
+  threshold: number,
+): Promise<AppState> {
+  return invoke<AppState>('relay_set_reminder', { id, enabled, threshold });
 }
 
 /** 中转站条目列表 + 修订号；两个窗口共用同一份 Rust 注册表。 */
