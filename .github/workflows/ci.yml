@@ -2,7 +2,7 @@ name: ci
 
 # 合并前的质量门禁：PR 与推送到 main / dev 的提交都要跑。
 # release.yml 的 check 只在发布时执行，这里把同一组检查提前到合并之前，
-# 避免问题拖到发版那一刻才发现。改动检查项时请同步 release.yml 的 check job。
+# 避免问题拖到发版那一刻才发现。改动 macOS 检查项时请同步 release.yml 的 check job。
 
 on:
   pull_request:
@@ -64,8 +64,7 @@ jobs:
 
       - run: pnpm test:rust
 
-  # Windows 专属分支（exe/cmd 查找、ShellExecuteW、端口错误映射）只能在 Windows 上编译执行。
-  # 不重复前端构建与 clippy：macOS job 已经覆盖，这里只跑平台相关测试。
+  # Clippy 检查 Windows 专属分支的告警，Rust 测试在 Windows 上原生执行。
   check-windows:
     name: ci / check (windows)
     runs-on: windows-latest
@@ -81,6 +80,8 @@ jobs:
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -88,5 +89,7 @@ jobs:
           key: ci-windows
 
       - run: pnpm install --frozen-lockfile
+
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
 
       - run: pnpm test:rust
