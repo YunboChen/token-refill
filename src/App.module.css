@@ -984,13 +984,20 @@
   gap: 12px;
 }
 
-/* 名称、档位与折叠摘要都在这个按钮内：整块可点，展开/收起不只依赖右侧箭头 */
-.quotaAccountToggle {
+/* 名称、档位、重置卡与折叠摘要共用这一行；覆盖层负责展开/收起 */
+.quotaAccountLead {
+  position: relative;
   display: flex;
   flex: 1;
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+/* 透明按钮铺满整行：点名称或摘要都能展开，重置卡胶囊单独走自己的按钮 */
+.quotaAccountToggle {
+  position: absolute;
+  inset: 0;
   min-height: 26px;
   padding: 0;
   border: 0;
@@ -998,8 +1005,23 @@
   color: inherit;
   background: transparent;
   font: inherit;
-  text-align: left;
   cursor: pointer;
+}
+
+.quotaAccountToggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.quotaAccountLead > .quotaAccountInfo,
+.quotaAccountLead > .quotaSummary {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.quotaAccountLead > .quotaAccountInfo .resetCreditsPill {
+  pointer-events: auto;
 }
 
 /* 收起时左侧信息占两行：名称/档位 + 身份/来源；摘要与整块垂直居中同排。
@@ -1038,7 +1060,7 @@
   white-space: nowrap;
 }
 
-.quotaAccountToggle .planTier {
+.quotaAccountIdentity .planTier {
   flex-shrink: 0;
 }
 
@@ -1340,6 +1362,104 @@
   color: var(--muted);
   font-size: 11px;
   line-height: 1.6;
+}
+
+/* ---------- Codex 重置卡 ---------- */
+
+/* 账户名与档位后面的入口胶囊：只在有可用卡时出现 */
+.resetCreditsPill {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 8px 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.resetCreditsPill:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--sunken);
+}
+
+.resetCreditsPill:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.resetCreditsPill .chevronIcon {
+  width: 11px;
+  height: 11px;
+  opacity: 0.7;
+}
+
+.resetCreditList {
+  display: grid;
+  gap: 8px;
+}
+
+.resetCreditRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+}
+
+.resetCreditMain {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.resetCreditTitle {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.resetCreditMeta {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.resetCreditConfirm {
+  display: grid;
+  gap: 10px;
+}
+
+.resetCreditWarning {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.resetCreditNotice {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-line;
+}
+
+.resetCreditNotice[data-kind='success'] {
+  color: var(--ok);
 }
 
 /* 状态块：错误 / 提示，圆角与控件同档 */

@@ -226,6 +226,16 @@ pub struct QuotaSnapshot {
     pub groups: Vec<QuotaGroup>,
     /// 必需字段缺失等能力缺口，明确记录而不是静默补零。
     pub capability_gaps: Vec<String>,
+    /// Codex 重置卡摘要；后台刷新只取数量，不请求明细。
+    /// 旧状态文件没有该字段时按“未知”处理，不显示 0 张。
+    #[serde(default)]
+    pub reset_credits: Option<ResetCreditsSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetCreditsSummary {
+    pub available_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -612,6 +622,12 @@ fn snapshot_from_usage(usage: &CodexUsage) -> QuotaSnapshot {
         checked_at_epoch: usage.checked_at_epoch,
         groups,
         capability_gaps,
+        reset_credits: usage
+            .reset_credits
+            .as_ref()
+            .map(|credits| ResetCreditsSummary {
+                available_count: credits.available_count,
+            }),
     }
 }
 
@@ -828,6 +844,7 @@ fn token_plan_snapshot(
             windows: vec![window],
         }],
         capability_gaps,
+        reset_credits: None,
     }
 }
 
@@ -872,6 +889,7 @@ fn coding_plan_snapshot(usage: &CodingPlanUsage, checked_at: i64) -> QuotaSnapsh
             checked_at_epoch: checked_at,
             groups: Vec::new(),
             capability_gaps: vec!["未找到有效的 Coding Plan 订阅".to_string()],
+            reset_credits: None,
         };
     }
     let mut capability_gaps = Vec::new();
@@ -910,6 +928,7 @@ fn coding_plan_snapshot(usage: &CodingPlanUsage, checked_at: i64) -> QuotaSnapsh
             windows,
         }],
         capability_gaps,
+        reset_credits: None,
     }
 }
 
@@ -942,6 +961,7 @@ fn workbuddy_snapshot(usage: &CreditsUsage, checked_at: i64) -> QuotaSnapshot {
         checked_at_epoch: checked_at,
         groups,
         capability_gaps: usage.capability_gaps.clone(),
+        reset_credits: None,
     }
 }
 
@@ -1020,6 +1040,7 @@ fn opencode_snapshot(usage: &OpencodeUsage) -> QuotaSnapshot {
             windows,
         }],
         capability_gaps,
+        reset_credits: None,
     }
 }
 
@@ -1110,6 +1131,7 @@ fn cursor_snapshot(usage: &CursorUsage) -> QuotaSnapshot {
             windows,
         }],
         capability_gaps,
+        reset_credits: None,
     }
 }
 
@@ -1170,6 +1192,7 @@ fn commandcode_snapshot(usage: &CommandCodeUsage) -> QuotaSnapshot {
             windows,
         }],
         capability_gaps: usage.capability_gaps.clone(),
+        reset_credits: None,
     }
 }
 
@@ -1211,6 +1234,7 @@ fn antigravity_snapshot(usage: &AntigravityUsage) -> QuotaSnapshot {
         checked_at_epoch: usage.checked_at_epoch,
         groups,
         capability_gaps,
+        reset_credits: None,
     }
 }
 
@@ -2387,6 +2411,18 @@ struct PendingLogin {
     cancel: Arc<AtomicBool>,
 }
 
+/// 重置卡消耗期间占住账户标记；即使查询线程 panic 也会在栈展开时释放。
+struct ResetCreditGuard<'a> {
+    set: &'a Mutex<HashSet<String>>,
+    account_id: String,
+}
+
+impl Drop for ResetCreditGuard<'_> {
+    fn drop(&mut self) {
+        lock(self.set).remove(&self.account_id);
+    }
+}
+
 /// 仍占用授权入口的流程。已请求取消的流程正在回收回调端口与子进程，
 /// 不再阻塞新的授权；否则用户取消后要等后台线程收尾才能重新发起。
 fn active_login(logins: &HashMap<String, PendingLogin>) -> Option<&PendingLogin> {
@@ -2405,6 +2441,10 @@ pub struct StateStore {
     api_dir: PathBuf,
     app: AppHandle,
     in_flight: Mutex<HashSet<String>>,
+    /// 正在消耗重置卡的账户；防止重复点击或两个窗口同时触发时多扣一张。
+    consuming_reset_credit: Mutex<HashSet<String>>,
+    /// 有在途查询、但消耗重置卡后必须再查一次的账户。
+    forced_refresh_pending: Mutex<HashSet<String>>,
     logins: Mutex<HashMap<String, PendingLogin>>,
     shutdown: AtomicBool,
     /// 状态文件由更高版本写入时为 `Some(版本号)`：本次运行不落盘，
@@ -2460,6 +2500,8 @@ impl StateStore {
             api_dir,
             app,
             in_flight: Mutex::new(HashSet::new()),
+            consuming_reset_credit: Mutex::new(HashSet::new()),
+            forced_refresh_pending: Mutex::new(HashSet::new()),
             logins: Mutex::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
             newer_schema_version: loaded.newer_schema_version,
@@ -4027,6 +4069,87 @@ impl StateStore {
         Ok(())
     }
 
+    /// 消耗重置卡后的强制复查：当前有在途查询时排队，在它收尾后再跑一次，
+    /// 避免消耗前的旧结果覆盖新状态；没有在途查询时等同于普通刷新。
+    pub fn request_refresh_after_current(self: &Arc<Self>, account_id: &str) -> Result<(), String> {
+        if !self
+            .snapshot()
+            .accounts
+            .iter()
+            .any(|account| account.account_id == account_id)
+        {
+            return Err(format!("未知账户：{account_id}"));
+        }
+        {
+            let mut in_flight = lock(&self.in_flight);
+            if !in_flight.insert(account_id.to_string()) {
+                lock(&self.forced_refresh_pending).insert(account_id.to_string());
+                return Ok(());
+            }
+        }
+        self.update_soft(|state| mark_refreshing(state, account_id, epoch_now()));
+        spawn_refresh(Arc::clone(self), account_id.to_string());
+        Ok(())
+    }
+
+    /// 只接受 Codex 订阅账户；返回 Some(home) 表示独立授权目录。
+    fn codex_home_for_action(&self, account_id: &str) -> Result<Option<PathBuf>, String> {
+        let state = self.snapshot();
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)
+            .ok_or_else(|| format!("未知账户：{account_id}"))?;
+        if account.platform != "codex" {
+            return Err("只有 Codex 订阅账户支持重置卡。".to_string());
+        }
+        if self.has_pending_login(account_id) {
+            return Err("该账户正在等待授权，请完成或取消授权后再操作。".to_string());
+        }
+        match account.source {
+            AccountSource::Local => Ok(None),
+            AccountSource::Managed => self
+                .private_profile_dir(account_id)
+                .map(Some)
+                .ok_or_else(|| "账户标识无效".to_string()),
+        }
+    }
+
+    /// 按需读取重置卡明细；后台刷新只保存数量，不调用这里。
+    pub fn read_codex_reset_credits(
+        &self,
+        account_id: &str,
+    ) -> Result<codex::CodexResetCredits, String> {
+        let home = self.codex_home_for_action(account_id)?;
+        codex::read_reset_credits(home.as_deref()).map_err(|err| err.message)
+    }
+
+    /// 消耗一张重置卡。成功后由调用方触发一次刷新；成功后不会返回任何凭证。
+    pub fn consume_codex_reset_credit(
+        &self,
+        account_id: &str,
+        credit_id: Option<&str>,
+        idempotency_key: &str,
+    ) -> Result<String, String> {
+        let idempotency_key = idempotency_key.trim();
+        if idempotency_key.is_empty() || idempotency_key.len() > 128 {
+            return Err("重置卡请求标识无效，请重新打开面板后再试。".to_string());
+        }
+        let home = self.codex_home_for_action(account_id)?;
+        {
+            let mut consuming = lock(&self.consuming_reset_credit);
+            if !consuming.insert(account_id.to_string()) {
+                return Err("正在使用重置卡，请稍候。".to_string());
+            }
+        }
+        let _guard = ResetCreditGuard {
+            set: &self.consuming_reset_credit,
+            account_id: account_id.to_string(),
+        };
+        codex::consume_reset_credit(home.as_deref(), credit_id, idempotency_key)
+            .map_err(|err| err.message)
+    }
+
     fn due_accounts(&self, now: i64) -> Vec<String> {
         let state = self.snapshot();
         let minutes = state.preferences.refresh_minutes;
@@ -4073,6 +4196,11 @@ fn spawn_refresh(store: Arc<StateStore>, account_id: String) {
             store.update_soft(|state| apply_refresh_panic(state, &account_id, now));
         }
         lock(&store.in_flight).remove(&account_id);
+        // 消耗重置卡时如果正好有查询在途，这里补跑一次，确保界面拿到扣卡后的额度。
+        if lock(&store.forced_refresh_pending).remove(&account_id) {
+            store.update_soft(|state| mark_refreshing(state, &account_id, epoch_now()));
+            spawn_refresh(Arc::clone(&store), account_id);
+        }
     });
 }
 
@@ -4554,7 +4682,7 @@ fn relay_refresh_due(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codex::{CodexLimitBucket, CodexWindow};
+    use crate::codex::{CodexLimitBucket, CodexResetCredits, CodexWindow};
 
     fn synthetic_usage() -> CodexUsage {
         CodexUsage {
@@ -4580,6 +4708,7 @@ mod tests {
                     },
                 ],
             }],
+            reset_credits: None,
         }
     }
 
@@ -4606,6 +4735,7 @@ mod tests {
                     resets_at_epoch,
                 }],
             }],
+            reset_credits: None,
         }
     }
 
@@ -4809,6 +4939,26 @@ mod tests {
     }
 
     #[test]
+    fn codex_snapshot_keeps_reset_credit_count_only() {
+        let mut usage = synthetic_usage();
+        usage.reset_credits = Some(CodexResetCredits {
+            available_count: 2,
+            credits: Some(Vec::new()),
+        });
+        let snapshot = snapshot_from_usage(&usage);
+        assert_eq!(
+            snapshot.reset_credits,
+            Some(ResetCreditsSummary { available_count: 2 })
+        );
+    }
+
+    #[test]
+    fn snapshot_without_reset_credits_stays_unknown() {
+        let snapshot = snapshot_from_usage(&synthetic_usage());
+        assert_eq!(snapshot.reset_credits, None);
+    }
+
+    #[test]
     fn missing_window_fields_are_recorded_as_capability_gaps() {
         let mut state = default_state();
         let usage = CodexUsage {
@@ -4825,6 +4975,7 @@ mod tests {
                     resets_at_epoch: None,
                 }],
             }],
+            reset_credits: None,
         };
         apply_success(&mut state, DEFAULT_ACCOUNT_ID, usage, None);
         let snapshot = state.accounts[0].products[0].snapshot.as_ref().unwrap();
