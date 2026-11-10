@@ -113,6 +113,18 @@ Windows 目标目录：
 
 ## 9. 验证记录
 
+2026-11-10，Windows 11 10.0.26300 x64，MSVC 目标（开机自启仅驻留菜单栏分支）：
+
+| 项目 | 结果 |
+| --- | --- |
+| `cargo fmt --check` | 通过 |
+| `cargo clippy --locked --all-targets -- -D warnings` | 通过；修复 `keep_hidden_on_login_start` 的 `app` 参数只在 macOS 分支使用、Windows 下报未使用变量的编译错误 |
+| `cargo test --locked` | 277 项单元测试 + 12 项集成测试通过；Unix 专属的假 `codex app-server` 用例按平台跳过 |
+| `pnpm build` | 通过 |
+| 登录项注册格式 | 按 `tauri-plugin-autostart` 2.7.0 / `auto-launch` 0.6.0 源码核对：Windows 写入 HKCU `Run`、值名为应用名、数据为 exe 路径加 `--autostart`；macOS 写入 `~/Library/LaunchAgents/<应用名>.plist` 的 `ProgramArguments`，与 `autostart.rs` 的读取实现一致 |
+
+尚未验证：系统登录项带 `--autostart` 拉起的实际行为（主窗口不弹出、菜单栏图标可用）、旧登录项升级后只改写一次、任务管理器禁用状态不被重置。
+
 2026-10-23，Windows 10.0.26300 x64，MSVC 目标：
 
 | 项目 | 结果 |
@@ -136,6 +148,6 @@ Windows 目标目录：
 - 授权失效通知可靠性：步骤见 [Windows 授权失效提醒验收](./windows-notification-validation.md)（待执行）。当前已完成跨平台纯状态测试；Windows 侧使用插件发送、没有投递回执，系统通知关闭时是否会误记成功需由该清单的 N-07 确认。
 - 应用窗口的实际渲染与视觉细节（仅确认进程启动与状态写入，未截图窗口）。
 - 菜单栏/托盘图标、快速查看面板的显示、定位（任务栏上方）、失焦收起与关闭主窗口后常驻尚未在 Windows 实机验证。
-- 桌面悬浮球在 Windows 的透明窗口渲染、`WS_EX_NOACTIVATE` 点击行为、拖动、任务栏/多显示器吸附、菜单失焦收起与弹层尺寸尚未实机验证；本机（macOS）缺少 MSVC SDK 头文件，未完成 Windows 目标的交叉 `cargo check`。
+- 桌面悬浮球在 Windows 的透明窗口渲染、`WS_EX_NOACTIVATE` 点击行为、拖动、任务栏/多显示器吸附、菜单失焦收起与弹层尺寸尚未实机验证；Windows 目标的编译、Clippy 与测试已在本机（Windows + MSVC）通过（2026-11-10）。
 - 自绘标题栏在 Windows 的实机表现：`set_decorations(false)` 是否出现原生边框闪烁、拖拽与边缘缩放是否正常、双击最大化、关闭后常驻、最大化态与不同缩放比例下的布局。需要在 Windows 实机逐项验收并记录结果。
 - Windows 10 具体小版本、arm64、长时间运行与休眠恢复。

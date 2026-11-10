@@ -1,5 +1,6 @@
 mod antigravity;
 mod api_key;
+mod autostart;
 mod bailian;
 mod channel;
 mod cli;
@@ -672,7 +673,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
-            None,
+            // 登录项拉起时只驻留菜单栏，手动启动才显示主窗口。
+            Some(vec![autostart::START_ARG]),
         ))
         // 更新器只从 Rust 侧调用；前端没有 updater 权限，下载与安装均需显式命令。
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -688,6 +690,17 @@ pub fn run() {
                 app.package_info().version,
                 std::env::consts::OS,
                 channel::of(app.handle()).as_str()
+            );
+
+            // 登录项启动只驻留菜单栏；手动启动照常显示主窗口。
+            let launched_from_login = autostart::started_from_login();
+            logging::lifecycle!(
+                "[app] 登录项启动={launched_from_login}，主窗口{}",
+                if launched_from_login {
+                    "保持隐藏"
+                } else {
+                    "随启动显示"
+                }
             );
 
             // 窗口标题来自合并后的 productName：正式版与测试版各自显示自己的名称。
@@ -709,7 +722,17 @@ pub fn run() {
 
             // 自启以系统登录项为准：启动时回写实际状态，避免本地开关与系统不一致。
             match app.autolaunch().is_enabled() {
-                Ok(actual) => store.reconcile_auto_launch(actual),
+                Ok(actual) => {
+                    store.reconcile_auto_launch(actual);
+                    // 旧版本注册的登录项没有静默参数，升级后的第一次登录仍会弹出
+                    // 主窗口；只在缺参数时改写一次，避免每次启动都重写系统注册。
+                    if actual && !autostart::registration_is_silent(&app_name) {
+                        match app.autolaunch().enable() {
+                            Ok(()) => logging::lifecycle!("[app] 已为登录项补上静默参数"),
+                            Err(err) => eprintln!("更新开机自启参数失败：{err}"),
+                        }
+                    }
+                }
                 Err(err) => eprintln!("读取开机自启状态失败：{err}"),
             }
 
@@ -725,29 +748,42 @@ pub fn run() {
                 if let Some(main) = app.get_webview_window("main") {
                     let _ = main.set_decorations(false);
                 }
-                let handle = app.handle().clone();
-                app.handle().listen(MAIN_UI_READY_EVENT, move |_event| {
-                    tray::show_main_window(&handle);
-                });
-                // 前端没走到就绪事件（脚本异常等）时兜底显示，避免窗口一直隐藏、
-                // 只能靠托盘菜单找回来。
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                    if let Some(main) = handle.get_webview_window("main") {
-                        if !main.is_visible().unwrap_or(true) {
-                            let _ = main.show();
+                // 登录项启动时窗口保持隐藏，不注册首帧显示与兜底显示。
+                if !launched_from_login {
+                    let handle = app.handle().clone();
+                    app.handle().listen(MAIN_UI_READY_EVENT, move |_event| {
+                        tray::show_main_window(&handle);
+                    });
+                    // 前端没走到就绪事件（脚本异常等）时兜底显示，避免窗口一直隐藏、
+                    // 只能靠托盘菜单找回来。
+                    let handle = app.handle().clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_secs(5));
+                        if let Some(main) = handle.get_webview_window("main") {
+                            if !main.is_visible().unwrap_or(true) {
+                                let _ = main.show();
+                            }
                         }
-                    }
-                });
+                    });
+                }
             }
 
-            // macOS 保持 Overlay 原生标题栏（红绿灯与拖拽交给系统），窗口随启动显示。
+            // macOS 保持 Overlay 原生标题栏（红绿灯与拖拽交给系统），窗口随启动显示；
+            // 登录项启动时不显示，只留菜单栏。
             #[cfg(not(windows))]
-            tray::show_main_window(app.handle());
+            {
+                if !launched_from_login {
+                    tray::show_main_window(app.handle());
+                }
+            }
 
             // 菜单栏图标与快速查看面板；关闭主窗口只隐藏，应用继续常驻。
             tray::setup(app.handle())?;
+
+            // 登录项启动：不显示主窗口，只留菜单栏；隐藏的主窗口同样按空闲策略回收。
+            if launched_from_login {
+                tray::keep_hidden_on_login_start(app.handle());
+            }
 
             // 悬浮球默认关闭；只在用户开启过时恢复窗口。必须放在菜单栏初始化之后：
             // macOS 上球依赖托盘面板插件注册的 NSPanel 支持。
