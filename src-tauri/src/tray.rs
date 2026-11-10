@@ -643,12 +643,12 @@ pub fn hide_panel(app: &AppHandle) {
 
 /// 登录项启动时的静默入口：主窗口保持隐藏，只留菜单栏图标。
 /// 隐藏的主窗口不进入用户的视野，同样按空闲策略回收 WebView。
-pub fn keep_hidden_on_login_start(app: &AppHandle) {
+pub fn keep_hidden_on_login_start(_app: &AppHandle) {
     MAIN_WANT_VISIBLE.store(false, Ordering::SeqCst);
     #[cfg(target_os = "macos")]
     {
         // 没有可见主窗口时不应出现在 Dock / Cmd+Tab，与关闭主窗口后的形态一致。
-        let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        let _ = _app.set_activation_policy(tauri::ActivationPolicy::Accessory);
     }
     lifecycle!("[window] 登录项启动，主窗口保持隐藏");
     schedule_idle_destroy(MAIN_LABEL);
