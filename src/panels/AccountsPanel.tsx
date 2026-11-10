@@ -104,12 +104,13 @@ const PLATFORM_CHOICES: Record<DialogPlatform, PlatformChoice> = {
         text: '控制台会话令牌经本机回环地址直接交给应用',
       },
     ],
-    note: '授权信息仅在本机接收，不经过前端，也不写入外部工具的配置。',
+    note:
+      '授权信息仅在本机接收，不经过前端，也不写入外部工具的配置。注意：百炼控制台只保留最近一次登录，重新授权会使百炼 CLI（bl）已有的会话失效。',
     namePlaceholder: '留空则显示为“百炼账户”',
     authorizeLabel: '前往阿里云授权',
     waitingTitle: '登录阿里云百炼',
     waitingText:
-      '请登录要接入的阿里云账号并确认授权，控制台会话令牌会通过本机回环地址直接交给应用。',
+      '请登录要接入的阿里云账号并确认授权，控制台会话令牌会通过本机回环地址直接交给应用。重新授权会使百炼 CLI（bl）已有的会话失效，反之亦然。',
   },
   workbuddy: {
     addLabel: '添加 WorkBuddy 账户',
