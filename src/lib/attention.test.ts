@@ -47,6 +47,7 @@ function makeSnapshot(
     checkedAtEpoch,
     groups: [{ limitId: null, limitName: null, planType: null, windows }],
     capabilityGaps: [],
+    resetCredits: null,
   };
 }
 

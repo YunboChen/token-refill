@@ -93,6 +93,44 @@ fn refresh_usage(
     store.request_refresh(account_id.as_deref())
 }
 
+/// 按需读取 Codex 重置卡明细；后台刷新只保存可用数量。
+/// 会启动 app-server 子进程，必须放到阻塞线程，不能占用主线程。
+#[tauri::command]
+async fn read_codex_reset_credits(
+    store: tauri::State<'_, Arc<StateStore>>,
+    account_id: String,
+) -> Result<codex::CodexResetCredits, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || store.read_codex_reset_credits(&account_id))
+        .await
+        .map_err(|err| format!("读取重置卡失败：{err}"))?
+}
+
+/// 消耗一张 Codex 重置卡。不可撤销，确认流程由前端负责；
+/// 成功后补一次刷新，让界面拿到新的额度与剩余数量。
+#[tauri::command]
+async fn consume_codex_reset_credit(
+    store: tauri::State<'_, Arc<StateStore>>,
+    account_id: String,
+    credit_id: Option<String>,
+    idempotency_key: String,
+) -> Result<String, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || {
+        let outcome = store.consume_codex_reset_credit(
+            &account_id,
+            credit_id.as_deref(),
+            &idempotency_key,
+        )?;
+        // 普通 request_refresh 会合并到在途查询；这里需要保证消耗后的状态
+        // 一定被重新读取，否则旧快照可能继续显示消耗前的数据。
+        store.request_refresh_after_current(&account_id)?;
+        Ok::<_, String>(outcome)
+    })
+    .await
+    .map_err(|err| format!("使用重置卡失败：{err}"))?
+}
+
 #[tauri::command]
 fn update_preferences(
     store: tauri::State<'_, Arc<StateStore>>,
@@ -762,6 +800,8 @@ pub fn run() {
             get_app_state,
             get_state_file_notice,
             refresh_usage,
+            read_codex_reset_credits,
+            consume_codex_reset_credit,
             update_preferences,
             set_overview_order,
             set_relay_order,
