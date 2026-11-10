@@ -64,7 +64,7 @@ function outcomeNotice(outcome: ResetCreditOutcome): OutcomeNotice {
     case 'nothingToReset':
       return {
         kind: 'info',
-        text: '当前没有可重置的额度窗口，这次没有消耗重置卡。',
+        text: '当前用量还不需要重置，这次没有消耗重置卡。',
       };
     case 'noCredit':
       return { kind: 'info', text: '账户没有可用的重置卡。' };
