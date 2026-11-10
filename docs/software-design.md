@@ -1,8 +1,8 @@
 # Token Refill 软件设计文档
 
-- 文档版本：0.19
-- 状态：已实现 Codex、百炼、WorkBuddy、OpenCode Go、Command Code、Antigravity 与 Cursor 额度查询、多账户接入、统一状态层、后台刷新调度、菜单栏快速查看、桌面悬浮球与应用内更新
-- 最近更新：2026-11-04
+- 文档版本：0.20
+- 状态：已实现 Codex、百炼、WorkBuddy、OpenCode Go、Command Code、Antigravity 与 Cursor 额度查询、多账户接入、Codex 重置卡、统一状态层、后台刷新调度、菜单栏快速查看、桌面悬浮球与应用内更新
+- 最近更新：2026-11-06
 - 需求来源：[需求文档](./requirements.md)
 
 ## 1. 设计边界
@@ -25,7 +25,9 @@
 
 账户分两类：本机账户沿用现有登录态；独立账户在应用数据目录的 `codex-profiles/<accountId>/` 下拥有独立 `CODEX_HOME`。启动加载状态时按本机是否存在 Codex 客户端（独立 CLI 或桌面端内置 CLI）校正本机账户：客户端不存在则移除占位账户，存在但状态里缺少时补回。未安装 Codex 的用户因此不会看到必然失败的账户，调度器也不会反复查询；卸载后重新安装会在下次启动恢复。客户端存在但未登录时仍保留账户并展示授权错误，便于用户完成登录。每次查询会在同一 app-server 会话中先读取 `account/read` 获取脱敏邮箱与套餐档位，再读取额度；即使额度请求失败（如网络异常），只要身份读取成功，账户页仍能显示当前登录账号，身份读取本身失败则保留原值，不误清空。添加或重新授权时，Rust 启动该目录下的 app-server，调用官方 `account/login/start` 取得浏览器授权 URL，等待 `account/login/completed` 后读取身份与额度。登录令牌由 Codex CLI 写入隔离目录，应用不解析、不复制、不向前端返回；`account-login-changed` 仅携带流程标识、账户标识、状态和脱敏错误。
 
-百炼账户属于独立授权账户：Rust 在 `127.0.0.1` 随机端口启动一次性回调服务，打开官方控制台登录页；浏览器把控制台 `access_token` 回传到该地址，`state` 校验通过后才写入 `bailian-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600）。一个百炼账户下有两个产品：Token Plan 与 Coding Plan。每次刷新顺序请求两类额度接口，任一失败只影响对应产品并保留其上次成功快照；两者都判定会话失效时才把账户标为需要重新授权。控制台令牌没有 refresh token，有效期实测约 24 小时；`credentials.json` 记录写入时间，启动与刷新时据此推算到期时间并只把时间戳放进 `PersistedState` 供账户页展示，到期前 2 小时提醒一次。令牌本身不进入 `PersistedState`、IPC 返回值、事件或日志；移除账户会删除该目录。
+Codex 重置卡复用同一个 app-server 通道：`account/rateLimits/read` 的响应顶层包含 `rateLimitResetCredits`。后台刷新继续传 `excludeResetCreditDetails: true`，只把 `availableCount` 写入 `QuotaSnapshot.resetCredits`，不额外请求明细；用户打开重置卡面板时才发一次不带该参数的读取，拿到每张卡的 `id`、标题、状态与到期时间。消耗走 `account/rateLimitResetCredit/consume`，参数为可选的 `creditId` 与必填的 `idempotencyKey`；界面优先选择最早到期的一张，并在调用前二次确认。后端只返回 `reset` / `nothingToReset` / `noCredit` / `alreadyRedeemed` 四种结果，不返回额度原文。消耗成功后会补一次刷新：如果此时已有查询在途，普通刷新会被合并，因此新增 `forced_refresh_pending` 排队，在在途查询收尾后再查一次，避免旧快照覆盖扣卡后的状态。同一账户的消耗用互斥集合去重，防止两个窗口同时触发多扣一张；同一次确认内的重试复用同一个幂等标识，超时等未知结果会提示先核对额度。重置卡 `id` 只存在于当前进程与本次 IPC 返回，不写入 `state.json`、日志或事件之外的持久化数据。
+
+百炼账户属于独立授权账户：Rust 在 `127.0.0.1` 随机端口启动一次性回调服务，打开官方控制台登录页；浏览器把控制台 `access_token` 回传到该地址，`state` 校验通过后才写入 `bailian-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600）。一个百炼账户下有两个产品：Token Plan 与 Coding Plan。每次刷新顺序请求两类额度接口，任一失败只影响对应产品并保留其上次成功快照；两者都判定会话失效时才把账户标为需要重新授权。控制台令牌没有 refresh token，有效期实测约 24 小时；`credentials.json` 记录写入时间，启动与刷新时据此推算到期时间并只把时间戳放进 `PersistedState` 供账户页展示，到期前 2 小时提醒一次。控制台登录令牌是单活的：应用与 `bl` CLI 使用同一个官方 `console-login` 入口和同一类 Bearer 令牌，任一端完成新的授权都会在服务端轮换掉另一端的旧令牌，日常额度查询不会；应用只写自己的 `bailian-profiles/<accountId>/credentials.json`，不读写 `~/.bailian/config.json`，也没有 logout/revoke 调用，界面在添加与重新授权流程中如实提示这一点。令牌本身不进入 `PersistedState`、IPC 返回值、事件或日志；移除账户会删除该目录。
 
 OpenCode Go 与 Command Code 属于 API Key 账户：添加时先用一次真实查询验证密钥，成功后写入 `api-profiles/<accountId>/credentials.json`（同样 0700/0600），失败不会留下账户或凭证。OpenCode Go 读取官方 `GET https://opencode.ai/zen/go/v1/usage` 的 5 小时 / 每周 / 订阅月百分比；Command Code 读取 CLI 同款 `/alpha/billing/credits`、`/alpha/usage/summary` 与 `/alpha/billing/subscriptions`，月度上限由“已用 + 剩余”推导，辅助接口失败时保留滚动窗口并记录能力缺口。密钥只在 Rust 侧使用，不进入 `PersistedState`、事件或错误消息。
 
@@ -207,7 +209,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | Account | 本地随机/生成 `accountId`、平台、显示名、授权来源（本机或独立授权）、可选脱敏身份标识、授权状态 | 不以邮箱作唯一主键；不在前端对象中携带凭证或安全存储引用 |
 | Product | 本地 `productId`、所属账户、产品类型、可选套餐档位及远端标识 | 首批类型为 Codex 订阅、Token Plan 个人版、Coding Plan 中国站；远端标识不可靠时不猜测 |
 | QuotaWindow | 本地窗口标识、来源窗口标识、可选平台窗口名、计量单位、可选总量/已用/剩余/比例、可选周期及重置时间 | 不强制存在绝对额度；比例必须来源可靠或能在相同口径下推导。百炼 Coding Plan 保留调用次数与三个窗口，Token Plan 只有比例 |
-| QuotaSnapshot | 对应产品、额度窗口列表、最近成功获取时间、可选来源更新时间、能力缺口 | 只保留所需快照；来源更新时间未知时不能把本地查询时间冒充平台更新时间 |
+| QuotaSnapshot | 对应产品、额度窗口列表、最近成功获取时间、可选来源更新时间、能力缺口、可选 Codex 重置卡可用数量 | 只保留所需快照；来源更新时间未知时不能把本地查询时间冒充平台更新时间；重置卡只保存数量，明细按需读取，不落盘卡片标识 |
 | QueryState | 当前是否刷新、最近尝试时间、脱敏错误、可选下次允许重试时间 | 与成功快照分开保存，失败不抹掉上次成功数据 |
 | Preferences | 刷新间隔、三类提醒开关、低额度阈值、自启意图 | 初始值采用已确认需求；OS 实际通知和自启状态另行查询，不能只信本地开关 |
 | OverviewOrder | 用户拖动后的平台键顺序与账户标识顺序 | 只保存标识与相对顺序，不含账户名、邮箱或凭证；未列出的标识保持默认顺序并排在已列出项之后；重复提交相同顺序不写盘；菜单栏面板的中转站分组以固定标识 `relay` 记在其中，总览只排列平台分组并保留该标识的原槽位 |

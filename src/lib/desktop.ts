@@ -77,11 +77,42 @@ export interface QuotaGroup {
   windows: QuotaWindow[];
 }
 
+/** Codex 重置卡摘要；后台刷新只保存数量，明细按需读取。 */
+export interface ResetCreditsSummary {
+  availableCount: number;
+}
+
 export interface QuotaSnapshot {
   checkedAtEpoch: number;
   groups: QuotaGroup[];
   capabilityGaps: string[];
+  /** 旧版 CLI 或旧状态文件为 null，表示未知，不是 0 张。 */
+  resetCredits: ResetCreditsSummary | null;
 }
+
+export type ResetCreditStatus = 'available' | 'redeeming' | 'redeemed' | 'unknown';
+
+/** 后端返回的重置卡明细；不包含任何凭证。 */
+export interface CodexResetCredit {
+  id: string;
+  status: ResetCreditStatus;
+  title?: string;
+  description?: string;
+  grantedAtEpoch: number;
+  expiresAtEpoch: number | null;
+}
+
+export interface CodexResetCredits {
+  availableCount: number;
+  /** null 表示后端只返回数量；空数组表示没有可用明细。 */
+  credits: CodexResetCredit[] | null;
+}
+
+export type ResetCreditOutcome =
+  | 'reset'
+  | 'nothingToReset'
+  | 'noCredit'
+  | 'alreadyRedeemed';
 
 export interface ProductState {
   productId: string;
@@ -196,6 +227,29 @@ export function refreshUsage(accountId?: string): Promise<void> {
 
 export function updatePreferences(preferences: Preferences): Promise<AppState> {
   return invoke<AppState>('update_preferences', { preferences });
+}
+
+/** 按需读取 Codex 重置卡明细；只在用户打开面板时调用。 */
+export function readCodexResetCredits(
+  accountId: string,
+): Promise<CodexResetCredits> {
+  return invoke<CodexResetCredits>('read_codex_reset_credits', { accountId });
+}
+
+/**
+ * 消耗一张重置卡。不可撤销；同一逻辑重试必须复用 idempotencyKey。
+ * 成功后 Rust 会立即刷新该账户。
+ */
+export function consumeCodexResetCredit(
+  accountId: string,
+  creditId: string | null,
+  idempotencyKey: string,
+): Promise<ResetCreditOutcome> {
+  return invoke<ResetCreditOutcome>('consume_codex_reset_credit', {
+    accountId,
+    creditId,
+    idempotencyKey,
+  });
 }
 
 /** 保存总览的账户类型与账户排序；只提交标识列表。 */
