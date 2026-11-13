@@ -1,7 +1,7 @@
 # Token Refill 界面设计规范
 
-- 文档版本：0.3
-- 最近更新：2026-11-01
+- 文档版本：0.4
+- 最近更新：2026-11-13
 - 适用范围：管理窗口、菜单栏快速查看面板与桌面悬浮球前端（React + TypeScript）
 - 事实来源：`src/App.module.css`、`src/styles.css`、`src/App.tsx`、`src/panels/`、`src/panels/TrayPanel.module.css`、`src/panels/FloatingBall.module.css`、`src/components/`、`src/lib/format.ts`、`src/lib/useDialogA11y.ts`
 - 关联文档：[软件设计文档](./software-design.md)、[需求文档](./requirements.md)、[开发计划文档](./development-plan.md)
@@ -146,6 +146,27 @@
 - 没有品牌图形时回退到平台单字标记（`platformMeta().mark`）；账户徽标用账户名首字符（`accountMark()`）。
 - 字标 `src/assets/logo-text.png`，深色模式通过 `--wordmark-filter` 提亮。
 
+### 2.7 macOS 液态玻璃（界面 v2）
+
+macOS 主窗口从「整块画布」改为「系统材质外壳 + 实色内容浮卡」。设计稿见
+`docs/design-preview/preview.html`（macOS 标签页），实现分两层：
+
+| 层 | 实现 | 使用 token |
+| --- | --- | --- |
+| 窗口底部 | Rust `window_material::apply_main`：窗口与 WKWebView 透明，Tauri `set_effects` 铺材质。macOS 26+ 用 `NSGlassEffectView`，12–15 回退 `NSVisualEffectView` | — |
+| 外壳 | 侧栏与工具栏透出材质，整窗叠一层半透明色 | `--shell-glass`、`--shell-border`、`--glass-button` |
+| 内容浮卡 | `.mainScroll` 改成圆角实色浮卡，右、下各留 8px | `--overview-sheet`、`--overview-label`、`--overview-secondary-label`、`--overview-control`、`--overview-account-surface`、`--overview-account-divider`、`--overview-shadow` |
+| 菜单栏面板 / 悬浮球弹层 | 小尺寸浮层不叠系统玻璃，保持实色中性灰 | `--panel-card`、`--panel-border` |
+| 悬浮球 | 半透明玻璃渐变 + 16px 背景模糊 | `--ball-glass-start`、`--ball-glass-end` |
+
+规则：
+
+- 页头并入玻璃工具栏：标题 14px、副标题 11px；右侧显示所有订阅账户最近一次成功查询的时间（`clockMinuteLabel`）与全局刷新按钮。时间只统计订阅账户，中转站额度仍用自己的刷新入口。
+- 浮卡内沿用现有组件、间距与字号；只去掉总览平台分组之间的通栏发丝线，并把额度板改成无描边的 `--overview-account-surface`。
+- 材质跟随应用外观：`applyTheme()` 通过 `set_app_theme` 把 light / dark / system 同步给系统，避免显式深色时玻璃仍是系统浅色；`system` 传 `null`，继续跟随系统。
+- 低于 macOS 26 只降级材质，布局与尺寸不变；Windows 仍使用原来的画布 + 页头结构，Fluent 2 改造另行处理。
+- 不要把浮卡再拆成第二层卡片，也不要在浮卡内使用半透明底色；玻璃只出现在外壳与工具栏。
+
 ## 3. 应用骨架
 
 ```
@@ -159,6 +180,8 @@
 │              │  浏览器预览页脚（可选）                       │
 └──────────────┴────────────────────────────────────────────┘
 ```
+
+macOS v2 下侧栏与页头透出窗口材质，`.mainScroll` 是浮在材质上的实色圆角卡（§2.7）；Windows 仍是画布 + 页头结构。
 
 ### 3.1 壳层结构
 
@@ -175,6 +198,8 @@
 - 主窗口在 `tauri.conf.json` 中以 `visible: false` 创建，避免 React 首绘前露出系统标题栏：macOS 在 `setup()` 中直接显示；Windows 由 `TitleBar` 首帧 emit `main-ui-ready`，Rust 侧收到后 `show()` 并聚焦，另有 5 秒兜底。
 - 页头、标题、副标题均带 `data-tauri-drag-region`；按钮和可交互元素不要加，否则会吞掉点击。
 - 平台信息来自 `getAppInfo()`；首次渲染用 UA 同步兜底（避免 Windows 标题栏首帧缺失），读取失败保持 macOS 布局，不阻塞界面。
+- macOS 主窗口在 `setup()` 中调用 `window_material::apply_main`：窗口与 WKWebView 设为透明，底部铺系统材质，Overlay 标题栏一并透明；材质失败只记生命周期日志，不阻止窗口显示。
+- 根元素在 `main.tsx` 首帧写入 `data-platform`（UA 兜底）与 `data-view`；平台专用 token 与材质样式都挂在 `html` 上，菜单栏面板、悬浮球与主窗口共用同一套判定。
 
 ### 3.3 新增页面的接入点
 

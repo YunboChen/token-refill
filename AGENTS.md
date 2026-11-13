@@ -80,6 +80,7 @@
 - 发布由 `.github/workflows/release.yml` 完成，触发条件：`main` 分支推送且版本号变化、`v*` tag 推送、手动触发。`main` 推送带 `paths` 过滤，只有 `src-tauri/tauri.conf.json` 变更才启动 workflow（提升版本号必然改这个文件），版本未变化时仍跳过全部构建；不要为「省一次 Actions 记录」移除该过滤，否则普通提交会重新产生空跑记录。
 - 工作分支一律从 `main` 切出（`feat/*`、`fix/*`、`ci/*`、`docs/*`），PR 到 `main` 合并；**不要从 `dev` 切分支**。`dev` 只承载日常集成：定期把 `main` 合进来保持同步，不作为任何工作分支的基线。
 - 发布只走 `main`：发布相关改动同样从 `main` 切分支并 PR 到 `main`，然后**在 `main` 上**提升版本号再推送。不要把 `dev` 整体合并或快进到 `main`——`dev` 里未完成或未验证的功能不得随发版进入 `main`。发版后把 `main` 合回 `dev`，保持版本号一致。
+- 大版本外观重构可以使用 `next` 集成分支承载（当前为 macOS 液态玻璃 / Windows Fluent 2）：改造期的工作分支从 `next` 切出并 PR 到 `next`，不直接进 `main`；改造完成后把 `next` 合回 `main`，再按正式流程在 `main` 上发版。`next` 不替代 `dev`，也不接收与本次改造无关的功能；发布 `next` 预览版必须使用独立版本后缀和明确的测试渠道，不得伪装成正式版本。
 - 两个平台并行构建，产物上传到同一个 Release（tag `v<版本号>`）：
   - macOS：`Token.Refill_<版本>_macos-arm64.dmg` / `Token.Refill_<版本>_macos-x64.dmg`，以及应用内更新用的 `Token.Refill_<版本>_macos-<架构>.app.tar.gz` 与 `.sig`
   - Windows：`Token.Refill_<版本>_windows-x64.exe`（便携）、`Token.Refill_<版本>_windows-x64-setup.exe`（NSIS，同时作为应用内更新包）与 `.exe.sig`
