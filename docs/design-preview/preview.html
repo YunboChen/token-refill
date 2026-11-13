@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>Token Refill 外观方案</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -262,32 +263,50 @@ body {
 
 /* ── 平台材质：只加在窗口与浮层上 ─────────────────────────────────── */
 .stageFrame[data-platform="macos"][data-mode="light"] {
-  --shell-glass: rgba(255, 255, 255, 0.52);
+  --shell-glass: rgb(226 226 226 / 0.72);
   --shell-border: rgba(255, 255, 255, 0.66);
-  --panel-glass: rgba(248, 250, 253, 0.72);
-  --panel-chrome: rgba(255, 255, 255, 0.52);
-  --panel-card: rgba(255, 255, 255, 0.72);
+  --panel-glass: var(--overview-sheet);
+  --panel-chrome: var(--overview-sheet);
+  --panel-card: #fafafa;
   --panel-border: rgba(255, 255, 255, 0.55);
-  --ball-glass-start: rgba(255, 255, 255, 0.95);
-  --ball-glass-end: rgba(227, 232, 239, 0.58);
-  --sheet: #fbfcfd;
-  --sheet-border: rgba(15, 23, 42, 0.07);
+  --ball-glass-start: rgb(255 255 255 / 0.95);
+  --ball-glass-end: rgb(226 226 226 / 0.76);
+  --overview-sheet: #f2f2f2;
+  --overview-label: #1d1d1f;
+  --overview-secondary-label: #606060;
+  --overview-control: #e5e5e5;
+  --overview-shadow: 0 1px 3px rgb(0 0 0 / 0.05), 0 5px 15px rgb(0 0 0 / 0.08);
+  --overview-account-surface: #fafafa;
+  --overview-account-divider: #dedede;
   --glass-button: rgba(255, 255, 255, 0.42);
   --app-shadow: 0 42px 100px rgba(9, 17, 32, 0.34), 0 6px 20px rgba(9, 17, 32, 0.16);
+  --ball-text: #1d1d1f;
+  --ball-logo: var(--ball-text);
+  --ball-detail: #606060;
+  --ball-border: rgb(0 0 0 / 0.15);
 }
 .stageFrame[data-platform="macos"][data-mode="dark"] {
-  --shell-glass: rgba(18, 23, 30, 0.55);
+  --shell-glass: rgb(27 27 27 / 0.74);
   --shell-border: rgba(255, 255, 255, 0.14);
-  --panel-glass: rgba(18, 23, 29, 0.74);
-  --panel-chrome: rgba(22, 27, 35, 0.56);
-  --panel-card: rgba(28, 34, 43, 0.7);
+  --panel-glass: var(--overview-sheet);
+  --panel-chrome: var(--overview-sheet);
+  --panel-card: #2c2c2c;
   --panel-border: rgba(255, 255, 255, 0.12);
-  --ball-glass-start: rgba(43, 58, 80, 0.92);
-  --ball-glass-end: rgba(12, 18, 27, 0.62);
-  --sheet: #10151c;
-  --sheet-border: rgba(255, 255, 255, 0.06);
+  --ball-glass-start: rgb(66 66 66 / 0.95);
+  --ball-glass-end: rgb(30 30 30 / 0.78);
+  --overview-sheet: #242424;
+  --overview-label: #e5e5e5;
+  --overview-secondary-label: #aaa;
+  --overview-control: #333;
+  --overview-shadow: 0 1px 3px rgb(0 0 0 / 0.10), 0 5px 15px rgb(0 0 0 / 0.18);
+  --overview-account-surface: #2c2c2c;
+  --overview-account-divider: #3a3a3a;
   --glass-button: rgba(255, 255, 255, 0.08);
   --app-shadow: 0 46px 110px rgba(0, 0, 0, 0.55), 0 6px 22px rgba(0, 0, 0, 0.3);
+  --ball-text: #e5e5e5;
+  --ball-logo: var(--ball-text);
+  --ball-detail: #aaa;
+  --ball-border: rgb(255 255 255 / 0.16);
 }
 .stageFrame[data-platform="windows"][data-mode="light"] {
   --mica: rgba(243, 246, 250, 0.6);
@@ -331,26 +350,14 @@ body {
   border: 1px solid var(--shell-border);
   border-radius: 16px;
   background: var(--shell-glass);
-  -webkit-backdrop-filter: blur(42px) saturate(180%);
-  backdrop-filter: blur(42px) saturate(180%);
+  -webkit-backdrop-filter: blur(42px) saturate(35%);
+  backdrop-filter: blur(42px) saturate(35%);
 }
+/* Mica 预览使用带轻微桌面色调的不透明基底。 */
 .stageFrame[data-platform="windows"] .app {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--mica);
-  -webkit-backdrop-filter: blur(46px) saturate(140%);
-  backdrop-filter: blur(46px) saturate(140%);
-}
-.stageFrame[data-platform="windows"] .app::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  opacity: 0.14;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
-  background-size: 120px 120px;
 }
 .app > * { position: relative; z-index: 1; }
 
@@ -525,7 +532,7 @@ body {
   scrollbar-width: thin;
 }
 
-/* macOS：玻璃工具栏 + 实色内容浮卡；卡内仍是现有总览设计 */
+/* macOS：内容浮卡使用实色底，用阴影区分层级 */
 .stageFrame[data-platform="macos"] .main {
   background: transparent;
   overflow: visible;
@@ -586,13 +593,14 @@ body {
 .stageFrame[data-platform="macos"] .mainScroll {
   margin: 0 8px 8px 0;
   padding: 18px 22px 22px;
-  border: 0.5px solid var(--sheet-border);
   border-radius: 14px;
-  background: var(--sheet);
-  box-shadow: 0 12px 32px rgba(9, 17, 32, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.7);
-}
-.stageFrame[data-platform="macos"][data-mode="dark"] .mainScroll {
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --text: var(--overview-label);
+  --muted: var(--overview-secondary-label);
+  --sunken: var(--overview-control);
+  --border: var(--overview-account-divider);
+  color: var(--text);
+  background: var(--overview-sheet);
+  box-shadow: var(--overview-shadow);
 }
 .mainScroll > * { width: 100%; max-width: 920px; margin-inline: auto; }
 
@@ -709,6 +717,17 @@ body {
 }
 .quotaAccount { padding: 18px 20px 20px; }
 .quotaAccount + .quotaAccount { border-top: 1px solid var(--border); }
+.stageFrame[data-platform="macos"] .overviewStack > .platformGroup + .platformGroup {
+  padding-top: 12px;
+  border-top: 0;
+}
+.stageFrame[data-platform="macos"] .overviewStack .quotaBoard {
+  border-color: transparent;
+  background: var(--overview-account-surface);
+}
+.stageFrame[data-platform="macos"] .overviewStack .quotaAccount + .quotaAccount {
+  border-color: var(--overview-account-divider);
+}
 .quotaAccountHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .quotaAccountToggle {
   display: flex;
@@ -1229,6 +1248,19 @@ body {
   -webkit-backdrop-filter: blur(46px) saturate(180%);
   backdrop-filter: blur(46px) saturate(180%);
 }
+.stageFrame[data-platform="macos"] :is(.tray, .popover) {
+  --text: var(--overview-label);
+  --muted: var(--overview-secondary-label);
+  --sunken: var(--overview-control);
+  --border: var(--overview-account-divider);
+  box-shadow: var(--overview-shadow);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.stageFrame[data-platform="macos"] .ball {
+  -webkit-backdrop-filter: blur(16px) saturate(35%);
+  backdrop-filter: blur(16px) saturate(35%);
+}
 .popover .hover { padding: 14px 16px 0; }
 .popover .eyebrow {
   color: var(--muted);
@@ -1341,8 +1373,11 @@ body {
   --focus: #005fb8;
   --accent-ring: rgba(0, 95, 184, 0.14);
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --mica: rgba(243, 246, 250, 0.6);
-  --panel-glass: rgba(252, 252, 252, 0.62);
+  --mica: #edf0f5;
+  --content-layer: rgb(255 255 255 / 0.58);
+  --ball-glass-start: #fafafa;
+  --ball-glass-end: #eaeaea;
+  --panel-glass: rgb(249 249 249 / 0.91);
   --panel-chrome: rgba(252, 252, 252, 0.55);
   --panel-card: rgba(255, 255, 255, 0.66);
   --panel-border: rgba(0, 0, 0, 0.1);
@@ -1370,8 +1405,11 @@ body {
   --focus: #60cdff;
   --accent-ring: rgba(96, 205, 255, 0.18);
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-  --mica: rgba(28, 30, 34, 0.64);
-  --panel-glass: rgba(43, 43, 43, 0.64);
+  --mica: #202226;
+  --content-layer: rgb(255 255 255 / 0.035);
+  --ball-glass-start: #363636;
+  --ball-glass-end: #252525;
+  --panel-glass: rgb(38 38 38 / 0.92);
   --panel-chrome: rgba(40, 40, 40, 0.56);
   --panel-card: rgba(255, 255, 255, 0.07);
   --panel-border: rgba(255, 255, 255, 0.1);
@@ -1403,7 +1441,23 @@ body {
   background: var(--accent);
   transform: translateY(-50%);
 }
-.stageFrame[data-platform="windows"] .pageHeader { padding: 24px 28px 14px; }
+/* 内容区与标题栏共用基底，账户组用细描边分隔。 */
+.stageFrame[data-platform="windows"] .main {
+  background: var(--content-layer);
+}
+.stageFrame[data-platform="windows"] .pageHeader {
+  padding: 24px 28px 14px;
+  border-bottom: 0;
+  background: transparent;
+}
+.stageFrame[data-platform="windows"] .overviewStack > .platformGroup + .platformGroup {
+  padding-top: 8px;
+  border-top: 0;
+}
+.stageFrame[data-platform="windows"] .ball {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
 .stageFrame[data-platform="windows"] .panelTitle { font-size: 28px; }
 .stageFrame[data-platform="windows"] .subtitle { font-size: 13px; }
 .stageFrame[data-platform="windows"] .scrollBody { padding: 4px 28px 28px; }
