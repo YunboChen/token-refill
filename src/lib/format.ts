@@ -126,6 +126,14 @@ export function clockLabel(epoch: number): string {
   });
 }
 
+/** 主窗口玻璃工具栏的更新时间：只到分钟，避免工具栏数字频繁跳动。 */
+export function clockMinuteLabel(epoch: number): string {
+  return new Date(epoch * 1000).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 /** 菜单栏面板的刷新时间：带上日期，隔天打开也能看出数据是哪天的。 */
 export function stampLabel(epoch: number): string {
   const date = new Date(epoch * 1000);

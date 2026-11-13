@@ -247,6 +247,129 @@
   margin-top: 0;
 }
 
+/* ---------- macOS 液态玻璃外壳 ----------
+   窗口底部是 Rust 侧的系统玻璃/毛玻璃；侧栏与工具栏直接透出材质，
+   内容区改成一张实色浮卡。布局与页面结构不变，只换表面。 */
+
+.app[data-platform='macos'] {
+  background: var(--shell-glass);
+}
+
+.app[data-platform='macos'] .sidebar {
+  background: transparent;
+  border-right: 0;
+}
+
+.app[data-platform='macos'] .main {
+  overflow: visible;
+  background: transparent;
+}
+
+/* 页头并入玻璃工具栏：标题压到工具栏字号，右侧放订阅账户的更新时间与刷新。 */
+.app[data-platform='macos'] .pageHeader {
+  display: flex;
+  align-items: center;
+  height: 56px;
+  padding: 0 18px;
+  border-bottom: 0;
+  background: transparent;
+}
+
+.app[data-platform='macos'] .pageHeaderInner {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.app[data-platform='macos'] .panelTitle {
+  font-size: 14px;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.app[data-platform='macos'] .subtitle {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* 工具栏右侧只在 macOS 渲染；Windows 的标题栏与页头保持原样。 */
+.macToolbarRight {
+  display: none;
+}
+
+.app[data-platform='macos'] .macToolbarRight {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 9px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.macRefreshButton {
+  display: none;
+}
+
+.app[data-platform='macos'] .macRefreshButton {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--shell-border);
+  border-radius: 7px;
+  background: var(--glass-button);
+  color: var(--text);
+  box-shadow: inset 0 1px 0 var(--shell-border);
+  cursor: pointer;
+  transition: background-color 150ms ease-out;
+}
+
+.app[data-platform='macos'] .macRefreshButton:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.app[data-platform='macos'] .macRefreshButton:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* 内容浮卡：实色底 + 轻阴影，浮在玻璃上；卡内沿用同一套语义 token。 */
+.app[data-platform='macos'] .mainScroll {
+  --text: var(--overview-label);
+  --muted: var(--overview-secondary-label);
+  --sunken: var(--overview-control);
+  --border: var(--overview-account-divider);
+  --surface: var(--overview-account-surface);
+  margin: 0 8px 8px 0;
+  padding: 18px 22px 22px;
+  border-radius: 14px;
+  color: var(--text);
+  background: var(--overview-sheet);
+  box-shadow: var(--overview-shadow);
+}
+
+/* 浮卡内不再用通栏发丝线切分平台：留白本身已经足够分组。 */
+.app[data-platform='macos'] .overviewStack > * + * {
+  padding-top: 12px;
+  border-top: 0;
+}
+
+.app[data-platform='macos'] .quotaBoard {
+  border-color: transparent;
+  background: var(--overview-account-surface);
+}
+
+.app[data-platform='macos'] .quotaAccount + .quotaAccount {
+  border-color: var(--overview-account-divider);
+}
+
 /* 面板标题：字重收一档，靠字号与颜色建立层级，不靠加粗 */
 .panelTitle {
   margin: 0;

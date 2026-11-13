@@ -577,3 +577,26 @@
   color: var(--danger);
   font-size: 11px;
 }
+
+/* ---------- macOS 材质 ----------
+   球体改用半透明玻璃渐变，让桌面颜色透一点出来；弹层保持实色浮层，
+   与菜单栏面板共用同一组中性灰 token。 */
+:global(html[data-platform='macos']) .ball {
+  background: radial-gradient(
+    circle at 32% 22%,
+    var(--ball-glass-start) 0%,
+    var(--ball-glass-end) 68%
+  );
+  -webkit-backdrop-filter: blur(16px) saturate(35%);
+  backdrop-filter: blur(16px) saturate(35%);
+}
+
+:global(html[data-platform='macos']) .popover {
+  --text: var(--overview-label);
+  --muted: var(--overview-secondary-label);
+  --sunken: var(--overview-control);
+  --border: var(--overview-account-divider);
+  border-color: var(--panel-border);
+  background: var(--overview-sheet);
+  box-shadow: var(--overview-shadow);
+}

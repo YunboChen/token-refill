@@ -62,6 +62,37 @@
   --ball-spinner: rgb(15 23 42 / 0.42);
 }
 
+/* macOS 液态玻璃：材质由 Rust 侧的系统玻璃/毛玻璃提供，这里只叠外壳色调。
+   内容浮卡保持实色，避免玻璃上再叠一层透明文字底。 */
+:root[data-platform='macos'] {
+  --shell-glass: rgb(226 226 226 / 0.72);
+  --shell-border: rgb(255 255 255 / 0.66);
+  --glass-button: rgb(255 255 255 / 0.42);
+  --overview-sheet: #f2f2f2;
+  --overview-label: #1d1d1f;
+  --overview-secondary-label: #606060;
+  --overview-control: #e5e5e5;
+  --overview-account-surface: #fafafa;
+  --overview-account-divider: #dedede;
+  --overview-shadow:
+    0 1px 3px rgb(0 0 0 / 0.05),
+    0 5px 15px rgb(0 0 0 / 0.08);
+  --panel-card: #fafafa;
+  --panel-border: rgb(255 255 255 / 0.55);
+  --ball-glass-start: rgb(255 255 255 / 0.95);
+  --ball-glass-end: rgb(226 226 226 / 0.76);
+  --ball-text: #1d1d1f;
+  --ball-logo: var(--ball-text);
+  --ball-detail: #606060;
+  --ball-border: rgb(0 0 0 / 0.15);
+}
+
+/* 主窗口在 macOS 上是透明材质窗口，根层不能再铺不透明画布。 */
+:root[data-platform='macos'][data-view='main'],
+:root[data-platform='macos'][data-view='main'] body {
+  background: transparent;
+}
+
 /* 外观偏好写在 <html data-theme> 上：light / dark 显式覆盖，
    system（或尚未写入时）由下方的媒体查询跟随系统。 */
 :root[data-theme='dark'] {
@@ -99,6 +130,30 @@
   --ball-spinner: rgb(255 255 255 / 0.42);
 }
 
+/* 深色玻璃：外壳与浮卡换成 macOS 的中性灰，字色不再带蓝。 */
+:root[data-theme='dark'][data-platform='macos'] {
+  --shell-glass: rgb(27 27 27 / 0.74);
+  --shell-border: rgb(255 255 255 / 0.14);
+  --glass-button: rgb(255 255 255 / 0.08);
+  --overview-sheet: #242424;
+  --overview-label: #e5e5e5;
+  --overview-secondary-label: #aaaaaa;
+  --overview-control: #333333;
+  --overview-account-surface: #2c2c2c;
+  --overview-account-divider: #3a3a3a;
+  --overview-shadow:
+    0 1px 3px rgb(0 0 0 / 0.1),
+    0 5px 15px rgb(0 0 0 / 0.18);
+  --panel-card: #2c2c2c;
+  --panel-border: rgb(255 255 255 / 0.12);
+  --ball-glass-start: rgb(66 66 66 / 0.95);
+  --ball-glass-end: rgb(30 30 30 / 0.78);
+  --ball-text: #e5e5e5;
+  --ball-logo: var(--ball-text);
+  --ball-detail: #aaaaaa;
+  --ball-border: rgb(255 255 255 / 0.16);
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     color-scheme: dark;
@@ -133,6 +188,29 @@
     --ball-detail: #93a4ba;
     --ball-track: rgb(255 255 255 / 0.13);
     --ball-spinner: rgb(255 255 255 / 0.42);
+  }
+
+  :root:not([data-theme='light'])[data-platform='macos'] {
+    --shell-glass: rgb(27 27 27 / 0.74);
+    --shell-border: rgb(255 255 255 / 0.14);
+    --glass-button: rgb(255 255 255 / 0.08);
+    --overview-sheet: #242424;
+    --overview-label: #e5e5e5;
+    --overview-secondary-label: #aaaaaa;
+    --overview-control: #333333;
+    --overview-account-surface: #2c2c2c;
+    --overview-account-divider: #3a3a3a;
+    --overview-shadow:
+      0 1px 3px rgb(0 0 0 / 0.1),
+      0 5px 15px rgb(0 0 0 / 0.18);
+    --panel-card: #2c2c2c;
+    --panel-border: rgb(255 255 255 / 0.12);
+    --ball-glass-start: rgb(66 66 66 / 0.95);
+    --ball-glass-end: rgb(30 30 30 / 0.78);
+    --ball-text: #e5e5e5;
+    --ball-logo: var(--ball-text);
+    --ball-detail: #aaaaaa;
+    --ball-border: rgb(255 255 255 / 0.16);
   }
 }
 

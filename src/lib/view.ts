@@ -1,6 +1,17 @@
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
+/**
+ * 首帧的平台提示：`get_app_info()` 异步返回前，先用 UA 同步落定
+ * `html[data-platform]`，让窗口材质与平台专用 token 从第一帧就生效。
+ */
+export function hostPlatformHint(): 'macos' | 'windows' | null {
+  if (typeof navigator === 'undefined') return null;
+  if (/Windows/i.test(navigator.userAgent)) return 'windows';
+  if (/Macintosh|Mac OS X/i.test(navigator.userAgent)) return 'macos';
+  return null;
+}
+
 /** 同一份前端产物服务于主窗口、菜单栏面板、悬浮球与悬浮球弹层。 */
 export type WindowView = 'main' | 'tray' | 'float' | 'float-popover';
 

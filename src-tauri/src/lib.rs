@@ -17,6 +17,7 @@ mod state;
 mod tray;
 mod update;
 mod usage_api;
+mod window_material;
 mod workbuddy;
 
 use std::fs;
@@ -67,6 +68,24 @@ fn get_app_info(app: tauri::AppHandle) -> AppInfo {
         info.version.to_string(),
         channel::of(&app),
     )
+}
+
+/// 把前端外观偏好映射为系统主题；`None`（含 system）表示继续跟随系统。
+fn theme_override(theme: Option<&str>) -> Option<tauri::Theme> {
+    match theme {
+        Some("light") => Some(tauri::Theme::Light),
+        Some("dark") => Some(tauri::Theme::Dark),
+        _ => None,
+    }
+}
+
+/// 把前端外观偏好同步给系统：`None` 跟随系统，其余显式切换。
+/// macOS 上主题是应用级的，会影响窗口材质、红绿灯与原生控件。
+#[tauri::command]
+fn set_app_theme(window: tauri::WebviewWindow, theme: Option<String>) -> Result<(), String> {
+    window
+        .set_theme(theme_override(theme.as_deref()))
+        .map_err(|err| format!("同步系统外观失败：{err}"))
 }
 
 /// 返回脱敏的完整状态；前端首次打开窗口或重连时以此为准。
@@ -589,6 +608,15 @@ pub fn run() {
                 });
             }
 
+            // macOS 主窗口改用系统玻璃/毛玻璃外壳；必须先于窗口显示，
+            // 否则首帧会先露出不透明底色再切成材质。
+            #[cfg(target_os = "macos")]
+            if let Some(main) = app.get_webview_window("main") {
+                if let Err(err) = window_material::apply_main(&main) {
+                    logging::lifecycle!("[window] 应用主窗口材质失败：{err}");
+                }
+            }
+
             // macOS 保持 Overlay 原生标题栏（红绿灯与拖拽交给系统），窗口随启动显示。
             #[cfg(not(windows))]
             tray::show_main_window(app.handle());
@@ -606,6 +634,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_app_info,
+            set_app_theme,
             get_app_state,
             get_state_file_notice,
             refresh_usage,
@@ -680,7 +709,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::compose_app_info;
+    use super::{compose_app_info, theme_override};
     use crate::channel::Channel;
 
     #[test]
@@ -704,5 +733,14 @@ mod tests {
         assert_eq!(test.name, "Token Refill Test");
         assert_eq!(test.version, "0.2.6-test.g1b2c3d");
         assert_eq!(test.channel, "test");
+    }
+
+    #[test]
+    fn theme_override_only_accepts_explicit_light_or_dark() {
+        assert_eq!(theme_override(Some("light")), Some(tauri::Theme::Light));
+        assert_eq!(theme_override(Some("dark")), Some(tauri::Theme::Dark));
+        assert_eq!(theme_override(Some("system")), None);
+        assert_eq!(theme_override(None), None);
+        assert_eq!(theme_override(Some("sepia")), None);
     }
 }

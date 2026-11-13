@@ -9,7 +9,7 @@ import { AppStateProvider } from './lib/store';
 import { RelayProvider } from './lib/relay';
 import { loadTheme, saveTheme } from './lib/prefs';
 import { applyTheme, useThemeSync } from './lib/theme';
-import { WINDOW_VIEW } from './lib/view';
+import { WINDOW_VIEW, hostPlatformHint } from './lib/view';
 import './styles.css';
 
 // 首帧前落定外观，避免深色模式下先闪一帧浅色。
@@ -18,10 +18,13 @@ const initialTheme = loadTheme();
 saveTheme(initialTheme);
 applyTheme(initialTheme);
 
-// 菜单栏面板与悬浮球都是透明窗口；主窗口保持默认画布背景。
-if (WINDOW_VIEW !== 'main') {
-  document.documentElement.dataset.view = WINDOW_VIEW;
+// 平台专用 token 与材质样式都挂在根元素上；Rust 返回 appInfo 前先用 UA 兜底。
+const platformHint = hostPlatformHint();
+if (platformHint) {
+  document.documentElement.dataset.platform = platformHint;
 }
+// 不同窗口的根层背景规则不同：托盘/悬浮球透明，主窗口在 macOS 上也是透明材质。
+document.documentElement.dataset.view = WINDOW_VIEW;
 
 function renderView() {
   switch (WINDOW_VIEW) {

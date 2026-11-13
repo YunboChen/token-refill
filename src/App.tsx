@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import {
+  ArrowClockwise,
   ArrowUp,
   Gauge,
   GearSix,
@@ -9,7 +10,9 @@ import {
   type Icon,
 } from '@phosphor-icons/react';
 import logoWordmark from './assets/logo-text.png';
+import { clockMinuteLabel } from './lib/format';
 import { useAppState } from './lib/store';
+import { hostPlatformHint } from './lib/view';
 import OverviewPanel from './panels/OverviewPanel';
 import AccountsPanel from './panels/AccountsPanel';
 import RelayPanel from './panels/RelayPanel';
@@ -59,23 +62,32 @@ const PANELS: PanelDef[] = [
   },
 ];
 
-/* 平台信息由 Rust 侧异步返回；先用 UA 同步兜底，避免 Windows 自绘标题栏首帧缺失。 */
-function platformHint(): string | null {
-  if (typeof navigator === 'undefined') return null;
-  if (/Windows/i.test(navigator.userAgent)) return 'windows';
-  if (/Macintosh|Mac OS X/i.test(navigator.userAgent)) return 'macos';
-  return null;
-}
-
 export default function App() {
   const [active, setActive] = useState<PanelKey>('overview');
   const [isMaximized, setIsMaximized] = useState(false);
-  const { error, stateFileNotice, update, openExternal, appInfo } = useAppState();
+  const { state, error, stateFileNotice, update, openExternal, appInfo, refresh } =
+    useAppState();
   const desktop = isTauri();
   // 应用信息（名称、版本、渠道、平台）统一来自 Rust 合并后的配置；首帧先用 UA
   // 兜底平台，避免 Windows 自绘标题栏与关闭装饰的窗口在首帧错位。
-  const platform = appInfo?.platform ?? platformHint();
+  const platform = appInfo?.platform ?? hostPlatformHint();
   const current = PANELS.find((panel) => panel.key === active) ?? PANELS[0];
+  // 玻璃工具栏右侧只显示所有订阅账户里最近一次成功查询的时间；
+  // 中转站账户的额度有自己的刷新入口，不在这里混算。
+  const lastUpdated = state.accounts.reduce<number | null>((latest, account) => {
+    for (const product of account.products) {
+      const checkedAt = product.snapshot?.checkedAtEpoch ?? null;
+      if (checkedAt !== null && (latest === null || checkedAt > latest)) {
+        latest = checkedAt;
+      }
+    }
+    return latest;
+  }, null);
+  const refreshing = state.accounts.some((account) =>
+    account.products.some((product) => product.query.refreshing),
+  );
+  const updatedLabel =
+    lastUpdated === null ? '尚未刷新' : `更新于 ${clockMinuteLabel(lastUpdated)}`;
   // 启动检查只在有正式新版本时提示；设置页仍可手动重新检查。
   // 侧栏页脚只放一个轻量入口，详细状态仍在设置页。
   const updateAvailable =
@@ -182,7 +194,7 @@ export default function App() {
         </aside>
 
         <main className={styles.main}>
-          {/* 页面头部独立于滚动区：直接顶到窗口上沿，同时作为拖拽区 */}
+          {/* macOS：标题与说明并入玻璃工具栏，右侧是订阅账户的更新时间与刷新；Windows 仍用原页头。 */}
           <header className={styles.pageHeader} data-tauri-drag-region>
             <div className={styles.pageHeaderInner}>
               <h1 className={styles.panelTitle} data-tauri-drag-region>
@@ -192,6 +204,28 @@ export default function App() {
                 {current.subtitle}
               </p>
             </div>
+            {isWindows ? null : (
+              <div className={styles.macToolbarRight}>
+                <span>{updatedLabel}</span>
+                <button
+                  type="button"
+                  className={styles.macRefreshButton}
+                  onClick={() => void refresh()}
+                  disabled={!desktop || refreshing}
+                  aria-label="刷新订阅账户"
+                  title={
+                    desktop ? '刷新订阅账户' : '浏览器预览无法调用 Rust'
+                  }
+                >
+                  <ArrowClockwise
+                    size={13}
+                    weight="bold"
+                    className={refreshing ? styles.spin : undefined}
+                    aria-hidden
+                  />
+                </button>
+              </div>
+            )}
           </header>
 
           <div className={styles.mainScroll}>

@@ -576,3 +576,24 @@
   height: 15px;
   background: var(--border-strong);
 }
+
+/* ---------- macOS 材质 ----------
+   菜单栏面板是浮在桌面上的小窗，不叠系统玻璃：整块使用 macOS 浮层的中性灰，
+   卡片再浅一档，保证文字对比稳定。 */
+:global(html[data-platform='macos']) .panel {
+  --text: var(--overview-label);
+  --muted: var(--overview-secondary-label);
+  --sunken: var(--overview-control);
+  --border: var(--overview-account-divider);
+  border-color: var(--panel-border);
+  background: var(--overview-sheet);
+}
+
+:global(html[data-platform='macos']) .header,
+:global(html[data-platform='macos']) .footer {
+  background: var(--overview-sheet);
+}
+
+:global(html[data-platform='macos']) .account {
+  background: var(--panel-card);
+}

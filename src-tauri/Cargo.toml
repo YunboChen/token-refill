@@ -42,7 +42,7 @@ tauri-plugin-updater = "2"
 block2 = "0.6"
 objc2 = "0.6"
 # 菜单栏面板定位需要 NSScreen / NSEvent / NSWindow 的分数坐标。
-objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSScreen", "NSWindow"] }
+objc2-app-kit = { version = "0.3", features = ["NSColor", "NSEvent", "NSScreen", "NSWindow"] }
 objc2-foundation = "0.3"
 objc2-user-notifications = "0.3"
 # 快速面板使用非激活 NSPanel，覆盖其他应用的全屏空间；仅 Rust 侧调用。

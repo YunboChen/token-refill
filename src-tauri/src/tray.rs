@@ -742,6 +742,13 @@ fn create_main_window(app: &AppHandle) -> Option<WebviewWindow> {
         }
     };
 
+    // 空闲销毁后重建的窗口不会经过 `setup()`，材质必须在这里补一次，
+    // 否则关闭再打开主窗口会退回不透明底色。
+    #[cfg(target_os = "macos")]
+    if let Err(err) = crate::window_material::apply_main(&main) {
+        lifecycle!("[window] 重建主窗口材质失败：{err}");
+    }
+
     attach_main_handlers(&main);
     let fallback = main.clone();
     thread::spawn(move || {
