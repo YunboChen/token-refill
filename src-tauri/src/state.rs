@@ -26,8 +26,10 @@ use crate::bailian::{
 };
 use crate::codex::{self, CodexIdentity, CodexUsage, UsageError};
 use crate::commandcode::{self, CommandCodeUsage};
+use crate::cursor::{self, CursorUsage};
 use crate::opencode::{self, OpencodeUsage};
 use crate::proxy::{self, ProxyMode};
+use crate::quota::KeyQuota;
 use crate::usage_api::ProviderError;
 use crate::workbuddy::{self, CreditGroupUsage, CreditsUsage, WorkbuddyError, WorkbuddyReadout};
 
@@ -52,6 +54,8 @@ pub const ANTIGRAVITY_PRODUCT_ID: &str = "antigravity";
 pub const ANTIGRAVITY_ACCOUNT_ID: &str = "antigravity-local";
 pub const WORKBUDDY_PLATFORM: &str = "workbuddy";
 pub const WORKBUDDY_PRODUCT_ID: &str = "workbuddy-credits";
+pub const CURSOR_PLATFORM: &str = "cursor";
+pub const CURSOR_PRODUCT_ID: &str = "cursor";
 
 /// 与前端设置页的可选项保持一致；后端在这里再次校验，不信任前端传入值。
 pub const REFRESH_OPTIONS: [i64; 5] = [1, 5, 15, 30, 60];
@@ -62,6 +66,12 @@ const REMINDER_KEY_SEP: char = '\u{1f}';
 const SCHEDULER_TICK: Duration = Duration::from_secs(5);
 const AUTH_NOTICE_RETRY_BASE_SECS: i64 = 60;
 const AUTH_NOTICE_RETRY_MAX_SECS: i64 = 3600;
+/// 中转站余额提醒的后台刷新失败退避：60s 起翻倍，最多 30 分钟。
+const RELAY_REFRESH_RETRY_BASE_SECS: i64 = 60;
+const RELAY_REFRESH_RETRY_MAX_SECS: i64 = 1800;
+/// 金额阈值上限；避免用户误填超大值后永远无法触发或撑大状态文件。
+const RELAY_THRESHOLD_MAX: f64 = 1_000_000.0;
+const RELAY_CURRENCY_MAX_CHARS: usize = 16;
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 const DISPLAY_NAME_MAX_CHARS: usize = 60;
 /// 总览排序只保存标识与相对顺序；限制条目数与单项长度，避免状态文件被撑大。
@@ -70,6 +80,7 @@ const OVERVIEW_ORDER_KEY_MAX_CHARS: usize = 128;
 const PROFILES_DIR_NAME: &str = "codex-profiles";
 const BAILIAN_PROFILES_DIR_NAME: &str = "bailian-profiles";
 const WORKBUDDY_PROFILES_DIR_NAME: &str = "workbuddy-profiles";
+const CURSOR_PROFILES_DIR_NAME: &str = "cursor-profiles";
 const API_PROFILES_DIR_NAME: &str = "api-profiles";
 static ACCOUNT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -215,6 +226,16 @@ pub struct QuotaSnapshot {
     pub groups: Vec<QuotaGroup>,
     /// 必需字段缺失等能力缺口，明确记录而不是静默补零。
     pub capability_gaps: Vec<String>,
+    /// Codex 重置卡摘要；后台刷新只取数量，不请求明细。
+    /// 旧状态文件没有该字段时按“未知”处理，不显示 0 张。
+    #[serde(default)]
+    pub reset_credits: Option<ResetCreditsSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetCreditsSummary {
+    pub available_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -318,6 +339,24 @@ pub struct AuthExpiringMark {
     pub next_attempt_epoch: Option<i64>,
 }
 
+/// 中转站低余额提醒：按 relayId 保存用户设置的阈值与当前提醒轮次。
+/// 金额是阈值本身，不包含任何凭证；币种记录设置时的值，查询结果币种不一致时
+/// 不参与比较。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayReminder {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub threshold: f64,
+    #[serde(default)]
+    pub currency: String,
+    /// 是否处于「已提醒的低余额轮次」。余额回升到阈值或以上时清除，
+    /// 下一次跌破阈值才会再次提醒；跨刷新、跨重启都靠这个标记去重。
+    #[serde(default)]
+    pub low: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LowQuotaMark {
@@ -393,6 +432,9 @@ pub struct PersistedState {
     /// 悬浮球的当前套餐与位置；旧版本状态文件缺省为未选择、默认位置。
     #[serde(default)]
     pub floating_ball: FloatingBallState,
+    /// 中转站低余额提醒配置；旧版本状态文件缺省为空（全部关闭）。
+    #[serde(default)]
+    pub relay_reminders: HashMap<String, RelayReminder>,
 }
 
 pub fn default_state() -> PersistedState {
@@ -405,6 +447,7 @@ pub fn default_state() -> PersistedState {
         overview_order: OverviewOrder::default(),
         relay_order: Vec::new(),
         floating_ball: FloatingBallState::default(),
+        relay_reminders: HashMap::new(),
     }
 }
 
@@ -579,6 +622,12 @@ fn snapshot_from_usage(usage: &CodexUsage) -> QuotaSnapshot {
         checked_at_epoch: usage.checked_at_epoch,
         groups,
         capability_gaps,
+        reset_credits: usage
+            .reset_credits
+            .as_ref()
+            .map(|credits| ResetCreditsSummary {
+                available_count: credits.available_count,
+            }),
     }
 }
 
@@ -609,6 +658,10 @@ fn is_workbuddy_product(product: &ProductState) -> bool {
     product.kind == WORKBUDDY_PRODUCT_ID
 }
 
+fn is_cursor_product(product: &ProductState) -> bool {
+    product.kind == CURSOR_PRODUCT_ID
+}
+
 /// 调度与提醒需要覆盖所有已接入的产品；未识别平台不参与自动刷新。
 fn is_refreshable_product(product: &ProductState) -> bool {
     is_codex_product(product)
@@ -617,6 +670,7 @@ fn is_refreshable_product(product: &ProductState) -> bool {
         || is_commandcode_product(product)
         || is_antigravity_product(product)
         || is_workbuddy_product(product)
+        || is_cursor_product(product)
 }
 
 fn is_supported_platform(platform: &str) -> bool {
@@ -628,6 +682,7 @@ fn is_supported_platform(platform: &str) -> bool {
             | COMMAND_CODE_PLATFORM
             | ANTIGRAVITY_PLATFORM
             | WORKBUDDY_PLATFORM
+            | CURSOR_PLATFORM
     )
 }
 
@@ -677,6 +732,18 @@ fn workbuddy_products() -> Vec<ProductState> {
     }]
 }
 
+fn cursor_products() -> Vec<ProductState> {
+    vec![ProductState {
+        product_id: CURSOR_PRODUCT_ID.to_string(),
+        kind: CURSOR_PRODUCT_ID.to_string(),
+        display_name: "套餐额度".to_string(),
+        plan_tier: None,
+        active: None,
+        snapshot: None,
+        query: QueryState::default(),
+    }]
+}
+
 fn platform_display_name(platform: &str) -> &'static str {
     match platform {
         OPENCODE_GO_PLATFORM => "OpenCode Go 账户",
@@ -684,6 +751,7 @@ fn platform_display_name(platform: &str) -> &'static str {
         ANTIGRAVITY_PLATFORM => "本机 Antigravity",
         "bailian" => "百炼账户",
         WORKBUDDY_PLATFORM => "WorkBuddy 账户",
+        CURSOR_PLATFORM => "Cursor 账户",
         _ => "Codex 账户",
     }
 }
@@ -776,6 +844,7 @@ fn token_plan_snapshot(
             windows: vec![window],
         }],
         capability_gaps,
+        reset_credits: None,
     }
 }
 
@@ -820,6 +889,7 @@ fn coding_plan_snapshot(usage: &CodingPlanUsage, checked_at: i64) -> QuotaSnapsh
             checked_at_epoch: checked_at,
             groups: Vec::new(),
             capability_gaps: vec!["未找到有效的 Coding Plan 订阅".to_string()],
+            reset_credits: None,
         };
     }
     let mut capability_gaps = Vec::new();
@@ -858,6 +928,7 @@ fn coding_plan_snapshot(usage: &CodingPlanUsage, checked_at: i64) -> QuotaSnapsh
             windows,
         }],
         capability_gaps,
+        reset_credits: None,
     }
 }
 
@@ -890,6 +961,7 @@ fn workbuddy_snapshot(usage: &CreditsUsage, checked_at: i64) -> QuotaSnapshot {
         checked_at_epoch: checked_at,
         groups,
         capability_gaps: usage.capability_gaps.clone(),
+        reset_credits: None,
     }
 }
 
@@ -925,6 +997,7 @@ fn is_product_for_platform(product: &ProductState, platform: &str) -> bool {
         COMMAND_CODE_PLATFORM => is_commandcode_product(product),
         ANTIGRAVITY_PLATFORM => is_antigravity_product(product),
         WORKBUDDY_PLATFORM => is_workbuddy_product(product),
+        CURSOR_PLATFORM => is_cursor_product(product),
         _ => false,
     }
 }
@@ -967,6 +1040,98 @@ fn opencode_snapshot(usage: &OpencodeUsage) -> QuotaSnapshot {
             windows,
         }],
         capability_gaps,
+        reset_credits: None,
+    }
+}
+
+/// Cursor 的套餐用量只有百分比，没有金额上限；计费周期两端齐全时才派生窗口时长。
+/// 总用量不单独展示：模型窗口齐全时只列模型，只有总比例时回退到总用量。
+fn cursor_snapshot(usage: &CursorUsage) -> QuotaSnapshot {
+    let mut capability_gaps = Vec::new();
+    if usage.cycle_end_epoch.is_none() {
+        capability_gaps.push("Cursor 未返回计费周期重置时间".to_string());
+    }
+    let duration_mins = match (usage.cycle_start_epoch, usage.cycle_end_epoch) {
+        (Some(start), Some(end)) if end > start => Some((end - start) / 60),
+        _ => None,
+    };
+
+    let mut windows: Vec<QuotaWindow> = [
+        ("auto", "Cursor 模型", usage.auto_percent_used),
+        ("api", "第三方模型", usage.api_percent_used),
+    ]
+    .into_iter()
+    .filter_map(|(id, name, used)| {
+        let used = used?;
+        Some(QuotaWindow {
+            window_id: format!("cursor-{id}"),
+            source_window_id: id.to_string(),
+            window_name: Some(name.to_string()),
+            unit: "percent".to_string(),
+            used_percent: Some(used),
+            remaining_percent: Some(clamp_percent(100 - used)),
+            used_amount: None,
+            total_amount: None,
+            remaining_amount: None,
+            window_duration_mins: duration_mins,
+            resets_at_epoch: usage.cycle_end_epoch,
+            expires_at_epoch: None,
+        })
+    })
+    .collect();
+
+    if windows.is_empty() {
+        // `parse_usage` 已保证三种比例至少返回一种，走到这里时总用量必然存在。
+        if let Some(total) = usage.total_percent_used {
+            windows.push(QuotaWindow {
+                window_id: "cursor-total".to_string(),
+                source_window_id: "total".to_string(),
+                window_name: Some("总用量".to_string()),
+                unit: "percent".to_string(),
+                used_percent: Some(total),
+                remaining_percent: Some(clamp_percent(100 - total)),
+                used_amount: None,
+                total_amount: None,
+                remaining_amount: None,
+                window_duration_mins: duration_mins,
+                resets_at_epoch: usage.cycle_end_epoch,
+                expires_at_epoch: None,
+            });
+        }
+    }
+
+    // Grok Bot 是独立的周额度，重置时间与计费周期无关。
+    if let Some(bot) = &usage.grok_bot {
+        let bot_duration_mins = match (bot.period_start_epoch, bot.period_end_epoch) {
+            (Some(start), Some(end)) if end > start => Some((end - start) / 60),
+            _ => Some(10_080),
+        };
+        windows.push(QuotaWindow {
+            window_id: "cursor-grok-bot".to_string(),
+            source_window_id: "grok-bot".to_string(),
+            window_name: Some("Grok Bot".to_string()),
+            unit: "percent".to_string(),
+            used_percent: Some(bot.percent_used),
+            remaining_percent: Some(clamp_percent(100 - bot.percent_used)),
+            used_amount: None,
+            total_amount: None,
+            remaining_amount: None,
+            window_duration_mins: bot_duration_mins,
+            resets_at_epoch: bot.period_end_epoch,
+            expires_at_epoch: None,
+        });
+    }
+
+    QuotaSnapshot {
+        checked_at_epoch: usage.checked_at_epoch,
+        groups: vec![QuotaGroup {
+            limit_id: Some("cursor-plan".to_string()),
+            limit_name: Some("套餐额度".to_string()),
+            plan_type: None,
+            windows,
+        }],
+        capability_gaps,
+        reset_credits: None,
     }
 }
 
@@ -1027,6 +1192,7 @@ fn commandcode_snapshot(usage: &CommandCodeUsage) -> QuotaSnapshot {
             windows,
         }],
         capability_gaps: usage.capability_gaps.clone(),
+        reset_credits: None,
     }
 }
 
@@ -1068,6 +1234,7 @@ fn antigravity_snapshot(usage: &AntigravityUsage) -> QuotaSnapshot {
         checked_at_epoch: usage.checked_at_epoch,
         groups,
         capability_gaps,
+        reset_credits: None,
     }
 }
 
@@ -1480,6 +1647,133 @@ pub struct LowQuotaNotice {
     pub window_label: String,
     pub remaining_percent: i64,
     pub threshold: i64,
+}
+
+/// 一条中转站低余额提醒；只含站点名称、余额与阈值，不含地址或凭证。
+#[derive(Debug, Clone, PartialEq)]
+pub struct LowBalanceNotice {
+    pub relay_id: String,
+    pub site_name: String,
+    pub balance: f64,
+    pub threshold: f64,
+    pub currency: String,
+}
+
+/// 校验用户填写的提醒金额：有限正数、上限 100 万、最多两位小数。
+/// 错误信息可以直接展示在弹窗里。
+pub fn validate_relay_threshold(threshold: f64) -> Result<f64, String> {
+    if !threshold.is_finite() {
+        return Err("提醒金额必须是有效数字。".to_string());
+    }
+    if threshold <= 0.0 {
+        return Err("提醒金额必须大于 0。".to_string());
+    }
+    if threshold > RELAY_THRESHOLD_MAX {
+        return Err("提醒金额不能超过 1,000,000。".to_string());
+    }
+    let scaled = threshold * 100.0;
+    if (scaled - scaled.round()).abs() > 1e-6 {
+        return Err("提醒金额最多保留两位小数。".to_string());
+    }
+    Ok(scaled.round() / 100.0)
+}
+
+/// 关闭提醒时不校验阈值：保留原值即可，避免用户为了关闭而先修正输入。
+/// 开启时才要求合法金额。
+pub fn relay_reminder_threshold(enabled: bool, threshold: f64) -> Result<Option<f64>, String> {
+    if enabled {
+        validate_relay_threshold(threshold).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+/// 开启提醒时的币种：优先本次查询结果，缺失时沿用已保存的币种。
+/// 站点临时查询失败时仍能调整阈值，但不会切换成无法识别的币种。
+pub fn relay_reminder_currency(
+    incoming: Option<&str>,
+    existing: Option<&str>,
+) -> Result<String, String> {
+    fn normalize(value: &str) -> Option<String> {
+        let normalized = value.trim().to_ascii_uppercase();
+        let valid = !normalized.is_empty()
+            && normalized.chars().count() <= RELAY_CURRENCY_MAX_CHARS
+            && normalized.chars().all(|ch| ch.is_ascii_alphanumeric());
+        valid.then_some(normalized)
+    }
+
+    incoming
+        .and_then(normalize)
+        .or_else(|| existing.and_then(normalize))
+        .ok_or_else(|| "无法识别该站点的余额币种，暂不能开启余额提醒。".to_string())
+}
+
+/// 规范化平台返回的币种。平台没有明确给出币种时返回 `None`；
+/// 只有可识别的字母数字币种才允许开启提醒与参与比较。
+pub fn relay_quota_currency(quota: &KeyQuota) -> Option<String> {
+    let currency = quota.currency.as_deref()?.trim().to_ascii_uppercase();
+    let valid = !currency.is_empty()
+        && currency.chars().count() <= RELAY_CURRENCY_MAX_CHARS
+        && currency.chars().all(|ch| ch.is_ascii_alphanumeric());
+    valid.then_some(currency)
+}
+
+/// 提醒使用的余额口径：优先账户余额，其次密钥余额。缺失或非有限值返回 `None`。
+pub fn relay_quota_balance(quota: &KeyQuota) -> Option<f64> {
+    let balance = quota
+        .account
+        .as_ref()
+        .and_then(|account| account.remaining_usd)
+        .or(quota.remaining_usd)?;
+    balance.is_finite().then_some(balance)
+}
+
+/// 根据最新一次成功查询判断是否需要发送中转站低余额提醒，并同步 `low` 标记。
+///
+/// - 未开启提醒、额度不受限制、余额或币种无法识别、币种与设置不一致时跳过，
+///   且不改变 `low` 标记；
+/// - 余额低于阈值且此前未提醒过：置 `low = true` 并返回通知；
+/// - 余额回到阈值或以上：清除 `low`，恢复下一次跌破的提醒资格；
+/// - 余额持续低于阈值（含重启后）不重复通知。
+pub fn relay_low_balance_notice(
+    state: &mut PersistedState,
+    relay_id: &str,
+    site_name: &str,
+    quota: &KeyQuota,
+) -> Option<LowBalanceNotice> {
+    let reminder = state.relay_reminders.get_mut(relay_id)?;
+    if !reminder.enabled || quota.unlimited {
+        return None;
+    }
+    let balance = relay_quota_balance(quota)?;
+    let currency = relay_quota_currency(quota)?;
+    // 币种严格比较；旧文件或手工编辑的大小写差异按规范化后的值处理。
+    if currency != reminder.currency.trim().to_ascii_uppercase() {
+        return None;
+    }
+    if balance < reminder.threshold {
+        if reminder.low {
+            return None;
+        }
+        reminder.low = true;
+        Some(LowBalanceNotice {
+            relay_id: relay_id.to_string(),
+            site_name: site_name.to_string(),
+            balance,
+            threshold: reminder.threshold,
+            currency,
+        })
+    } else {
+        if reminder.low {
+            reminder.low = false;
+        }
+        None
+    }
+}
+
+fn relay_refresh_backoff_secs(failures: u32) -> i64 {
+    let exponent = failures.saturating_sub(1).min(16);
+    (RELAY_REFRESH_RETRY_BASE_SECS << exponent).min(RELAY_REFRESH_RETRY_MAX_SECS)
 }
 
 /// 一条已预留发送机会的授权失效提醒；不包含凭证。
@@ -2117,6 +2411,18 @@ struct PendingLogin {
     cancel: Arc<AtomicBool>,
 }
 
+/// 重置卡消耗期间占住账户标记；即使查询线程 panic 也会在栈展开时释放。
+struct ResetCreditGuard<'a> {
+    set: &'a Mutex<HashSet<String>>,
+    account_id: String,
+}
+
+impl Drop for ResetCreditGuard<'_> {
+    fn drop(&mut self) {
+        lock(self.set).remove(&self.account_id);
+    }
+}
+
 /// 仍占用授权入口的流程。已请求取消的流程正在回收回调端口与子进程，
 /// 不再阻塞新的授权；否则用户取消后要等后台线程收尾才能重新发起。
 fn active_login(logins: &HashMap<String, PendingLogin>) -> Option<&PendingLogin> {
@@ -2131,9 +2437,14 @@ pub struct StateStore {
     profiles_dir: PathBuf,
     bailian_dir: PathBuf,
     workbuddy_dir: PathBuf,
+    cursor_dir: PathBuf,
     api_dir: PathBuf,
     app: AppHandle,
     in_flight: Mutex<HashSet<String>>,
+    /// 正在消耗重置卡的账户；防止重复点击或两个窗口同时触发时多扣一张。
+    consuming_reset_credit: Mutex<HashSet<String>>,
+    /// 有在途查询、但消耗重置卡后必须再查一次的账户。
+    forced_refresh_pending: Mutex<HashSet<String>>,
     logins: Mutex<HashMap<String, PendingLogin>>,
     shutdown: AtomicBool,
     /// 状态文件由更高版本写入时为 `Some(版本号)`：本次运行不落盘，
@@ -2162,6 +2473,9 @@ impl StateStore {
         let workbuddy_dir = parent
             .map(|parent| parent.join(WORKBUDDY_PROFILES_DIR_NAME))
             .unwrap_or_else(|| PathBuf::from(WORKBUDDY_PROFILES_DIR_NAME));
+        let cursor_dir = parent
+            .map(|parent| parent.join(CURSOR_PROFILES_DIR_NAME))
+            .unwrap_or_else(|| PathBuf::from(CURSOR_PROFILES_DIR_NAME));
         // 到期时间由凭证文件推算，不信任状态文件里的旧值；这样外部替换
         // 凭证（或旧版本没有该字段）时也能马上反映真实到期时间。
         for account in state.accounts.iter_mut().filter(|account| {
@@ -2182,9 +2496,12 @@ impl StateStore {
             profiles_dir,
             bailian_dir,
             workbuddy_dir,
+            cursor_dir,
             api_dir,
             app,
             in_flight: Mutex::new(HashSet::new()),
+            consuming_reset_credit: Mutex::new(HashSet::new()),
+            forced_refresh_pending: Mutex::new(HashSet::new()),
             logins: Mutex::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
             newer_schema_version: loaded.newer_schema_version,
@@ -2240,6 +2557,15 @@ impl StateStore {
         self.show_notification("额度重置提醒", body);
     }
 
+    /// 通知只显示站点名称、余额与阈值，不包含服务地址或凭证。
+    pub(crate) fn notify_relay_low_balance(&self, notice: &LowBalanceNotice) {
+        let body = format!(
+            "{} · 余额 {:.2} {}，低于提醒阈值 {:.2} {}",
+            notice.site_name, notice.balance, notice.currency, notice.threshold, notice.currency
+        );
+        self.show_notification("中转站余额提醒", body);
+    }
+
     fn notify_auth_expired(&self, notice: &AuthExpiredNotice) -> Result<(), String> {
         let fallback = format!("请打开 {} 重新授权。", self.app.package_info().name);
         let action = match (notice.platform.as_str(), notice.source) {
@@ -2252,6 +2578,7 @@ impl StateStore {
                 "请在账户页重新填写 API Key 后再刷新。"
             }
             (WORKBUDDY_PLATFORM, _) => "请在账户页重新授权 WorkBuddy 后再刷新。",
+            (CURSOR_PLATFORM, _) => "请在账户页重新登录 Cursor 后再刷新。",
             _ => fallback.as_str(),
         };
         crate::notification::send_with_identifier(
@@ -2501,6 +2828,116 @@ impl StateStore {
         self.update_strict(move |state| state.relay_order = order)
     }
 
+    /// 保存中转站余额提醒配置。调用方需先确认 relay 仍存在；开启时优先使用
+    /// 本次查询的币种，本次查不到可比较数据时沿用已保存的币种，避免站点临时
+    /// 失败后连阈值都改不了。关闭时不校验阈值，保留原值并清除当前低余额轮次
+    /// 标记，重新开启后可以再次提醒。
+    pub fn set_relay_reminder(
+        &self,
+        relay_id: &str,
+        enabled: bool,
+        threshold: f64,
+        currency: Option<&str>,
+    ) -> Result<PersistedState, String> {
+        let threshold = relay_reminder_threshold(enabled, threshold)?;
+        // 只有已开启的配置才能沿用币种；关闭状态下重新开启仍要求可比较的数据。
+        let existing_currency = if enabled {
+            lock(&self.inner)
+                .relay_reminders
+                .get(relay_id)
+                .filter(|reminder| reminder.enabled)
+                .map(|reminder| reminder.currency.clone())
+        } else {
+            None
+        };
+        let currency = if enabled {
+            Some(relay_reminder_currency(
+                currency,
+                existing_currency.as_deref(),
+            )?)
+        } else {
+            None
+        };
+        self.update_strict(move |state| match state.relay_reminders.get_mut(relay_id) {
+            Some(reminder) => {
+                if enabled {
+                    reminder.enabled = true;
+                    reminder.threshold = threshold.unwrap_or(reminder.threshold);
+                    if let Some(currency) = &currency {
+                        reminder.currency = currency.clone();
+                    }
+                } else {
+                    reminder.enabled = false;
+                    reminder.low = false;
+                }
+            }
+            None => {
+                if enabled {
+                    state.relay_reminders.insert(
+                        relay_id.to_string(),
+                        RelayReminder {
+                            enabled: true,
+                            threshold: threshold.unwrap_or_default(),
+                            currency: currency.clone().unwrap_or_default(),
+                            low: false,
+                        },
+                    );
+                }
+            }
+        })
+    }
+
+    /// 后台提醒线程使用的轻量读取：刷新间隔与已开启提醒的 relayId。
+    /// 不复制账户与额度快照，避免每个 tick 都克隆整份状态。
+    pub fn relay_reminder_targets(&self) -> (i64, Vec<String>) {
+        let state = lock(&self.inner);
+        let ids = state
+            .relay_reminders
+            .iter()
+            .filter(|(_, reminder)| reminder.enabled)
+            .map(|(id, _)| id.clone())
+            .collect();
+        (state.preferences.refresh_minutes, ids)
+    }
+
+    /// 移除中转站账户时清理对应提醒配置与标记；没有配置时不写盘。
+    pub fn clear_relay_reminder(&self, relay_id: &str) {
+        let exists = lock(&self.inner).relay_reminders.contains_key(relay_id);
+        if !exists {
+            return;
+        }
+        self.update_soft(|state| {
+            state.relay_reminders.remove(relay_id);
+        });
+    }
+
+    /// 后台刷新成功后判断是否发送中转站低余额提醒。只在 `low` 标记真的变化时
+    /// 落盘，避免每次成功刷新都重写整份状态文件。
+    pub fn record_relay_balance(
+        &self,
+        relay_id: &str,
+        site_name: &str,
+        quota: &KeyQuota,
+    ) -> Option<LowBalanceNotice> {
+        let mut guard = lock(&self.inner);
+        let mut next = guard.clone();
+        let notice = relay_low_balance_notice(&mut next, relay_id, site_name, quota);
+        if next.relay_reminders == guard.relay_reminders {
+            return notice;
+        }
+        sync_auth_expired_marks(&mut next);
+        next.revision = next.revision.saturating_add(1);
+        if self.newer_schema_version.is_none() {
+            if let Err(err) = write_state(&self.path, &next) {
+                eprintln!("保存应用状态失败：{err}");
+            }
+        }
+        *guard = next.clone();
+        drop(guard);
+        self.emit(&next);
+        notice
+    }
+
     /// 悬浮球开关由设置页的独立命令写入：窗口创建与销毁由调用方负责，
     /// 这里只保证偏好落盘与广播。重复设置同一值不递增修订号。
     pub fn set_floating_ball_enabled(&self, enabled: bool) -> Result<PersistedState, String> {
@@ -2580,6 +3017,13 @@ impl StateStore {
             return None;
         }
         Some(self.workbuddy_dir.join(account_id))
+    }
+
+    fn private_cursor_dir(&self, account_id: &str) -> Option<PathBuf> {
+        if !is_valid_account_id(account_id) {
+            return None;
+        }
+        Some(self.cursor_dir.join(account_id))
     }
 
     fn private_api_dir(&self, account_id: &str) -> Option<PathBuf> {
@@ -3148,6 +3592,136 @@ impl StateStore {
         })
     }
 
+    /// 发起 Cursor 官方 CLI 登录。新账户成功后加入列表；重新登录复用原账户。
+    /// 登录进程使用隔离 HOME，令牌只写入该目录，不经过前端。
+    pub fn begin_cursor_login(
+        self: &Arc<Self>,
+        account_id: Option<String>,
+        display_name: Option<String>,
+    ) -> Result<LoginStartPayload, String> {
+        let state = self.snapshot();
+        let (target_id, is_new) = match account_id {
+            Some(id) => {
+                let account = state
+                    .accounts
+                    .iter()
+                    .find(|account| account.account_id == id)
+                    .ok_or_else(|| format!("未知账户：{id}"))?;
+                if account.platform != CURSOR_PLATFORM {
+                    return Err("该账户不是 Cursor 账户。".to_string());
+                }
+                if account.source != AccountSource::Managed {
+                    return Err("该 Cursor 账户不能重新登录。".to_string());
+                }
+                (id, false)
+            }
+            None => (new_account_id(CURSOR_PLATFORM), true),
+        };
+
+        {
+            let logins = lock(&self.logins);
+            if let Some(pending) = active_login(&logins) {
+                if pending.account_id == target_id {
+                    return Err("该账户正在等待登录，请先完成或取消当前登录。".to_string());
+                }
+                return Err("已有其他账户的授权流程进行中，请先完成或取消。".to_string());
+            }
+        }
+
+        let profile = self
+            .private_cursor_dir(&target_id)
+            .ok_or_else(|| "账户标识无效".to_string())?;
+        ensure_private_dir(&profile)?;
+
+        let binary = cursor::find_agent_binary().map_err(|error| error.message)?;
+        let login_id = new_account_id("cursor-login");
+        let mut session = cursor::LoginSession::start(&binary, &profile, login_id)
+            .map_err(|error| error.message)?;
+        let info = session.info();
+        let cancel = Arc::new(AtomicBool::new(false));
+        lock(&self.logins).insert(
+            info.login_id.clone(),
+            PendingLogin {
+                account_id: target_id.clone(),
+                cancel: Arc::clone(&cancel),
+            },
+        );
+
+        let store = Arc::clone(self);
+        let thread_account_id = target_id.clone();
+        let thread_login_id = info.login_id.clone();
+        let requested_name = display_name.filter(|name| !name.trim().is_empty());
+        thread::spawn(move || {
+            let outcome = session.wait(&cancel, LOGIN_TIMEOUT);
+            lock(&store.logins).remove(&thread_login_id);
+            match outcome {
+                Ok(()) => {
+                    store.finish_cursor_login(&thread_account_id, requested_name.as_deref());
+                    store.emit_login_event(&thread_login_id, &thread_account_id, "succeeded", None);
+                    let _ = store.request_refresh(Some(&thread_account_id));
+                }
+                Err(error) => {
+                    if is_new {
+                        let _ = fs::remove_dir_all(&profile);
+                    }
+                    let status = if error.code == "canceled" {
+                        "canceled"
+                    } else {
+                        "failed"
+                    };
+                    store.emit_login_event(
+                        &thread_login_id,
+                        &thread_account_id,
+                        status,
+                        Some(error.message),
+                    );
+                }
+            }
+        });
+
+        Ok(LoginStartPayload {
+            login_id: info.login_id,
+            account_id: target_id,
+            auth_url: info.auth_url,
+        })
+    }
+
+    fn finish_cursor_login(&self, account_id: &str, requested_name: Option<&str>) {
+        let requested_name = requested_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string);
+        self.update_soft(|state| {
+            if let Some(account) = account_mut(state, account_id) {
+                account.auth_state = AuthState::Unknown;
+                account.source = AccountSource::Managed;
+                if let Some(name) = &requested_name {
+                    account.display_name = name.clone();
+                }
+                for product in cursor_products() {
+                    if !account
+                        .products
+                        .iter()
+                        .any(|existing| existing.product_id == product.product_id)
+                    {
+                        account.products.push(product);
+                    }
+                }
+                return;
+            }
+            state.accounts.push(AccountState {
+                account_id: account_id.to_string(),
+                platform: CURSOR_PLATFORM.to_string(),
+                display_name: requested_name.unwrap_or_else(|| "Cursor 账户".to_string()),
+                auth_state: AuthState::Unknown,
+                source: AccountSource::Managed,
+                identity_hint: None,
+                credential_expires_at_epoch: None,
+                products: cursor_products(),
+            });
+        });
+    }
+
     fn finish_workbuddy_login(
         &self,
         account_id: &str,
@@ -3364,6 +3938,10 @@ impl StateStore {
                 self.private_workbuddy_dir(account_id)
                     .ok_or_else(|| "账户标识无效".to_string())?,
             ),
+            CURSOR_PLATFORM => Some(
+                self.private_cursor_dir(account_id)
+                    .ok_or_else(|| "账户标识无效".to_string())?,
+            ),
             OPENCODE_GO_PLATFORM | COMMAND_CODE_PLATFORM => Some(
                 self.private_api_dir(account_id)
                     .ok_or_else(|| "账户标识无效".to_string())?,
@@ -3441,6 +4019,18 @@ impl StateStore {
         self.private_workbuddy_dir(account_id)
     }
 
+    fn cursor_profile_dir_for(&self, account_id: &str) -> Option<PathBuf> {
+        let state = self.snapshot();
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)?;
+        if account.platform != CURSOR_PLATFORM || account.source != AccountSource::Managed {
+            return None;
+        }
+        self.private_cursor_dir(account_id)
+    }
+
     /// 手动刷新入口。`account_id` 为空时刷新全部已接入账户；
     /// 同一账户已有在途请求时直接复用，不重复启动查询。
     pub fn request_refresh(self: &Arc<Self>, account_id: Option<&str>) -> Result<(), String> {
@@ -3479,6 +4069,87 @@ impl StateStore {
         Ok(())
     }
 
+    /// 消耗重置卡后的强制复查：当前有在途查询时排队，在它收尾后再跑一次，
+    /// 避免消耗前的旧结果覆盖新状态；没有在途查询时等同于普通刷新。
+    pub fn request_refresh_after_current(self: &Arc<Self>, account_id: &str) -> Result<(), String> {
+        if !self
+            .snapshot()
+            .accounts
+            .iter()
+            .any(|account| account.account_id == account_id)
+        {
+            return Err(format!("未知账户：{account_id}"));
+        }
+        {
+            let mut in_flight = lock(&self.in_flight);
+            if !in_flight.insert(account_id.to_string()) {
+                lock(&self.forced_refresh_pending).insert(account_id.to_string());
+                return Ok(());
+            }
+        }
+        self.update_soft(|state| mark_refreshing(state, account_id, epoch_now()));
+        spawn_refresh(Arc::clone(self), account_id.to_string());
+        Ok(())
+    }
+
+    /// 只接受 Codex 订阅账户；返回 Some(home) 表示独立授权目录。
+    fn codex_home_for_action(&self, account_id: &str) -> Result<Option<PathBuf>, String> {
+        let state = self.snapshot();
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)
+            .ok_or_else(|| format!("未知账户：{account_id}"))?;
+        if account.platform != "codex" {
+            return Err("只有 Codex 订阅账户支持重置卡。".to_string());
+        }
+        if self.has_pending_login(account_id) {
+            return Err("该账户正在等待授权，请完成或取消授权后再操作。".to_string());
+        }
+        match account.source {
+            AccountSource::Local => Ok(None),
+            AccountSource::Managed => self
+                .private_profile_dir(account_id)
+                .map(Some)
+                .ok_or_else(|| "账户标识无效".to_string()),
+        }
+    }
+
+    /// 按需读取重置卡明细；后台刷新只保存数量，不调用这里。
+    pub fn read_codex_reset_credits(
+        &self,
+        account_id: &str,
+    ) -> Result<codex::CodexResetCredits, String> {
+        let home = self.codex_home_for_action(account_id)?;
+        codex::read_reset_credits(home.as_deref()).map_err(|err| err.message)
+    }
+
+    /// 消耗一张重置卡。成功后由调用方触发一次刷新；成功后不会返回任何凭证。
+    pub fn consume_codex_reset_credit(
+        &self,
+        account_id: &str,
+        credit_id: Option<&str>,
+        idempotency_key: &str,
+    ) -> Result<String, String> {
+        let idempotency_key = idempotency_key.trim();
+        if idempotency_key.is_empty() || idempotency_key.len() > 128 {
+            return Err("重置卡请求标识无效，请重新打开面板后再试。".to_string());
+        }
+        let home = self.codex_home_for_action(account_id)?;
+        {
+            let mut consuming = lock(&self.consuming_reset_credit);
+            if !consuming.insert(account_id.to_string()) {
+                return Err("正在使用重置卡，请稍候。".to_string());
+            }
+        }
+        let _guard = ResetCreditGuard {
+            set: &self.consuming_reset_credit,
+            account_id: account_id.to_string(),
+        };
+        codex::consume_reset_credit(home.as_deref(), credit_id, idempotency_key)
+            .map_err(|err| err.message)
+    }
+
     fn due_accounts(&self, now: i64) -> Vec<String> {
         let state = self.snapshot();
         let minutes = state.preferences.refresh_minutes;
@@ -3512,6 +4183,7 @@ fn spawn_refresh(store: Arc<StateStore>, account_id: String) {
                     refresh_api_key(&store, &account_id, COMMAND_CODE_PLATFORM)
                 }
                 Some(ANTIGRAVITY_PLATFORM) => refresh_antigravity(&store, &account_id),
+                Some(CURSOR_PLATFORM) => refresh_cursor(&store, &account_id),
                 // 账户在排队期间被移除：不发起查询，也不回写旧任务。
                 _ => {
                     store.update_soft(|state| clear_refreshing(state, &account_id));
@@ -3524,6 +4196,11 @@ fn spawn_refresh(store: Arc<StateStore>, account_id: String) {
             store.update_soft(|state| apply_refresh_panic(state, &account_id, now));
         }
         lock(&store.in_flight).remove(&account_id);
+        // 消耗重置卡时如果正好有查询在途，这里补跑一次，确保界面拿到扣卡后的额度。
+        if lock(&store.forced_refresh_pending).remove(&account_id) {
+            store.update_soft(|state| mark_refreshing(state, &account_id, epoch_now()));
+            spawn_refresh(Arc::clone(&store), account_id);
+        }
     });
 }
 
@@ -3832,6 +4509,48 @@ fn refresh_antigravity(store: &Arc<StateStore>, account_id: &str) {
     }
 }
 
+/// Cursor 的令牌由隔离 profile 中的官方 CLI 维护；应用每次查询重新读取，
+/// 不把副本写进状态文件。重新登录期间旧结果晚到时直接丢弃。
+fn refresh_cursor(store: &Arc<StateStore>, account_id: &str) {
+    let Some(profile) = store.cursor_profile_dir_for(account_id) else {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    };
+    let result = cursor::read_usage(&profile);
+    if store.has_pending_login(account_id) {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    }
+    match result {
+        Ok(usage) => {
+            let snapshot = cursor_snapshot(&usage);
+            let mut low_notices = Vec::new();
+            let mut reset_notices = Vec::new();
+            store.update_soft(|state| {
+                let previous_resets = window_resets(state, account_id);
+                apply_platform_success(
+                    state,
+                    account_id,
+                    CURSOR_PLATFORM,
+                    snapshot,
+                    None,
+                    None,
+                    Some(true),
+                );
+                low_notices = low_quota_notices(state, account_id);
+                reset_notices = collect_reset_notices(state, account_id, &previous_resets);
+            });
+            for notice in &low_notices {
+                store.notify_low_quota(notice);
+            }
+            for notice in &reset_notices {
+                store.notify_reset(notice);
+            }
+        }
+        Err(error) => store.apply_platform_refresh_error(account_id, CURSOR_PLATFORM, &error),
+    }
+}
+
 pub fn auto_detect_local_accounts(store: Arc<StateStore>) {
     // 启动后在后台探测，避免阻塞窗口；Antigravity 首次查询可能耗时十余秒。
     thread::spawn(move || {
@@ -3857,10 +4576,113 @@ pub fn start_scheduler(store: Arc<StateStore>) {
     });
 }
 
+/// 中转站余额提醒的后台刷新。前端定时器在窗口销毁后停止，因此提醒必须由
+/// Rust 驱动；只处理已开启提醒的条目，按偏好间隔顺序查询，失败按指数退避。
+pub fn start_relay_reminder_scheduler(
+    state: Arc<StateStore>,
+    relay: Arc<crate::relay::RelayStore>,
+) {
+    thread::spawn(move || {
+        // 退避记录只保存在内存：重启后按上次成功查询时间重新判断。
+        let mut attempts: HashMap<String, RelayRefreshAttempt> = HashMap::new();
+        loop {
+            if state.shutdown.load(Ordering::SeqCst) {
+                break;
+            }
+            run_relay_reminder_tick(&state, &relay, &mut attempts);
+            thread::sleep(SCHEDULER_TICK);
+        }
+    });
+}
+
+struct RelayRefreshAttempt {
+    last_attempt_epoch: i64,
+    failures: u32,
+}
+
+fn run_relay_reminder_tick(
+    state: &Arc<StateStore>,
+    relay: &Arc<crate::relay::RelayStore>,
+    attempts: &mut HashMap<String, RelayRefreshAttempt>,
+) {
+    let (refresh_minutes, enabled) = state.relay_reminder_targets();
+    if enabled.is_empty() {
+        attempts.clear();
+        return;
+    }
+    // 合法选项最小为 1 分钟；兜底成 0 会让每个 tick 都请求接口。
+    let interval_secs = (refresh_minutes.max(1) * 60).max(60);
+    // 已移除或已关闭提醒的条目不再刷新，同时清理内存中的退避记录。
+    attempts.retain(|id, _| enabled.iter().any(|candidate| candidate == id));
+
+    let now = epoch_now();
+    for id in enabled {
+        let Some(account) = relay.get(&id) else {
+            continue;
+        };
+        if !relay_refresh_due(now, interval_secs, &account, attempts.get(&id)) {
+            continue;
+        }
+        // 阻塞网络查询，必须留在后台线程；一次只刷新一个，避免并发打满。
+        let result = relay.refresh(&id);
+        let attempt = attempts.entry(id.clone()).or_insert(RelayRefreshAttempt {
+            last_attempt_epoch: 0,
+            failures: 0,
+        });
+        attempt.last_attempt_epoch = now;
+        let account = match result {
+            Ok(account) if account.last_error.is_none() && account.quota.is_some() => {
+                attempt.failures = 0;
+                account
+            }
+            // 查询失败保留上次成功快照，等下一次成功查询再判断。
+            _ => {
+                attempt.failures = attempt.failures.saturating_add(1);
+                continue;
+            }
+        };
+        let site_name = account.display_name();
+        if let Some(quota) = account.quota.as_ref() {
+            if let Some(notice) = state.record_relay_balance(&id, &site_name, quota) {
+                state.notify_relay_low_balance(&notice);
+            }
+        }
+        // 窗口打开时同步后台刷新结果；锁顺序与状态写入不重叠。
+        let _ = state.app.emit(
+            crate::relay::RELAY_ACCOUNTS_EVENT,
+            relay.view_with_revision(),
+        );
+    }
+}
+
+fn relay_refresh_due(
+    now: i64,
+    interval_secs: i64,
+    account: &crate::relay::RelayAccount,
+    attempt: Option<&RelayRefreshAttempt>,
+) -> bool {
+    match attempt {
+        Some(attempt) if attempt.failures > 0 => {
+            now - attempt.last_attempt_epoch >= relay_refresh_backoff_secs(attempt.failures)
+        }
+        _ => {
+            // 以「上次成功查询」和「本线程上次尝试」中较晚者为基准，避免启动或
+            // 前端刚刷新过时立刻重复请求。
+            let baseline = attempt
+                .map(|attempt| attempt.last_attempt_epoch)
+                .into_iter()
+                .chain(account.checked_at_epoch)
+                .max()
+                .unwrap_or(0);
+            now - baseline >= interval_secs
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codex::{CodexLimitBucket, CodexWindow};
+    use crate::codex::{CodexLimitBucket, CodexResetCredits, CodexWindow};
 
     fn synthetic_usage() -> CodexUsage {
         CodexUsage {
@@ -3886,6 +4708,7 @@ mod tests {
                     },
                 ],
             }],
+            reset_credits: None,
         }
     }
 
@@ -3912,6 +4735,7 @@ mod tests {
                     resets_at_epoch,
                 }],
             }],
+            reset_credits: None,
         }
     }
 
@@ -4115,6 +4939,26 @@ mod tests {
     }
 
     #[test]
+    fn codex_snapshot_keeps_reset_credit_count_only() {
+        let mut usage = synthetic_usage();
+        usage.reset_credits = Some(CodexResetCredits {
+            available_count: 2,
+            credits: Some(Vec::new()),
+        });
+        let snapshot = snapshot_from_usage(&usage);
+        assert_eq!(
+            snapshot.reset_credits,
+            Some(ResetCreditsSummary { available_count: 2 })
+        );
+    }
+
+    #[test]
+    fn snapshot_without_reset_credits_stays_unknown() {
+        let snapshot = snapshot_from_usage(&synthetic_usage());
+        assert_eq!(snapshot.reset_credits, None);
+    }
+
+    #[test]
     fn missing_window_fields_are_recorded_as_capability_gaps() {
         let mut state = default_state();
         let usage = CodexUsage {
@@ -4131,6 +4975,7 @@ mod tests {
                     resets_at_epoch: None,
                 }],
             }],
+            reset_credits: None,
         };
         apply_success(&mut state, DEFAULT_ACCOUNT_ID, usage, None);
         let snapshot = state.accounts[0].products[0].snapshot.as_ref().unwrap();
@@ -5803,5 +6648,295 @@ mod tests {
         assert_eq!(window.resets_at_epoch, Some(1_792_888_105));
         assert_eq!(snapshot.groups[1].windows[0].remaining_percent, Some(50));
         assert_eq!(snapshot.groups[1].windows[0].used_percent, Some(50));
+    }
+
+    #[test]
+    fn cursor_snapshot_skips_total_when_model_windows_exist() {
+        let usage = CursorUsage {
+            checked_at_epoch: 1_792_759_583,
+            total_percent_used: Some(25),
+            auto_percent_used: Some(10),
+            api_percent_used: Some(40),
+            cycle_start_epoch: Some(1_792_728_069),
+            cycle_end_epoch: Some(1_795_406_469),
+            grok_bot: None,
+        };
+
+        let snapshot = cursor_snapshot(&usage);
+        assert_eq!(snapshot.groups.len(), 1);
+        assert_eq!(snapshot.groups[0].limit_id.as_deref(), Some("cursor-plan"));
+        assert_eq!(snapshot.groups[0].windows.len(), 2);
+
+        let auto = &snapshot.groups[0].windows[0];
+        assert_eq!(auto.window_name.as_deref(), Some("Cursor 模型"));
+        assert_eq!(auto.used_percent, Some(10));
+        assert_eq!(auto.remaining_percent, Some(90));
+        assert_eq!(auto.resets_at_epoch, Some(1_795_406_469));
+        assert_eq!(auto.window_duration_mins, Some(44_640));
+
+        let api = &snapshot.groups[0].windows[1];
+        assert_eq!(api.window_name.as_deref(), Some("第三方模型"));
+        assert_eq!(api.used_percent, Some(40));
+        assert!(snapshot.capability_gaps.is_empty());
+    }
+
+    #[test]
+    fn cursor_snapshot_appends_grok_bot_weekly_window() {
+        let usage = CursorUsage {
+            checked_at_epoch: 1_792_759_583,
+            total_percent_used: Some(25),
+            auto_percent_used: Some(10),
+            api_percent_used: Some(40),
+            cycle_start_epoch: Some(1_792_728_069),
+            cycle_end_epoch: Some(1_795_406_469),
+            grok_bot: Some(crate::cursor::GrokBotUsage {
+                percent_used: 1,
+                period_start_epoch: Some(1_792_728_069),
+                period_end_epoch: Some(1_793_332_869),
+            }),
+        };
+
+        let snapshot = cursor_snapshot(&usage);
+        let windows = &snapshot.groups[0].windows;
+        assert_eq!(windows.len(), 3);
+
+        let bot = &windows[2];
+        assert_eq!(bot.window_id, "cursor-grok-bot");
+        assert_eq!(bot.window_name.as_deref(), Some("Grok Bot"));
+        assert_eq!(bot.used_percent, Some(1));
+        assert_eq!(bot.remaining_percent, Some(99));
+        assert_eq!(bot.resets_at_epoch, Some(1_793_332_869));
+        assert_eq!(bot.window_duration_mins, Some(10_080));
+    }
+
+    #[test]
+    fn cursor_snapshot_uses_weekly_duration_when_bot_period_is_missing() {
+        let usage = CursorUsage {
+            checked_at_epoch: 1_792_759_583,
+            total_percent_used: Some(25),
+            auto_percent_used: Some(10),
+            api_percent_used: None,
+            cycle_start_epoch: None,
+            cycle_end_epoch: None,
+            grok_bot: Some(crate::cursor::GrokBotUsage {
+                percent_used: 30,
+                period_start_epoch: None,
+                period_end_epoch: None,
+            }),
+        };
+
+        let snapshot = cursor_snapshot(&usage);
+        let bot = &snapshot.groups[0].windows[1];
+        assert_eq!(bot.window_duration_mins, Some(10_080));
+        assert_eq!(bot.resets_at_epoch, None);
+    }
+
+    #[test]
+    fn cursor_snapshot_falls_back_to_total_and_records_missing_reset() {
+        let usage = CursorUsage {
+            checked_at_epoch: 1_792_759_583,
+            total_percent_used: Some(5),
+            auto_percent_used: None,
+            api_percent_used: None,
+            cycle_start_epoch: None,
+            cycle_end_epoch: None,
+            grok_bot: None,
+        };
+
+        let snapshot = cursor_snapshot(&usage);
+        assert_eq!(snapshot.groups[0].windows.len(), 1);
+        assert_eq!(
+            snapshot.groups[0].windows[0].window_name.as_deref(),
+            Some("总用量")
+        );
+        assert_eq!(snapshot.groups[0].windows[0].resets_at_epoch, None);
+        assert_eq!(
+            snapshot.capability_gaps,
+            vec!["Cursor 未返回计费周期重置时间".to_string()]
+        );
+    }
+
+    fn relay_reminder_state(threshold: f64, currency: &str) -> PersistedState {
+        let mut state = default_state();
+        state.relay_reminders.insert(
+            "relay-1".to_string(),
+            RelayReminder {
+                enabled: true,
+                threshold,
+                currency: currency.to_string(),
+                low: false,
+            },
+        );
+        state
+    }
+
+    fn relay_quota(balance: Option<f64>, currency: Option<&str>, unlimited: bool) -> KeyQuota {
+        KeyQuota {
+            provider: crate::quota::QuotaProvider::Sub2Api,
+            mode: crate::quota::QuotaMode::Key,
+            key_name: None,
+            plan_name: None,
+            currency: currency.map(str::to_string),
+            valid: true,
+            unlimited,
+            limit_usd: None,
+            used_usd: None,
+            remaining_usd: balance,
+            account: None,
+            account_error: None,
+            expires_at_epoch: None,
+            windows: Vec::new(),
+            checked_at_epoch: 0,
+        }
+    }
+
+    #[test]
+    fn relay_low_balance_notifies_once_per_low_round() {
+        let mut state = relay_reminder_state(5.0, "USD");
+        let mut notices = 0;
+        for balance in [6.0, 4.0, 3.0, 5.0, 4.0] {
+            if relay_low_balance_notice(
+                &mut state,
+                "relay-1",
+                "站点 A",
+                &relay_quota(Some(balance), Some("USD"), false),
+            )
+            .is_some()
+            {
+                notices += 1;
+            }
+        }
+        // 6 不提醒；4 提醒；3 同一轮不重复；5 恢复；4 再次提醒。
+        assert_eq!(notices, 2);
+        assert!(state.relay_reminders["relay-1"].low);
+    }
+
+    #[test]
+    fn relay_low_balance_mark_survives_restart() {
+        let mut state = relay_reminder_state(5.0, "USD");
+        assert!(relay_low_balance_notice(
+            &mut state,
+            "relay-1",
+            "站点 A",
+            &relay_quota(Some(4.0), Some("USD"), false),
+        )
+        .is_some());
+
+        // 模拟重启：配置与 low 标记一起反序列化，持续低余额不重复提醒。
+        let encoded = serde_json::to_string(&state).unwrap();
+        let mut reloaded: PersistedState = serde_json::from_str(&encoded).unwrap();
+        assert!(reloaded.relay_reminders["relay-1"].low);
+        assert!(relay_low_balance_notice(
+            &mut reloaded,
+            "relay-1",
+            "站点 A",
+            &relay_quota(Some(3.0), Some("USD"), false),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn relay_low_balance_skips_unusable_quota_without_changing_mark() {
+        let mut state = relay_reminder_state(5.0, "USD");
+
+        // 余额缺失、币种缺失、币种不一致、额度不受限制都不触发，也不消耗提醒资格。
+        for quota in [
+            relay_quota(None, Some("USD"), false),
+            relay_quota(Some(1.0), None, false),
+            relay_quota(Some(1.0), Some("CNY"), false),
+            relay_quota(Some(1.0), Some("USD"), true),
+        ] {
+            assert!(relay_low_balance_notice(&mut state, "relay-1", "站点 A", &quota).is_none());
+            assert!(!state.relay_reminders["relay-1"].low);
+        }
+    }
+
+    #[test]
+    fn relay_low_balance_prefers_account_balance() {
+        let mut state = relay_reminder_state(5.0, "USD");
+        let mut quota = relay_quota(Some(100.0), Some("USD"), false);
+        quota.account = Some(crate::quota::AccountQuota {
+            total_usd: Some(100.0),
+            used_usd: Some(96.0),
+            remaining_usd: Some(4.0),
+            source: crate::quota::AccountSource::AccessToken,
+            windows: Vec::new(),
+        });
+
+        let notice = relay_low_balance_notice(&mut state, "relay-1", "站点 A", &quota).unwrap();
+        assert_eq!(notice.balance, 4.0);
+        assert_eq!(notice.threshold, 5.0);
+        assert_eq!(notice.currency, "USD");
+    }
+
+    #[test]
+    fn relay_low_balance_does_nothing_when_disabled() {
+        let mut state = relay_reminder_state(5.0, "USD");
+        state.relay_reminders.get_mut("relay-1").unwrap().enabled = false;
+        assert!(relay_low_balance_notice(
+            &mut state,
+            "relay-1",
+            "站点 A",
+            &relay_quota(Some(1.0), Some("USD"), false),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn relay_threshold_validation_covers_bounds_and_precision() {
+        assert_eq!(validate_relay_threshold(5.0).unwrap(), 5.0);
+        assert_eq!(validate_relay_threshold(0.01).unwrap(), 0.01);
+        assert_eq!(validate_relay_threshold(1_000_000.0).unwrap(), 1_000_000.0);
+        assert!(validate_relay_threshold(0.0).is_err());
+        assert!(validate_relay_threshold(-1.0).is_err());
+        assert!(validate_relay_threshold(f64::NAN).is_err());
+        assert!(validate_relay_threshold(f64::INFINITY).is_err());
+        assert!(validate_relay_threshold(1_000_000.01).is_err());
+        assert!(validate_relay_threshold(5.001).is_err());
+    }
+
+    #[test]
+    fn relay_reminder_disabling_skips_threshold_validation() {
+        // 关闭提醒不应被输入框里的残留值挡住；开启时仍按原规则校验。
+        assert_eq!(relay_reminder_threshold(false, f64::NAN).unwrap(), None);
+        assert_eq!(relay_reminder_threshold(false, -1.0).unwrap(), None);
+        assert_eq!(relay_reminder_threshold(false, 5.0).unwrap(), None);
+        assert!(relay_reminder_threshold(true, 0.0).is_err());
+        assert_eq!(relay_reminder_threshold(true, 5.0).unwrap(), Some(5.0));
+    }
+
+    #[test]
+    fn relay_reminder_currency_prefers_query_and_falls_back_to_saved() {
+        assert_eq!(relay_reminder_currency(Some("usd"), None).unwrap(), "USD");
+        assert_eq!(relay_reminder_currency(None, Some("usd")).unwrap(), "USD");
+        // 本次查询没给币种或给了无法识别的值：沿用已保存的币种。
+        assert_eq!(
+            relay_reminder_currency(Some(""), Some("CNY")).unwrap(),
+            "CNY"
+        );
+        assert_eq!(
+            relay_reminder_currency(Some("US D"), Some("CNY")).unwrap(),
+            "CNY"
+        );
+        assert!(relay_reminder_currency(None, None).is_err());
+        assert!(relay_reminder_currency(Some("US D"), None).is_err());
+    }
+
+    #[test]
+    fn relay_low_balance_duplicate_check_is_idempotent() {
+        let mut state = relay_reminder_state(5.0, "USD");
+        let quota = relay_quota(Some(4.0), Some("USD"), false);
+        assert!(relay_low_balance_notice(&mut state, "relay-1", "站点 A", &quota).is_some());
+        // 手动刷新与后台线程可能同时判定；第二次只看到已置位的 low，不重复通知。
+        assert!(relay_low_balance_notice(&mut state, "relay-1", "站点 A", &quota).is_none());
+    }
+
+    #[test]
+    fn relay_refresh_backoff_doubles_and_caps() {
+        assert_eq!(relay_refresh_backoff_secs(1), 60);
+        assert_eq!(relay_refresh_backoff_secs(2), 120);
+        assert_eq!(relay_refresh_backoff_secs(3), 240);
+        assert_eq!(relay_refresh_backoff_secs(6), 1800);
+        assert_eq!(relay_refresh_backoff_secs(20), 1800);
     }
 }

@@ -10,7 +10,7 @@
 - 应用标识 `dev.tokenrefill.desktop`；数据目录由 Tauri `app_data_dir()` 决定：
   - macOS `~/Library/Application Support/dev.tokenrefill.desktop/`
   - Windows `%APPDATA%\dev.tokenrefill.desktop\`
-  - 目录内：`state.json`（设置、账户、额度快照、提醒去重、悬浮球当前套餐与位置）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）、`workbuddy-profiles/<accountId>/`（WorkBuddy 访问令牌与续期令牌）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
+  - 目录内：`state.json`（设置、账户、额度快照、提醒去重、中转站余额提醒阈值/币种/去重标记、悬浮球当前套餐与位置）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）、`workbuddy-profiles/<accountId>/`（WorkBuddy 访问令牌与续期令牌）、`cursor-profiles/<accountId>/`（隔离的 Cursor Agent CLI `HOME`，含 `.cursor/auth.json`）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
   - `logs/` 只写固定文案、窗口标签与耗时，用途是排查发布包没有控制台（Windows GUI 子系统丢弃 `eprintln!`）时的“点了没反应”。令牌、Cookie、邮箱、密钥、请求内容一律不得写入。
   - 测试版与 Next 预览版的数据目录分别是 `.../dev.tokenrefill.desktop.test/` 与 `.../dev.tokenrefill.desktop.next/`，内部结构相同，三者互不共享状态与凭证。
 - 分发渠道分正式版（pro）、测试版（test）与 Next 预览版（next），共用代码，靠 `src-tauri/tauri.test.conf.json` / `src-tauri/tauri.next.conf.json` 覆盖身份：
@@ -20,22 +20,24 @@
   - 渠道由 Rust `channel.rs` 按 identifier 是否以 `.test` / `.next` 结尾判定；前端只消费 `get_app_info().channel`。测试版与 Next 配置不得自带 `version`，正式配置不得使用测试 / Next identifier 或 prerelease 版本（CI 两侧都有断言）。
   - 本地 `pnpm tauri:dev:test` / `pnpm tauri:dev:next` 使用独立标识，可与已安装的正式版同时运行；它们分别与 CI 测试包 / Next 包共用各自数据目录和单实例锁，不要同时启动同一渠道。
   - 三个版本共用上游 Codex OAuth 的固定回调端口 1455/1457，不要同时发起 Codex 授权；百炼回调使用临时端口，无此限制。
-- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 / WorkBuddy / OpenCode Go / Command Code / Antigravity 额度查询、中转站（New API / Sub2API）密钥与账户额度查询、从 cc-switch 与 Claude Code / Codex 当前配置手动扫描并勾选导入中转站候选、菜单栏常驻与快速查看面板、桌面悬浮球（默认关闭，设置中开启）、系统提醒、开机自启、版本检查、应用内下载与安装更新（仅 NSIS 安装版，下载与安装两段确认）。
+- 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 / WorkBuddy / OpenCode Go / Command Code / Antigravity 额度查询、中转站（New API / Sub2API）密钥与账户额度查询、中转站低余额提醒（按站点设置金额阈值，仅支持可明确识别余额与币种的站点，后台刷新与去重）、从 cc-switch 与 Claude Code / Codex 当前配置手动扫描并勾选导入中转站候选、菜单栏常驻与快速查看面板、桌面悬浮球（默认关闭，设置中开启）、系统提醒、开机自启、版本检查、应用内下载与安装更新（仅 NSIS 安装版，下载与安装两段确认）。
 - 尚未实现：系统级凭证存储、Windows 免安装 exe 的原地更新。
 - 菜单栏行为是产品约定：关闭主窗口只隐藏，应用继续常驻并后台刷新；退出只通过菜单栏菜单或面板中的退出入口。菜单栏面板是独立窗口 `tray-panel`（380×560 点、无边框、透明、置顶），与主窗口共用同一份状态与事件；不要把它扩展成第二个带侧栏的管理窗口。面板在配置里是 `create: false`，第一次点开才创建；面板与主窗口隐藏 60 秒后销毁 WebView 以释放内存，重新打开时重建并等待页面加载。登录流程或更新下载进行期间不得销毁主窗口（前端弹窗与进度只存在于该窗口）。销毁最后一个窗口会让系统请求退出，必须在 `RunEvent::ExitRequested` 里拦截（仅拦截“没有窗口且非程序化退出”的情况），否则应用会在空闲销毁后自行结束。
 - 窗口创建不得在托盘 / 窗口事件回调里就地执行：这些回调本身在主线程，`run_on_main_thread` 会内联执行，而创建窗口要等 WebView2 初始化（零 WebView 状态下冷启动更慢，内部还会自行泵消息），会卡住托盘菜单并让重入的点击走进创建分支。显示请求一律先转到后台线程再回主线程。
 - 桌面悬浮球同样是独立窗口：`floating-ball`（60×60 点透明置顶，内部边界收起时缩为 24×60）与 `float-popover`（340 点宽、按内容自适应高度），都 `create: false`，只在设置开启时创建，关闭开关或球窗口被关闭时一起销毁。球启用期间不参与 60 秒空闲销毁；弹层在启用期间保留以便复用。球只响应鼠标、不抢键盘焦点；菜单弹层需要焦点以接收 Esc 与失焦。macOS 两者都用非激活 `NSPanel`，但必须是两个面板类：球的面板不能成为 key（否则首次点击会被系统用于取 key 而吞掉），弹层保留 key 能力并在 `sendEvent:` 的 mouseDown 里先取 key 再派发（否则详情卡里的按钮要点两次）。Windows 两者加 `WS_EX_TOOLWINDOW`，球再加 `WS_EX_NOACTIVATE`。吸附按完整屏幕边缘计算，工作区只用于上下夹取和自由位置；虚拟桌面最外侧边缘把 60 点窗口移出屏幕，两块显示器之间的内部边界必须把窗口缩到 24 点宽，两种方式都由前端把露出部分重排成「居中平台标识 + 归一化额度环弧」的 D 形（不是简单裁掉一侧）；收起必须分两段——先保持完整外观滑到边缘，贴边后才切换布局并收窄窗口，位移与形变同时进行会让球还没贴边就显示成吸附状态；任何收缩都不得让球跨到相邻显示器。不要把它扩成第二个管理窗口或增加任意前端窗口控制权限。
 - 面板“失焦自动收起”必须以“窗口确实获得过焦点且已过宽限期”为前提：Windows 前台锁会让托盘点击唤出的窗口停在未激活状态，此时收到失焦就收起，用户看到的就是“点了没反应 / 一闪而过”。
+- 开机自启由系统登录项带 `--autostart` 参数启动：登录启动时只驻留菜单栏，不显示主窗口（macOS 同时切 Accessory，不出现 Dock 图标）；手动启动不带该参数，保持显示主窗口。旧版本注册的登录项缺少该参数时，启动后按系统实际注册内容补写一次；不要改成每次启动都重写登录项（Windows 会重置任务管理器里的禁用状态）。
 
 ## 2. 数据与凭证边界
 
 - 任何令牌、Cookie、密钥、邮箱原文都不得进入前端状态、日志、错误消息、测试样例或提交内容。
 - Codex 只通过官方 CLI 的 `app-server --stdio` JSON-RPC 交互；不解析、不复制、不迁移授权文件，令牌由 Codex CLI 维护在隔离目录。
-- 百炼控制台会话令牌由官方登录页回传，有效期约 24 小时且没有 refresh token。只能按凭证写入时间推算到期并在到期前提醒用户重新授权；不得读取浏览器 Cookie、不得用 AK/SK 换取长期令牌来绕过重新授权。状态文件只保存推算出的到期时间戳，不保存令牌。
+- 百炼控制台会话令牌由官方登录页回传，有效期约 24 小时且没有 refresh token。只能按凭证写入时间推算到期并在到期前提醒用户重新授权；不得读取浏览器 Cookie、不得用 AK/SK 换取长期令牌来绕过重新授权，也不得读取或复制 `bl` CLI 的凭证来规避重新授权。该令牌在同一账号下为单活：应用与 `bl` CLI 完成新的控制台授权会互相轮换掉对方的旧令牌，日常查询不受影响；界面与文档需如实提示。状态文件只保存推算出的到期时间戳，不保存令牌。
 - 独立账户必须使用自己的 `CODEX_HOME`；本机账户只沿用本机登录态，不得修改或覆盖它。
 - 移除账户只清理本应用目录，不触发源工具注销，不影响其他账户。
 - 中转站手动填写的 API Key 与 New API 访问令牌写入 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 按用户 ACL），先写临时文件再原子替换；只保存用户主动填写的凭证。从 cc-switch、Claude Code / Codex 配置扫描到的密钥不得复制到应用目录；勾选导入后只能在 `relay-profiles/<relayId>/source.json` 保存来源引用（来源、provider id、地址、provider 类型与用户主动填写的访问令牌），启动时按引用重新读取源配置，取不到就跳过该账户。扫描只列候选、不联网，必须由用户勾选确认后才查询额度。cc-switch 的 `~/.cc-switch/cc-switch.db` 只能只读打开，不修改、不迁移、不复制其中的数据。New API 访问令牌只用于 `/api/user/self` 与 `/api/subscription/self`，不进入前端状态、日志或错误消息；旧版单令牌需要的 `New-Api-User` 用户 ID 与令牌一并保存，只作为请求头发送，不写入日志。
-- 状态文件是脱敏数据，不是凭证；不要把它改成日志、调试导出或可分享格式。
+- Cursor 的例外边界仅限：应用以隔离的 `HOME` 启动官方 `cursor-agent login`（强制 `AGENT_CLI_CREDENTIAL_STORE=file`），只读取该隔离目录下由这次登录写出的 `.cursor/auth.json` 中的 `accessToken`，用于调用 `api2.cursor.sh` 的额度接口。不得读取用户已有 `~/.cursor`、Cursor.app 的 `state.vscdb`、macOS Keychain 或浏览器 Cookie；登录输出中的邮箱不得写入日志，令牌不得进入 `state.json`、前端状态、事件或错误消息。Cursor 额度接口未公开文档，界面必须标注为实验性，失败时保留上次成功快照并提示重新登录，不做自动重试风暴。
+- 状态文件是脱敏数据，不是凭证；中转站余额提醒只保存金额阈值、币种与轮次标记，不含服务地址、密钥或额度原文；不要把它改成日志、调试导出或可分享格式。
 - 应用内更新的 minisign 私钥只保存在 GitHub Secrets 与发布者的离线备份中，不得进入仓库、日志、构建产物或应用数据目录；公钥可以公开。
 
 ## 3. 架构与安全约束
@@ -59,6 +61,7 @@
 - 打包只产出：免安装单文件 exe（`--no-bundle`）与 NSIS 安装器（`tauri.windows.conf.json` 把 `bundle.targets` 固定为 `["nsis"]`）。**不产出、不发布 MSI**。
 - Codex 登录回调端口由上游固定为 1455（1457 仅在占用时回退），本应用不能改；遇到 `os error 10013` 只提示用户释放端口，不要尝试修改 CLI 行为。
 - 悬浮球与弹层在 Windows 上通过 `GetWindowLongPtrW` / `SetWindowLongPtrW` 加 `WS_EX_TOOLWINDOW`，球再加 `WS_EX_NOACTIVATE`；弹层需要 `set_focus` 才能收到 Esc 与失焦。透明窗口的渲染、拖动与多显示器吸附必须在 Windows 实机验证。
+- Cursor 的隔离登录依赖 `USERPROFILE` / `APPDATA` 覆盖与 `AGENT_CLI_CREDENTIAL_STORE=file`；官方 Windows 安装器把 CLI 放在 `%LOCALAPPDATA%\cursor-agent`，查找时要在 PATH 之外回退到该目录；取消或超时必须按进程树终止（`cmd.exe → powershell.exe → node.exe`），不能只杀直接子进程。目前只在 macOS 实机验证过，Windows 上的登录与额度查询仍需平台内验证，未验证前不要宣称 Windows 可用。
 
 ### macOS
 
@@ -113,7 +116,7 @@
 
 ## 7. 明确不做
 
-- 不读取浏览器 Cookie、系统钥匙串或其他工具的内部凭证文件来替代官方授权；本机登录态只通过工具官方 CLI 命令读取（Codex app-server、`opencode auth export`、`agy /usage`），或在工具官方登录页完成授权后由应用接收 / 轮询一次性令牌（百炼控制台回环回调、WorkBuddy 设备码轮询）。
+- 不读取浏览器 Cookie、系统钥匙串或其他工具的内部凭证文件来替代官方授权；本机登录态只通过工具官方 CLI 命令读取（Codex app-server、`opencode auth export`、`agy /usage`、`cursor-agent login`），或在工具官方登录页完成授权后由应用接收 / 轮询一次性令牌（百炼控制台回环回调、WorkBuddy 设备码轮询）。Cursor 的唯一例外是读取应用自己以隔离 `HOME` 启动的 `cursor-agent login` 写出的 `.cursor/auth.json`；不读取用户已有 Cursor 凭证或浏览器 Cookie。
 - 不把「检查到新版本」实现为静默下载或静默安装；后台只做版本检查，下载与安装必须由用户在界面上分别确认。
 - Windows 免安装单文件 exe 不做原地替换（没有安装目录可交换），只提供发布页跳转；应用内更新仅面向 NSIS 安装版，通过注册表 `InstallLocation` 与当前 exe 路径判断安装形态。
 - 不为尚未确认的平台/套餐预建复杂抽象层。

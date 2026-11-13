@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import {
   ArrowClockwiseIcon,
+  BellIcon,
   InfoIcon,
   KeyIcon,
   LockSimple,
@@ -19,14 +20,21 @@ import {
   WarningIcon,
   X,
 } from '@phosphor-icons/react';
-import type { RelayAccount } from '../lib/desktop';
+import {
+  setRelayReminder,
+  type RelayAccount,
+  type RelayReminder,
+} from '../lib/desktop';
 import { clockLabel } from '../lib/format';
 import { useRelay } from '../lib/relay';
 import {
   RELAY_ORIGIN_LABELS,
   RELAY_PROVIDER_LABELS,
+  formatRelayMoney,
   relayCandidateSource,
+  relayErrorText,
   relayHost,
+  relayReminderBalance,
 } from '../lib/relayFormat';
 import { useAppState } from '../lib/store';
 import { useDialogA11y } from '../lib/useDialogA11y';
@@ -49,30 +57,70 @@ type RelayDialog =
       referenceSaved: boolean;
     }
   | { kind: 'token'; accountId: string; host: string; userId: string | null }
+  | {
+      kind: 'reminder';
+      accountId: string;
+      host: string;
+      /** 最近一次成功查询可比较的余额；无法识别时为 null。 */
+      balance: number | null;
+      /** 当前查询或已保存配置的币种；都没有时为 null。 */
+      currency: string | null;
+      current: RelayReminder | null;
+    }
   | { kind: 'remove'; accountId: string; host: string };
+
+const REMINDER_THRESHOLD_MAX = 1_000_000;
+
+/**
+ * 金额的即时校验，规则与 Rust `validate_relay_threshold` 保持一致：
+ * 有限正数、上限 100 万、最多两位小数。Rust 仍是权威校验，这里只是
+ * 让用户在输入时就能看到中文错误，避免依赖浏览器原生的英文提示。
+ */
+function reminderThresholdError(raw: string): string | null {
+  if (!raw.trim()) return '请填写提醒金额。';
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return '请填写有效的提醒金额。';
+  if (value <= 0) return '提醒金额必须大于 0。';
+  if (value > REMINDER_THRESHOLD_MAX) return '提醒金额不能超过 1,000,000。';
+  if (Math.abs(value * 100 - Math.round(value * 100)) > 1e-6) {
+    return '提醒金额最多保留两位小数。';
+  }
+  return null;
+}
 
 /** 管理页的账户卡：身份、状态、操作三段，与账户页的网格卡同一结构。 */
 function RelayAccountTile({
   account,
   desktop,
   refreshing,
+  reminder,
   onRefresh,
   onBeginEdit,
   onBeginTokenEdit,
+  onBeginReminderEdit,
   onAskRemove,
 }: {
   account: RelayAccount;
   desktop: boolean;
   refreshing: boolean;
+  reminder: RelayReminder | null;
   onRefresh: () => void;
   onBeginEdit: (trigger: HTMLElement) => void;
   onBeginTokenEdit: (trigger: HTMLElement) => void;
+  onBeginReminderEdit: (trigger: HTMLElement) => void;
   onAskRemove: (trigger: HTMLElement) => void;
 }) {
   const host = relayHost(account.baseUrl);
   // 设置过标题时以标题作为账户名，未设置时沿用服务地址。
   const name = account.label ?? host;
   const quota = account.quota;
+  // 提醒已开启但当前数据不可比较（币种变化、额度不受限制或查不到余额）时，
+  // 铃铛要显示暂停态，避免用户以为提醒仍在生效。
+  const reminderBalance = relayReminderBalance(quota);
+  const reminderPaused =
+    reminder?.enabled === true &&
+    (reminderBalance === null ||
+      reminderBalance.currency !== reminder.currency.trim().toUpperCase());
   // 第二行只留名称与来源；设置了标题时补上服务地址，仍能一眼认出站点。
   // 凭证保存状态收成一个图标，全文放进悬浮提示，
   // 避免「来源已保存 · 启动与刷新时重新读取」这类说明把整行撑到截断。
@@ -209,6 +257,39 @@ function RelayAccountTile({
           <button
             type="button"
             className={styles.miniButton}
+            onClick={(event) => onBeginReminderEdit(event.currentTarget)}
+            disabled={!desktop}
+            data-configured={reminder?.enabled || undefined}
+            data-paused={reminderPaused || undefined}
+            aria-label={
+              reminder?.enabled
+                ? reminderPaused
+                  ? `${name} 的余额提醒已暂停，点击调整`
+                  : `${name} 已开启余额提醒，点击调整`
+                : `为 ${name} 设置余额提醒`
+            }
+            title={
+              reminder?.enabled
+                ? reminderPaused
+                  ? reminderBalance
+                    ? `提醒暂停：站点币种为 ${reminderBalance.currency}，设置时为 ${reminder.currency}`
+                    : '提醒暂停：本次查询无法确认余额或币种（或额度不受限制）'
+                  : `余额提醒：低于 ${reminder.threshold} ${reminder.currency}`
+                : '设置余额提醒'
+            }
+          >
+            <BellIcon
+              size={14}
+              weight={reminder?.enabled ? 'fill' : 'regular'}
+              aria-hidden
+            />
+            {reminderPaused ? (
+              <span className={styles.reminderPausedDot} aria-hidden />
+            ) : null}
+          </button>
+          <button
+            type="button"
+            className={styles.miniButton}
             onClick={(event) => onBeginEdit(event.currentTarget)}
             disabled={!desktop}
             aria-label={`编辑 ${name}`}
@@ -291,6 +372,9 @@ export default function RelayPanel() {
   const [submitting, setSubmitting] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [savingToken, setSavingToken] = useState(false);
+  const [reminderEnabled, setReminderEnabled] = useState(false);
+  const [reminderThreshold, setReminderThreshold] = useState('5');
+  const [savingReminder, setSavingReminder] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [skippedOpen, setSkippedOpen] = useState(false);
   // 扫描候选的勾选状态；只保存 id，密钥始终留在 Rust 侧。
@@ -445,6 +529,23 @@ export default function RelayPanel() {
     });
   };
 
+  const openReminderDialog = (account: RelayAccount, trigger: HTMLElement) => {
+    prepareDialog(trigger);
+    const current = state.relayReminders[account.id] ?? null;
+    const info = relayReminderBalance(account.quota);
+    setReminderEnabled(current?.enabled ?? false);
+    setReminderThreshold(current ? String(current.threshold) : '5');
+    setDialog({
+      kind: 'reminder',
+      accountId: account.id,
+      host: relayHost(account.baseUrl),
+      balance: info?.balance ?? null,
+      // 只记录本次查询能确认的币种；已保存的币种在渲染时单独取自 current。
+      currency: info?.currency ?? null,
+      current,
+    });
+  };
+
   const openRemoveDialog = (account: RelayAccount, trigger: HTMLElement) => {
     prepareDialog(trigger);
     setDialog({
@@ -553,6 +654,45 @@ export default function RelayPanel() {
     if (ok) setDialog(null);
   };
 
+  const submitReminder = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (dialog?.kind !== 'reminder' || savingReminder) return;
+    // 关闭提醒不校验阈值：输入框里的残留值不应阻止用户关闭。
+    const problem = reminderEnabled
+      ? reminderThresholdError(reminderThreshold)
+      : null;
+    if (problem) {
+      setFormError(problem);
+      return;
+    }
+    // 开启时必须有可比较的数据；已开启过且有保存币种的可以沿用，只改阈值。
+    const eligible = dialog.balance !== null && dialog.currency !== null;
+    const canReuseCurrency = Boolean(
+      dialog.current?.enabled && dialog.current.currency,
+    );
+    if (reminderEnabled && !eligible && !canReuseCurrency) {
+      setFormError('当前无法识别该站点的余额或币种，暂不能开启提醒。');
+      return;
+    }
+
+    // 关闭时后端不读取阈值，但 IPC 必须是有限数字，沿用已保存值兜底。
+    const parsed = Number(reminderThreshold);
+    const threshold = Number.isFinite(parsed)
+      ? parsed
+      : (dialog.current?.threshold ?? 0);
+
+    setSavingReminder(true);
+    setFormError(null);
+    try {
+      await setRelayReminder(dialog.accountId, reminderEnabled, threshold);
+      setDialog(null);
+    } catch (err) {
+      setFormError(relayErrorText(err));
+    } finally {
+      setSavingReminder(false);
+    }
+  };
+
   const confirmRemove = async () => {
     if (dialog?.kind !== 'remove' || removing) return;
     setRemoving(true);
@@ -564,6 +704,30 @@ export default function RelayPanel() {
 
   const dialogMessage = formError ?? error;
   const busy = scanning || importing || submitting;
+  const reminderDialog = dialog?.kind === 'reminder' ? dialog : null;
+  /** 已开启提醒时保存的币种；用于沿用币种与展示切换。 */
+  const reminderSavedCurrency =
+    reminderDialog?.current?.enabled && reminderDialog.current.currency
+      ? reminderDialog.current.currency
+      : null;
+  const reminderEligible =
+    reminderDialog !== null &&
+    reminderDialog.balance !== null &&
+    reminderDialog.currency !== null;
+  /** 提醒已开启且有保存币种：本次查不到数据时仍允许改阈值。 */
+  const reminderCanReuseCurrency = reminderSavedCurrency !== null;
+  const reminderSaveEligible = reminderEligible || reminderCanReuseCurrency;
+  const reminderCurrencyChanged =
+    reminderSavedCurrency !== null &&
+    reminderDialog?.currency != null &&
+    reminderSavedCurrency !== reminderDialog.currency;
+  const reminderCurrency = reminderDialog?.currency ?? reminderSavedCurrency;
+  const reminderThresholdProblem = reminderEnabled
+    ? reminderThresholdError(reminderThreshold)
+    : null;
+  const reminderCanSave =
+    reminderDialog !== null &&
+    (!reminderEnabled || (reminderSaveEligible && !reminderThresholdProblem));
 
   return (
     <section>
@@ -633,9 +797,11 @@ export default function RelayPanel() {
               account={account}
               desktop={desktop}
               refreshing={refreshingIds.has(account.id)}
+              reminder={state.relayReminders[account.id] ?? null}
               onRefresh={() => void refresh(account.id)}
               onBeginEdit={(trigger) => openEditDialog(account, trigger)}
               onBeginTokenEdit={(trigger) => openTokenDialog(account, trigger)}
+              onBeginReminderEdit={(trigger) => openReminderDialog(account, trigger)}
               onAskRemove={(trigger) => openRemoveDialog(account, trigger)}
             />
           ))}
@@ -1049,6 +1215,139 @@ export default function RelayPanel() {
                         disabled={savingToken}
                       >
                         {savingToken ? '保存中…' : '保存并刷新'}
+                      </button>
+                    </div>
+                  </form>
+                ) : dialog.kind === 'reminder' ? (
+                  <form
+                    className={styles.dialogForm}
+                    onSubmit={submitReminder}
+                    noValidate
+                  >
+                    <header className={styles.dialogHeader}>
+                      <h2 id="relay-dialog-title">余额提醒</h2>
+                      <p className={styles.dialogSubtitle}>{dialog.host}</p>
+                    </header>
+                    <div className={styles.dialogFieldGroup}>
+                      <label className={styles.settingRow}>
+                        <span className={styles.settingText}>
+                          <span className={styles.settingLabel}>
+                            开启余额提醒
+                          </span>
+                          <span className={styles.settingHint}>
+                            余额低于阈值时提醒一次，回升到阈值或以上后恢复提醒资格。
+                          </span>
+                        </span>
+                        <span className={styles.switchWrap}>
+                          <input
+                            type="checkbox"
+                            role="switch"
+                            className={styles.switchInput}
+                            checked={reminderEnabled}
+                            onChange={(event) =>
+                              setReminderEnabled(event.target.checked)
+                            }
+                            disabled={
+                              savingReminder ||
+                              (!reminderSaveEligible && !reminderEnabled)
+                            }
+                            aria-label="开启余额提醒"
+                          />
+                          <span className={styles.switchTrack} aria-hidden="true">
+                            <span className={styles.switchKnob} />
+                          </span>
+                        </span>
+                      </label>
+                      <label className={styles.field}>
+                        <span className={styles.fieldLabel}>
+                          提醒金额
+                          {reminderCurrency ? (
+                            <span className={styles.fieldTag}>
+                              {reminderCurrency}
+                            </span>
+                          ) : null}
+                        </span>
+                        <input
+                          className={styles.textInput}
+                          type="number"
+                          inputMode="decimal"
+                          min="0.01"
+                          max={REMINDER_THRESHOLD_MAX}
+                          step="0.01"
+                          value={reminderThreshold}
+                          onChange={(event) =>
+                            setReminderThreshold(event.target.value)
+                          }
+                          disabled={savingReminder}
+                          aria-invalid={reminderThresholdProblem ? true : undefined}
+                          aria-describedby={
+                            reminderThresholdProblem
+                              ? 'relay-reminder-threshold-error'
+                              : undefined
+                          }
+                          autoFocus
+                        />
+                      </label>
+                      {reminderThresholdProblem ? (
+                        <p
+                          className={styles.fieldError}
+                          id="relay-reminder-threshold-error"
+                          role="alert"
+                        >
+                          {reminderThresholdProblem}
+                        </p>
+                      ) : null}
+                      {reminderCurrencyChanged ? (
+                        <p className={styles.dialogNote}>
+                          <WarningIcon size={13} aria-hidden />
+                          站点币种已从 {reminderSavedCurrency} 变为{' '}
+                          {dialog.currency}，保存后按 {dialog.currency} 比较。
+                        </p>
+                      ) : null}
+                      {reminderEligible && dialog.balance !== null ? (
+                        <p className={styles.dialogNote}>
+                          <InfoIcon size={13} aria-hidden />
+                          最近一次查询余额为{' '}
+                          {formatRelayMoney(dialog.balance, dialog.currency)}
+                          。只有余额与币种都能明确识别时才会比较。
+                        </p>
+                      ) : reminderCanReuseCurrency ? (
+                        <p className={styles.dialogNote}>
+                          <WarningIcon size={13} aria-hidden />
+                          本次无法确认余额或币种（或额度不受限制）；保存后仍按已保存的{' '}
+                          {reminderSavedCurrency} 比较，在重新查到可比较的数据前不会提醒。
+                        </p>
+                      ) : (
+                        <p className={styles.dialogNote}>
+                          <WarningIcon size={13} aria-hidden />
+                          当前无法确认该站点的余额或币种（或额度不受限制），暂不能开启提醒；请先刷新额度。
+                        </p>
+                      )}
+                    </div>
+                    {dialogMessage ? (
+                      <p className={styles.noticeDanger} role="alert">
+                        {dialogMessage}
+                      </p>
+                    ) : null}
+                    <div className={styles.dialogActions}>
+                      <button
+                        type="button"
+                        className={styles.buttonGhost}
+                        onClick={closeDialog}
+                        disabled={savingReminder}
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="submit"
+                        className={styles.button}
+                        disabled={savingReminder || !reminderCanSave}
+                      >
+                        {savingReminder
+                          ? '保存中…'
+                          : reminderEnabled && reminderCurrencyChanged
+                            ? `按 ${dialog.currency} 保存`
+                            : '保存'}
                       </button>
                     </div>
                   </form>

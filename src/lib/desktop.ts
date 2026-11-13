@@ -81,11 +81,42 @@ export interface QuotaGroup {
   windows: QuotaWindow[];
 }
 
+/** Codex 重置卡摘要；后台刷新只保存数量，明细按需读取。 */
+export interface ResetCreditsSummary {
+  availableCount: number;
+}
+
 export interface QuotaSnapshot {
   checkedAtEpoch: number;
   groups: QuotaGroup[];
   capabilityGaps: string[];
+  /** 旧版 CLI 或旧状态文件为 null，表示未知，不是 0 张。 */
+  resetCredits: ResetCreditsSummary | null;
 }
+
+export type ResetCreditStatus = 'available' | 'redeeming' | 'redeemed' | 'unknown';
+
+/** 后端返回的重置卡明细；不包含任何凭证。 */
+export interface CodexResetCredit {
+  id: string;
+  status: ResetCreditStatus;
+  title?: string;
+  description?: string;
+  grantedAtEpoch: number;
+  expiresAtEpoch: number | null;
+}
+
+export interface CodexResetCredits {
+  availableCount: number;
+  /** null 表示后端只返回数量；空数组表示没有可用明细。 */
+  credits: CodexResetCredit[] | null;
+}
+
+export type ResetCreditOutcome =
+  | 'reset'
+  | 'nothingToReset'
+  | 'noCredit'
+  | 'alreadyRedeemed';
 
 export interface ProductState {
   productId: string;
@@ -147,6 +178,15 @@ export interface FloatingBallState {
   position: FloatingBallPosition | null;
 }
 
+/** 中转站低余额提醒配置；金额与币种都是脱敏数据，不含任何凭证。 */
+export interface RelayReminder {
+  enabled: boolean;
+  threshold: number;
+  currency: string;
+  /** 是否处于「已提醒的低余额轮次」；余额回升后恢复提醒资格。 */
+  low: boolean;
+}
+
 export interface AppState {
   schemaVersion: number;
   revision: number;
@@ -155,6 +195,8 @@ export interface AppState {
   overviewOrder: OverviewOrder;
   /** 中转站账户的展示顺序；未列出的保持注册表顺序。 */
   relayOrder: string[];
+  /** 按 relayId 保存的低余额提醒；没有配置的站点不出现。 */
+  relayReminders: Record<string, RelayReminder>;
   floatingBall: FloatingBallState;
 }
 
@@ -189,6 +231,29 @@ export function refreshUsage(accountId?: string): Promise<void> {
 
 export function updatePreferences(preferences: Preferences): Promise<AppState> {
   return invoke<AppState>('update_preferences', { preferences });
+}
+
+/** 按需读取 Codex 重置卡明细；只在用户打开面板时调用。 */
+export function readCodexResetCredits(
+  accountId: string,
+): Promise<CodexResetCredits> {
+  return invoke<CodexResetCredits>('read_codex_reset_credits', { accountId });
+}
+
+/**
+ * 消耗一张重置卡。不可撤销；同一逻辑重试必须复用 idempotencyKey。
+ * 成功后 Rust 会立即刷新该账户。
+ */
+export function consumeCodexResetCredit(
+  accountId: string,
+  creditId: string | null,
+  idempotencyKey: string,
+): Promise<ResetCreditOutcome> {
+  return invoke<ResetCreditOutcome>('consume_codex_reset_credit', {
+    accountId,
+    creditId,
+    idempotencyKey,
+  });
 }
 
 /** 保存总览的账户类型与账户排序；只提交标识列表。 */
@@ -238,6 +303,17 @@ export function beginWorkbuddyLogin(
   displayName?: string,
 ): Promise<LoginStart> {
   return invoke<LoginStart>('begin_workbuddy_login', {
+    accountId: accountId ?? null,
+    displayName: displayName ?? null,
+  });
+}
+
+/** 在隔离目录中发起 Cursor 官方 CLI 登录；令牌由 Rust 读取，不经过前端。 */
+export function beginCursorLogin(
+  accountId?: string,
+  displayName?: string,
+): Promise<LoginStart> {
+  return invoke<LoginStart>('begin_cursor_login', {
     accountId: accountId ?? null,
     displayName: displayName ?? null,
   });
@@ -627,6 +703,18 @@ export function setRelayAccountLabel(
 
 export function refreshRelayAccount(id: string): Promise<RelayAccount> {
   return invoke<RelayAccount>('relay_refresh', { id });
+}
+
+/**
+ * 保存中转站低余额提醒。开启时由 Rust 按最近一次成功查询的币种写入配置；
+ * 余额或币种无法识别时命令返回可直接展示的原因。
+ */
+export function setRelayReminder(
+  id: string,
+  enabled: boolean,
+  threshold: number,
+): Promise<AppState> {
+  return invoke<AppState>('relay_set_reminder', { id, enabled, threshold });
 }
 
 /** 中转站条目列表 + 修订号；两个窗口共用同一份 Rust 注册表。 */

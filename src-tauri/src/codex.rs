@@ -34,6 +34,31 @@ pub struct CodexUsage {
     /// 本次成功获取数据的时间（Unix 秒）。
     pub checked_at_epoch: i64,
     pub buckets: Vec<CodexLimitBucket>,
+    /// 重置卡摘要；旧版 CLI 或后端未返回时为 None，不能当成 0 张。
+    pub reset_credits: Option<CodexResetCredits>,
+}
+
+/// 重置卡（rate-limit reset credit）。`credits` 只在显式读取明细时返回。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexResetCredits {
+    pub available_count: i64,
+    /// None 表示后端只返回数量；空数组表示确实没有可用明细。
+    pub credits: Option<Vec<CodexResetCredit>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexResetCredit {
+    /// 后端的不透明标识，只在本进程内使用，不写入状态文件。
+    pub id: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub granted_at_epoch: i64,
+    pub expires_at_epoch: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -141,6 +166,33 @@ struct RateLimitsResponse {
     rate_limits: LimitSnapshot,
     #[serde(default)]
     rate_limits_by_limit_id: Option<BTreeMap<String, LimitSnapshot>>,
+    #[serde(default)]
+    rate_limit_reset_credits: Option<ResetCreditsPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResetCreditsPayload {
+    available_count: i64,
+    /// `excludeResetCreditDetails` 为 true 时为 None（只返回数量）。
+    #[serde(default)]
+    credits: Option<Vec<ResetCreditPayload>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResetCreditPayload {
+    id: String,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    granted_at: Option<i64>,
+    #[serde(default)]
+    expires_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,6 +244,25 @@ fn snapshot_to_bucket(snapshot: LimitSnapshot) -> CodexLimitBucket {
     }
 }
 
+fn map_reset_credits(payload: ResetCreditsPayload) -> CodexResetCredits {
+    CodexResetCredits {
+        available_count: payload.available_count,
+        credits: payload.credits.map(|credits| {
+            credits
+                .into_iter()
+                .map(|credit| CodexResetCredit {
+                    id: credit.id,
+                    status: credit.status.unwrap_or_else(|| "unknown".to_string()),
+                    title: credit.title,
+                    description: credit.description,
+                    granted_at_epoch: credit.granted_at.unwrap_or_default(),
+                    expires_at_epoch: credit.expires_at,
+                })
+                .collect()
+        }),
+    }
+}
+
 fn parse_rate_limits(
     value: serde_json::Value,
     checked_at_epoch: i64,
@@ -211,7 +282,107 @@ fn parse_rate_limits(
     Ok(CodexUsage {
         checked_at_epoch,
         buckets,
+        reset_credits: response.rate_limit_reset_credits.map(map_reset_credits),
     })
+}
+
+/// 独立读取重置卡的数量与明细（不带 `excludeResetCreditDetails`）。
+/// 只在用户展开重置卡或准备使用时调用，后台刷新仍走只读数量的路径。
+pub fn read_reset_credits(codex_home: Option<&Path>) -> Result<CodexResetCredits, UsageError> {
+    let binary = find_codex_binary()?;
+    read_reset_credits_from(&binary, codex_home)
+}
+
+fn read_reset_credits_from(
+    binary: &Path,
+    codex_home: Option<&Path>,
+) -> Result<CodexResetCredits, UsageError> {
+    let mut server = AppServer::spawn(binary, codex_home)?;
+    server.initialize()?;
+    let result = server.send_request(
+        2,
+        "account/rateLimits/read",
+        serde_json::json!({}),
+        READ_TIMEOUT,
+    )?;
+    parse_reset_credits_value(&result)
+}
+
+fn parse_reset_credits_value(value: &serde_json::Value) -> Result<CodexResetCredits, UsageError> {
+    let Some(payload) = value.get("rateLimitResetCredits") else {
+        // 旧版 CLI 没有这个字段：明确返回 unsupported，避免界面显示成“0 张”。
+        return Err(UsageError::new(
+            "unsupported",
+            "当前 Codex CLI 不返回重置卡信息，请升级 Codex CLI 后重试。",
+        ));
+    };
+    if payload.is_null() {
+        return Ok(CodexResetCredits {
+            available_count: 0,
+            credits: None,
+        });
+    }
+    let payload: ResetCreditsPayload = serde_json::from_value(payload.clone())
+        .map_err(|err| UsageError::new("decode", format!("重置卡响应解析失败：{err}")))?;
+    Ok(map_reset_credits(payload))
+}
+
+/// 消耗一张重置卡。`credit_id` 省略时由后端选择下一张可用卡；
+/// `idempotency_key` 必须在同一次重试中复用，避免重复消耗。
+/// 返回后端 outcome：reset / nothingToReset / noCredit / alreadyRedeemed。
+pub fn consume_reset_credit(
+    codex_home: Option<&Path>,
+    credit_id: Option<&str>,
+    idempotency_key: &str,
+) -> Result<String, UsageError> {
+    let binary = find_codex_binary()?;
+    consume_reset_credit_from(&binary, codex_home, credit_id, idempotency_key)
+}
+
+fn consume_reset_credit_from(
+    binary: &Path,
+    codex_home: Option<&Path>,
+    credit_id: Option<&str>,
+    idempotency_key: &str,
+) -> Result<String, UsageError> {
+    let mut server = AppServer::spawn(binary, codex_home)?;
+    server.initialize()?;
+    let mut params = serde_json::json!({ "idempotencyKey": idempotency_key });
+    if let Some(credit_id) = credit_id {
+        params["creditId"] = serde_json::Value::String(credit_id.to_string());
+    }
+    let result = server
+        .send_request(
+            2,
+            "account/rateLimitResetCredit/consume",
+            params,
+            READ_TIMEOUT,
+        )
+        .map_err(|err| {
+            if err
+                .message
+                .to_ascii_lowercase()
+                .contains("method not found")
+            {
+                UsageError::new(
+                    "unsupported",
+                    "当前 Codex CLI 不支持在应用内使用重置卡，请升级 Codex CLI 后重试。",
+                )
+            } else {
+                err
+            }
+        })?;
+    let outcome = result
+        .get("outcome")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| UsageError::new("decode", "重置卡响应缺少结果。"))?;
+    match outcome {
+        "reset" | "nothingToReset" | "noCredit" | "alreadyRedeemed" => Ok(outcome.to_string()),
+        other => Err(UsageError::new(
+            "decode",
+            format!("未知的重置卡结果：{other}"),
+        )),
+    }
 }
 
 /// 解析 `account/read` 结果。账户为空时返回 None，而不是伪造身份。
@@ -1007,6 +1178,20 @@ mod tests {
                     "primary": { "usedPercent": 4, "windowDurationMins": 300, "resetsAt": 1790000000 },
                     "secondary": { "usedPercent": 13, "windowDurationMins": 10080, "resetsAt": 1790999999 }
                 }
+            },
+            "rateLimitResetCredits": {
+                "availableCount": 2,
+                "credits": [
+                    {
+                        "id": "credit-1",
+                        "status": "available",
+                        "resetType": "codexRateLimits",
+                        "title": "Full reset (Weekly + 5 hr)",
+                        "description": null,
+                        "grantedAt": 1789900000,
+                        "expiresAt": 1793000000
+                    }
+                ]
             }
         })
     }
@@ -1051,6 +1236,41 @@ mod tests {
         assert_eq!(window.window_duration_mins, None);
         assert_eq!(window.resets_at_epoch, None);
         assert_eq!(usage.buckets[0].limit_id, None);
+    }
+
+    #[test]
+    fn reset_credits_parse_count_and_details() {
+        let usage = parse_rate_limits(fixture(), 0).expect("fixture parses");
+        let credits = usage.reset_credits.expect("reset credits present");
+        assert_eq!(credits.available_count, 2);
+        let details = credits.credits.expect("details present");
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].id, "credit-1");
+        assert_eq!(details[0].status, "available");
+        assert_eq!(
+            details[0].title.as_deref(),
+            Some("Full reset (Weekly + 5 hr)")
+        );
+        assert_eq!(details[0].expires_at_epoch, Some(1_793_000_000));
+    }
+
+    #[test]
+    fn reset_credit_count_survives_detail_exclusion() {
+        let mut value = fixture();
+        value["rateLimitResetCredits"]["credits"] = serde_json::Value::Null;
+        let usage = parse_rate_limits(value, 0).expect("parses");
+        let credits = usage.reset_credits.expect("count still present");
+        assert_eq!(credits.available_count, 2);
+        assert!(credits.credits.is_none());
+    }
+
+    #[test]
+    fn missing_reset_credit_field_is_unsupported_not_zero() {
+        let err = parse_reset_credits_value(&serde_json::json!({
+            "rateLimits": { "primary": { "usedPercent": 1 } }
+        }))
+        .expect_err("old CLI has no reset credit field");
+        assert_eq!(err.code, "unsupported");
     }
 
     #[test]
@@ -1116,6 +1336,67 @@ for line in sys.stdin:
                 .as_deref(),
             Some("local@example.com")
         );
+    }
+
+    /// 重置卡明细读取与消耗都走同一个 stdio 通道；用合成脚本验证参数与结果，
+    /// 不消耗任何真实账户的重置卡。
+    #[cfg(unix)]
+    #[test]
+    fn reset_credit_read_and_consume_drive_fake_app_server() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let record = std::env::temp_dir().join(format!(
+            "token-refill-consume-record-{}.json",
+            std::process::id()
+        ));
+        fs::remove_file(&record).ok();
+        let result = serde_json::json!({
+            "rateLimitResetCredits": fixture()["rateLimitResetCredits"]
+        })
+        .to_string();
+        let script = format!(
+            r#"#!/usr/bin/env python3
+import sys, json
+RESULT = {result:?}
+RECORD = {record:?}
+for line in sys.stdin:
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        continue
+    method = msg.get("method")
+    if method == "initialize":
+        print(json.dumps({{"jsonrpc": "2.0", "id": msg["id"], "result": {{"userAgent": "fake"}}}}), flush=True)
+    elif method == "account/rateLimits/read":
+        print(json.dumps({{"jsonrpc": "2.0", "id": msg["id"], "result": json.loads(RESULT)}}), flush=True)
+    elif method == "account/rateLimitResetCredit/consume":
+        with open(RECORD, "w") as handle:
+            json.dump(msg.get("params"), handle)
+        print(json.dumps({{"jsonrpc": "2.0", "id": msg["id"], "result": {{"outcome": "reset"}}}}), flush=True)
+"#
+        );
+        let path = std::env::temp_dir().join(format!(
+            "token-refill-fake-reset-credit-{}.py",
+            std::process::id()
+        ));
+        fs::write(&path, script).expect("write fake server");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod fake server");
+
+        let credits = read_reset_credits_from(&path, None).expect("details parse");
+        assert_eq!(credits.available_count, 2);
+        assert_eq!(credits.credits.expect("details").len(), 1);
+
+        let outcome = consume_reset_credit_from(&path, None, Some("credit-1"), "idem-1")
+            .expect("consume succeeds");
+        assert_eq!(outcome, "reset");
+
+        fs::remove_file(&path).ok();
+        let recorded: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&record).expect("consume recorded"))
+                .expect("record is json");
+        fs::remove_file(&record).ok();
+        assert_eq!(recorded["creditId"], "credit-1");
+        assert_eq!(recorded["idempotencyKey"], "idem-1");
     }
 
     #[test]

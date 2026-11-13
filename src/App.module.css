@@ -773,6 +773,16 @@
 /* ---------- 总览：平台分组、账户额度卡与剩余额度环 ---------- */
 
 /* 总览类别切换：沿用设置页分段控件的视觉语言，但使用 tab 语义。 */
+/* 总览顶部工具条：类别标签靠左，需处理筛选靠右；窄窗口下换行后仍靠右。 */
+.overviewToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
 /* 与设置页分段控件共用同一个滑块（.pillThumb）：
    等宽列保证滑块宽度可算，切换时按 --pill-index 平移。 */
 .overviewTabs {
@@ -782,11 +792,62 @@
   grid-auto-columns: 1fr;
   max-width: 100%;
   gap: 2px;
-  margin-bottom: 20px;
   padding: 3px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--sunken);
+}
+
+/* 需处理筛选：默认中性文字 + 细边框；选中后用一层中性底色标记，
+   深浅主题都由 token 决定，不写死颜色。 */
+.attentionToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 150ms ease-out, background-color 150ms ease-out,
+    color 150ms ease-out;
+}
+
+.attentionToggle:hover {
+  border-color: var(--border-strong);
+  background: var(--hover);
+}
+
+.attentionToggle[data-active] {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: var(--border-strong);
+}
+
+.attentionToggle[data-active]:hover {
+  background: var(--border-strong);
+  filter: brightness(1.08);
+}
+
+/* 有待处理账户时的数量徽标：实心琥珀底 + 与主题相反的深/浅字；为 0 时不渲染。 */
+.attentionBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  color: var(--sunken);
+  background: var(--warning);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .overviewTab {
@@ -1097,6 +1158,35 @@
   border-top: 1px solid var(--border);
 }
 
+/* 需处理原因沿用原有错误提示的版式，按类型区分颜色：
+   授权失效与额度用尽用危险色，刷新失败用警告色（无缓存时升级为危险色）。 */
+.attentionNotice {
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  color: var(--text);
+  background: var(--sunken);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.attentionNotice[data-kind='reauth'],
+.attentionNotice[data-kind='exhausted'],
+.attentionNotice[data-kind='refreshFailed'] {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.attentionNotice[data-kind='refreshFailed'][data-stale='true'] {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.attentionNotice .noticeAside {
+  color: inherit;
+  opacity: 0.72;
+}
+
 .quotaAccountHead {
   display: flex;
   align-items: center;
@@ -1104,13 +1194,20 @@
   gap: 12px;
 }
 
-/* 名称、档位与折叠摘要都在这个按钮内：整块可点，展开/收起不只依赖右侧箭头 */
-.quotaAccountToggle {
+/* 名称、档位、重置卡与折叠摘要共用这一行；覆盖层负责展开/收起 */
+.quotaAccountLead {
+  position: relative;
   display: flex;
   flex: 1;
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+/* 透明按钮铺满整行：点名称或摘要都能展开，重置卡胶囊单独走自己的按钮 */
+.quotaAccountToggle {
+  position: absolute;
+  inset: 0;
   min-height: 26px;
   padding: 0;
   border: 0;
@@ -1118,8 +1215,23 @@
   color: inherit;
   background: transparent;
   font: inherit;
-  text-align: left;
   cursor: pointer;
+}
+
+.quotaAccountToggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.quotaAccountLead > .quotaAccountInfo,
+.quotaAccountLead > .quotaSummary {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.quotaAccountLead > .quotaAccountInfo .resetCreditsPill {
+  pointer-events: auto;
 }
 
 /* 收起时左侧信息占两行：名称/档位 + 身份/来源；摘要与整块垂直居中同排。
@@ -1158,7 +1270,7 @@
   white-space: nowrap;
 }
 
-.quotaAccountToggle .planTier {
+.quotaAccountIdentity .planTier {
   flex-shrink: 0;
 }
 
@@ -1460,6 +1572,104 @@
   color: var(--muted);
   font-size: 11px;
   line-height: 1.6;
+}
+
+/* ---------- Codex 重置卡 ---------- */
+
+/* 账户名与档位后面的入口胶囊：只在有可用卡时出现 */
+.resetCreditsPill {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 8px 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.resetCreditsPill:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--sunken);
+}
+
+.resetCreditsPill:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.resetCreditsPill .chevronIcon {
+  width: 11px;
+  height: 11px;
+  opacity: 0.7;
+}
+
+.resetCreditList {
+  display: grid;
+  gap: 8px;
+}
+
+.resetCreditRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+}
+
+.resetCreditMain {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.resetCreditTitle {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.resetCreditMeta {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.resetCreditConfirm {
+  display: grid;
+  gap: 10px;
+}
+
+.resetCreditWarning {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  color: var(--danger);
+  background: var(--danger-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.resetCreditNotice {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-line;
+}
+
+.resetCreditNotice[data-kind='success'] {
+  color: var(--ok);
 }
 
 /* 状态块：错误 / 提示，圆角与控件同档 */
@@ -2079,7 +2289,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
   background: var(--surface);
-  transition: border-color 160ms ease-out;
+  transition: border-color 160ms ease-out, box-shadow 160ms ease-out;
 }
 
 .accountTile:hover {
@@ -2575,6 +2785,7 @@
 }
 
 .miniButton {
+  position: relative;
   display: grid;
   place-items: center;
   width: 26px;
@@ -2613,6 +2824,28 @@
 .miniButton:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+/* 提醒已开启但当前数据不可比较：铃铛用警示色加一个小圆点 */
+.miniButton[data-paused] {
+  color: var(--warning);
+}
+
+.miniButton[data-paused]:hover:not(:disabled) {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: transparent;
+}
+
+.reminderPausedDot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+  box-shadow: 0 0 0 1.5px var(--surface);
 }
 
 .dangerButton {
@@ -2891,6 +3124,14 @@
   font-weight: 500;
   line-height: 1.6;
   vertical-align: 1px;
+}
+
+/* 字段内的即时校验提示：与输入框同组，避免只在提交后才看到错误 */
+.fieldError {
+  margin: -2px 0 0;
+  color: var(--danger);
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 
 .textInput {

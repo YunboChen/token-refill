@@ -404,7 +404,7 @@ export default function SettingsPanel() {
               ? '浏览器预览无法修改系统登录项。'
               : autoLaunchBusy
                 ? '正在写入系统登录项…'
-                : '默认关闭；写入系统登录项，设置失败会如实反馈。'
+                : '默认关闭；登录时只驻留菜单栏、不打开主窗口，设置失败会如实反馈。'
           }
           disabled={!desktop || autoLaunchBusy}
         />

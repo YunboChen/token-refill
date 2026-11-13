@@ -1,10 +1,12 @@
 mod antigravity;
 mod api_key;
+mod autostart;
 mod bailian;
 mod channel;
 mod cli;
 mod codex;
 mod commandcode;
+mod cursor;
 mod discovery;
 mod floating_ball;
 mod logging;
@@ -113,6 +115,44 @@ fn refresh_usage(
     store.request_refresh(account_id.as_deref())
 }
 
+/// 按需读取 Codex 重置卡明细；后台刷新只保存可用数量。
+/// 会启动 app-server 子进程，必须放到阻塞线程，不能占用主线程。
+#[tauri::command]
+async fn read_codex_reset_credits(
+    store: tauri::State<'_, Arc<StateStore>>,
+    account_id: String,
+) -> Result<codex::CodexResetCredits, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || store.read_codex_reset_credits(&account_id))
+        .await
+        .map_err(|err| format!("读取重置卡失败：{err}"))?
+}
+
+/// 消耗一张 Codex 重置卡。不可撤销，确认流程由前端负责；
+/// 成功后补一次刷新，让界面拿到新的额度与剩余数量。
+#[tauri::command]
+async fn consume_codex_reset_credit(
+    store: tauri::State<'_, Arc<StateStore>>,
+    account_id: String,
+    credit_id: Option<String>,
+    idempotency_key: String,
+) -> Result<String, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || {
+        let outcome = store.consume_codex_reset_credit(
+            &account_id,
+            credit_id.as_deref(),
+            &idempotency_key,
+        )?;
+        // 普通 request_refresh 会合并到在途查询；这里需要保证消耗后的状态
+        // 一定被重新读取，否则旧快照可能继续显示消耗前的数据。
+        store.request_refresh_after_current(&account_id)?;
+        Ok::<_, String>(outcome)
+    })
+    .await
+    .map_err(|err| format!("使用重置卡失败：{err}"))?
+}
+
 #[tauri::command]
 fn update_preferences(
     store: tauri::State<'_, Arc<StateStore>>,
@@ -184,6 +224,20 @@ async fn begin_workbuddy_login(
     })
     .await
     .map_err(|err| format!("发起 WorkBuddy 授权失败：{err}"))?
+}
+
+/// 在隔离目录中发起 Cursor 官方 CLI 登录；令牌由 CLI 写入该目录，不经过前端。
+/// 启动 CLI 与读取登录地址是阻塞操作，放到阻塞线程池。
+#[tauri::command]
+async fn begin_cursor_login(
+    store: tauri::State<'_, Arc<StateStore>>,
+    account_id: Option<String>,
+    display_name: Option<String>,
+) -> Result<LoginStartPayload, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || store.begin_cursor_login(account_id, display_name))
+        .await
+        .map_err(|err| format!("发起 Cursor 登录失败：{err}"))?
 }
 
 #[tauri::command]
@@ -357,6 +411,30 @@ fn broadcast_relay_accounts(app: &tauri::AppHandle) {
     let _ = app.emit(relay::RELAY_ACCOUNTS_EVENT, store.view_with_revision());
 }
 
+/// 成功查询后统一判定中转站低余额提醒。判定以状态里的 `low` 标记去重，
+/// 后台线程与手动刷新同时到达也只会通知一次；查询失败时不调用，保留旧标记。
+/// 锁顺序固定：先读 relay 注册表，释放后再写状态，不嵌套持有两把锁。
+fn check_relay_low_balance(
+    state: &StateStore,
+    relay: &relay::RelayStore,
+    account: &relay::RelayAccount,
+) {
+    // 查询期间条目可能已被移除；以注册表当前状态为准。
+    let Some(account) = relay.get(&account.id) else {
+        return;
+    };
+    if account.last_error.is_some() {
+        return;
+    }
+    let Some(quota) = account.quota.as_ref() else {
+        return;
+    };
+    let site_name = account.display_name();
+    if let Some(notice) = state.record_relay_balance(&account.id, &site_name, quota) {
+        state.notify_relay_low_balance(&notice);
+    }
+}
+
 /// 自动识别上游（New API / Sub2API）并查询密钥额度。
 /// 手动输入的凭证由 Rust 保存到 `relay-profiles/`，不经过前端。
 #[tauri::command]
@@ -369,9 +447,11 @@ async fn relay_query(
     new_api_user_id: Option<String>,
     label: Option<String>,
 ) -> Result<relay::RelayAccount, String> {
-    let store = Arc::clone(&store);
+    let relay_store = Arc::clone(&store);
+    let state_store = app.state::<Arc<StateStore>>().inner().clone();
+    let worker = Arc::clone(&relay_store);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        store.query(
+        worker.query(
             &base_url,
             &api_key,
             account_token.as_deref(),
@@ -381,7 +461,8 @@ async fn relay_query(
     })
     .await
     .map_err(|err| format!("查询中转站额度失败：{err}"))?;
-    if result.is_ok() {
+    if let Ok(account) = &result {
+        check_relay_low_balance(&state_store, &relay_store, account);
         broadcast_relay_accounts(&app);
     }
     result
@@ -396,13 +477,16 @@ async fn relay_set_account_token(
     account_token: String,
     new_api_user_id: Option<String>,
 ) -> Result<relay::RelayAccount, String> {
-    let store = Arc::clone(&store);
+    let relay_store = Arc::clone(&store);
+    let state_store = app.state::<Arc<StateStore>>().inner().clone();
+    let worker = Arc::clone(&relay_store);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        store.set_account_token(&id, &account_token, new_api_user_id.as_deref())
+        worker.set_account_token(&id, &account_token, new_api_user_id.as_deref())
     })
     .await
     .map_err(|err| format!("保存访问令牌失败：{err}"))?;
-    if result.is_ok() {
+    if let Ok(account) = &result {
+        check_relay_low_balance(&state_store, &relay_store, account);
         broadcast_relay_accounts(&app);
     }
     result
@@ -417,13 +501,16 @@ async fn relay_update(
     base_url: String,
     api_key: Option<String>,
 ) -> Result<relay::RelayAccount, String> {
-    let store = Arc::clone(&store);
+    let relay_store = Arc::clone(&store);
+    let state_store = app.state::<Arc<StateStore>>().inner().clone();
+    let worker = Arc::clone(&relay_store);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        store.update(&id, &base_url, api_key.as_deref())
+        worker.update(&id, &base_url, api_key.as_deref())
     })
     .await
     .map_err(|err| format!("更新中转站账户失败：{err}"))?;
-    if result.is_ok() {
+    if let Ok(account) = &result {
+        check_relay_low_balance(&state_store, &relay_store, account);
         broadcast_relay_accounts(&app);
     }
     result
@@ -447,6 +534,61 @@ async fn relay_set_label(
     result
 }
 
+/// 保存中转站低余额提醒。开启时优先采用最近一次成功查询给出的余额与币种；
+/// 已开启的提醒在本次查不到可比较数据时沿用保存的币种，只更新阈值。
+/// 币种随配置保存，之后查询结果币种不一致时跳过比较、不提醒。
+#[tauri::command]
+fn relay_set_reminder(
+    relay_store: tauri::State<'_, Arc<relay::RelayStore>>,
+    store: tauri::State<'_, Arc<StateStore>>,
+    id: String,
+    enabled: bool,
+    threshold: f64,
+) -> Result<PersistedState, String> {
+    // 先读 relay 再写状态，两次加锁顺序固定且不嵌套，避免与后台刷新互相等待。
+    let account = relay_store
+        .get(&id)
+        .ok_or_else(|| "找不到这条中转站账户，请重新添加。".to_string())?;
+    let currency = if enabled {
+        let detected = account.quota.as_ref().and_then(|quota| {
+            if quota.unlimited || state::relay_quota_balance(quota).is_none() {
+                return None;
+            }
+            state::relay_quota_currency(quota)
+        });
+        match detected {
+            Some(currency) => Some(currency),
+            // 已开启的提醒允许沿用保存的币种改阈值，避免站点临时查询失败时
+            // 只能先关闭提醒再重新开启。
+            None if store
+                .snapshot()
+                .relay_reminders
+                .get(&id)
+                .is_some_and(|reminder| reminder.enabled) =>
+            {
+                None
+            }
+            None => {
+                let quota = account.quota.as_ref().ok_or_else(|| {
+                    "该站点还没有可用的额度数据，请先刷新后再开启余额提醒。".to_string()
+                })?;
+                if quota.unlimited {
+                    return Err(
+                        "该站点的额度不受限制，无法比较余额，暂不能开启余额提醒。".to_string()
+                    );
+                }
+                if state::relay_quota_balance(quota).is_none() {
+                    return Err("无法识别该站点的账户余额，暂不能开启余额提醒。".to_string());
+                }
+                return Err("无法识别该站点的余额币种，暂不能开启余额提醒。".to_string());
+            }
+        }
+    } else {
+        None
+    };
+    store.set_relay_reminder(&id, enabled, threshold, currency.as_deref())
+}
+
 /// 扫描 cc-switch、Claude Code / Codex 的本地配置，只返回候选，不发起网络请求。
 #[tauri::command]
 async fn relay_scan(
@@ -465,10 +607,15 @@ async fn relay_import(
     store: tauri::State<'_, Arc<relay::RelayStore>>,
     ids: Vec<String>,
 ) -> Result<relay::DiscoveryReport, String> {
-    let store = Arc::clone(&store);
-    let result = tauri::async_runtime::spawn_blocking(move || store.import(&ids))
+    let relay_store = Arc::clone(&store);
+    let state_store = app.state::<Arc<StateStore>>().inner().clone();
+    let worker = Arc::clone(&relay_store);
+    let result = tauri::async_runtime::spawn_blocking(move || worker.import(&ids))
         .await
         .map_err(|err| format!("导入本地配置失败：{err}"))?;
+    for account in &result.accounts {
+        check_relay_low_balance(&state_store, &relay_store, account);
+    }
     broadcast_relay_accounts(&app);
     Ok(result)
 }
@@ -479,11 +626,14 @@ async fn relay_refresh(
     store: tauri::State<'_, Arc<relay::RelayStore>>,
     id: String,
 ) -> Result<relay::RelayAccount, String> {
-    let store = Arc::clone(&store);
-    let result = tauri::async_runtime::spawn_blocking(move || store.refresh(&id))
+    let relay_store = Arc::clone(&store);
+    let state_store = app.state::<Arc<StateStore>>().inner().clone();
+    let worker = Arc::clone(&relay_store);
+    let result = tauri::async_runtime::spawn_blocking(move || worker.refresh(&id))
         .await
         .map_err(|err| format!("刷新中转站额度失败：{err}"))?;
-    if result.is_ok() {
+    if let Ok(account) = &result {
+        check_relay_low_balance(&state_store, &relay_store, account);
         broadcast_relay_accounts(&app);
     }
     result
@@ -517,13 +667,18 @@ fn quit_app(app: tauri::AppHandle) {
 async fn relay_remove(
     app: tauri::AppHandle,
     store: tauri::State<'_, Arc<relay::RelayStore>>,
+    state: tauri::State<'_, Arc<StateStore>>,
     id: String,
 ) -> Result<(), String> {
-    let store = Arc::clone(&store);
-    let result = tauri::async_runtime::spawn_blocking(move || store.remove(&id))
+    let relay_store = Arc::clone(&store);
+    let state_store = Arc::clone(&state);
+    let remove_id = id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || relay_store.remove(&remove_id))
         .await
         .map_err(|err| format!("移除中转站账户失败：{err}"))?;
     if result.is_ok() {
+        // relay 锁已释放后再写状态，避免两个 store 的锁嵌套。
+        state_store.clear_relay_reminder(&id);
         broadcast_relay_accounts(&app);
     }
     result
@@ -540,7 +695,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
-            None,
+            // 登录项拉起时只驻留菜单栏，手动启动才显示主窗口。
+            Some(vec![autostart::START_ARG]),
         ))
         // 更新器只从 Rust 侧调用；前端没有 updater 权限，下载与安装均需显式命令。
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -558,6 +714,17 @@ pub fn run() {
                 channel::of(app.handle()).as_str()
             );
 
+            // 登录项启动只驻留菜单栏；手动启动照常显示主窗口。
+            let launched_from_login = autostart::started_from_login();
+            logging::lifecycle!(
+                "[app] 登录项启动={launched_from_login}，主窗口{}",
+                if launched_from_login {
+                    "保持隐藏"
+                } else {
+                    "随启动显示"
+                }
+            );
+
             // 窗口标题来自合并后的 productName：正式版与测试版各自显示自己的名称。
             let app_name = app.package_info().name.clone();
             for label in ["main", tray::PANEL_LABEL] {
@@ -571,14 +738,23 @@ pub fn run() {
                 data_dir.join("state.json"),
             ));
             app.manage(Arc::clone(&store));
-            app.manage(Arc::new(relay::RelayStore::load(
-                data_dir.join("relay-profiles"),
-            )));
+            let relay_store = Arc::new(relay::RelayStore::load(data_dir.join("relay-profiles")));
+            app.manage(Arc::clone(&relay_store));
             app.manage(update::UpdateStore::default());
 
             // 自启以系统登录项为准：启动时回写实际状态，避免本地开关与系统不一致。
             match app.autolaunch().is_enabled() {
-                Ok(actual) => store.reconcile_auto_launch(actual),
+                Ok(actual) => {
+                    store.reconcile_auto_launch(actual);
+                    // 旧版本注册的登录项没有静默参数，升级后的第一次登录仍会弹出
+                    // 主窗口；只在缺参数时改写一次，避免每次启动都重写系统注册。
+                    if actual && !autostart::registration_is_silent(&app_name) {
+                        match app.autolaunch().enable() {
+                            Ok(()) => logging::lifecycle!("[app] 已为登录项补上静默参数"),
+                            Err(err) => eprintln!("更新开机自启参数失败：{err}"),
+                        }
+                    }
+                }
                 Err(err) => eprintln!("读取开机自启状态失败：{err}"),
             }
 
@@ -594,21 +770,24 @@ pub fn run() {
                 if let Some(main) = app.get_webview_window("main") {
                     let _ = main.set_decorations(false);
                 }
-                let handle = app.handle().clone();
-                app.handle().listen(MAIN_UI_READY_EVENT, move |_event| {
-                    tray::show_main_window(&handle);
-                });
-                // 前端没走到就绪事件（脚本异常等）时兜底显示，避免窗口一直隐藏、
-                // 只能靠托盘菜单找回来。
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                    if let Some(main) = handle.get_webview_window("main") {
-                        if !main.is_visible().unwrap_or(true) {
-                            let _ = main.show();
+                // 登录项启动时窗口保持隐藏，不注册首帧显示与兜底显示。
+                if !launched_from_login {
+                    let handle = app.handle().clone();
+                    app.handle().listen(MAIN_UI_READY_EVENT, move |_event| {
+                        tray::show_main_window(&handle);
+                    });
+                    // 前端没走到就绪事件（脚本异常等）时兜底显示，避免窗口一直隐藏、
+                    // 只能靠托盘菜单找回来。
+                    let handle = app.handle().clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_secs(5));
+                        if let Some(main) = handle.get_webview_window("main") {
+                            if !main.is_visible().unwrap_or(true) {
+                                let _ = main.show();
+                            }
                         }
-                    }
-                });
+                    });
+                }
             }
 
             // 主窗口材质（macOS 玻璃 / Windows Mica）必须先于窗口显示，
@@ -620,18 +799,30 @@ pub fn run() {
                 }
             }
 
-            // macOS 保持 Overlay 原生标题栏（红绿灯与拖拽交给系统），窗口随启动显示。
+            // macOS 保持 Overlay 原生标题栏（红绿灯与拖拽交给系统），窗口随启动显示；
+            // 登录项启动时不显示，只留菜单栏。
             #[cfg(not(windows))]
-            tray::show_main_window(app.handle());
+            {
+                if !launched_from_login {
+                    tray::show_main_window(app.handle());
+                }
+            }
 
             // 菜单栏图标与快速查看面板；关闭主窗口只隐藏，应用继续常驻。
             tray::setup(app.handle())?;
+
+            // 登录项启动：不显示主窗口，只留菜单栏；隐藏的主窗口同样按空闲策略回收。
+            if launched_from_login {
+                tray::keep_hidden_on_login_start(app.handle());
+            }
 
             // 悬浮球默认关闭；只在用户开启过时恢复窗口。必须放在菜单栏初始化之后：
             // macOS 上球依赖托盘面板插件注册的 NSPanel 支持。
             floating_ball::restore(app.handle());
 
             state::start_scheduler(Arc::clone(&store));
+            // 中转站余额提醒由 Rust 后台驱动：窗口销毁后前端定时器会停止。
+            state::start_relay_reminder_scheduler(Arc::clone(&store), relay_store);
             state::auto_detect_local_accounts(store);
             Ok(())
         })
@@ -641,12 +832,15 @@ pub fn run() {
             get_app_state,
             get_state_file_notice,
             refresh_usage,
+            read_codex_reset_credits,
+            consume_codex_reset_credit,
             update_preferences,
             set_overview_order,
             set_relay_order,
             begin_account_login,
             begin_bailian_login,
             begin_workbuddy_login,
+            begin_cursor_login,
             cancel_account_login,
             rename_account,
             add_api_key_account,
@@ -664,6 +858,7 @@ pub fn run() {
             relay_update,
             relay_set_label,
             relay_set_account_token,
+            relay_set_reminder,
             relay_scan,
             relay_import,
             relay_refresh,

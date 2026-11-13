@@ -64,7 +64,7 @@ Windows 目标目录：
 
 ## 5. 数据与权限
 
-- 状态文件与账户授权目录都位于 Tauri 的 `app_data_dir()`，Windows 下为 `%APPDATA%\dev.tokenrefill.desktop\`（测试版为 `%APPDATA%\dev.tokenrefill.desktop.test\`），其中 `state.json`、`codex-profiles\<accountId>\`、`bailian-profiles\<accountId>\`、`workbuddy-profiles\<accountId>\` 与 `api-profiles\<accountId>\` 与 macOS 结构完全相同。Antigravity 的 `agy` 查找覆盖 `AGY_BIN`、`PATH` 与 `%LOCALAPPDATA%\agy\bin`，与其他 CLI 一样按 `.exe` / `.cmd` / `.bat` / `.com` 判定可执行文件。
+- 状态文件与账户授权目录都位于 Tauri 的 `app_data_dir()`，Windows 下为 `%APPDATA%\dev.tokenrefill.desktop\`（测试版为 `%APPDATA%\dev.tokenrefill.desktop.test\`），其中 `state.json`、`codex-profiles\<accountId>\`、`bailian-profiles\<accountId>\`、`workbuddy-profiles\<accountId>\`、`cursor-profiles\<accountId>\` 与 `api-profiles\<accountId>\` 与 macOS 结构完全相同。Antigravity 的 `agy` 查找覆盖 `AGY_BIN`、`PATH` 与 `%LOCALAPPDATA%\agy\bin`，与其他 CLI 一样按 `.exe` / `.cmd` / `.bat` / `.com` 判定可执行文件。Cursor 的隔离登录依赖 `USERPROFILE` / `APPDATA` 覆盖与 `AGENT_CLI_CREDENTIAL_STORE=file`：官方 Windows 安装器把 `cursor-agent.cmd` 放在 `%LOCALAPPDATA%\cursor-agent`，CLI 查找在 PATH 之外也会回退到该目录；取消或超时用 `taskkill /T` 清理 `cmd.exe → powershell.exe → node.exe` 进程树。凭证由 CLI 写在该隔离目录的 `%APPDATA%\Cursor\auth.json`，应用只读这个文件。目前只在 macOS 实机验证；Windows 的登录与额度查询仍需平台内验证。
 - 状态写入仍是「临时文件 → 原子替换」。Windows 上 `fs::rename` 使用 `MoveFileEx(REPLACE_EXISTING)`，可覆盖已存在的状态文件，无需额外分支。
 - Unix 继续对状态文件设 0600、对授权目录设 0700。Windows 没有对应权限位，目录继承 `%APPDATA%` 的默认 ACL（当前用户、SYSTEM、Administrators）。若用户把 `APPDATA` 重定向到权限更宽的目录，本应用不会额外收紧 ACL；这一点视为已知限制，而不是已实现的加固。
 - 应用不读取、不复制令牌：授权文件始终由 Codex CLI 在该目录内写入。
@@ -113,6 +113,18 @@ Windows 目标目录：
 
 ## 9. 验证记录
 
+2026-11-10，Windows 11 10.0.26300 x64，MSVC 目标（开机自启仅驻留菜单栏分支）：
+
+| 项目 | 结果 |
+| --- | --- |
+| `cargo fmt --check` | 通过 |
+| `cargo clippy --locked --all-targets -- -D warnings` | 通过；修复 `keep_hidden_on_login_start` 的 `app` 参数只在 macOS 分支使用、Windows 下报未使用变量的编译错误 |
+| `cargo test --locked` | 277 项单元测试 + 12 项集成测试通过；Unix 专属的假 `codex app-server` 用例按平台跳过 |
+| `pnpm build` | 通过 |
+| 登录项注册格式 | 按 `tauri-plugin-autostart` 2.7.0 / `auto-launch` 0.6.0 源码核对：Windows 写入 HKCU `Run`、值名为应用名、数据为 exe 路径加 `--autostart`；macOS 写入 `~/Library/LaunchAgents/<应用名>.plist` 的 `ProgramArguments`，与 `autostart.rs` 的读取实现一致 |
+
+尚未验证：系统登录项带 `--autostart` 拉起的实际行为（主窗口不弹出、菜单栏图标可用）、旧登录项升级后只改写一次、任务管理器禁用状态不被重置。
+
 2026-10-23，Windows 10.0.26300 x64，MSVC 目标：
 
 | 项目 | 结果 |
@@ -136,6 +148,6 @@ Windows 目标目录：
 - 授权失效通知可靠性：步骤见 [Windows 授权失效提醒验收](./windows-notification-validation.md)（待执行）。当前已完成跨平台纯状态测试；Windows 侧使用插件发送、没有投递回执，系统通知关闭时是否会误记成功需由该清单的 N-07 确认。
 - 应用窗口的实际渲染与视觉细节（仅确认进程启动与状态写入，未截图窗口）。
 - 菜单栏/托盘图标、快速查看面板的显示、定位（任务栏上方）、失焦收起与关闭主窗口后常驻尚未在 Windows 实机验证。
-- 桌面悬浮球在 Windows 的透明窗口渲染、`WS_EX_NOACTIVATE` 点击行为、拖动、任务栏/多显示器吸附、菜单失焦收起与弹层尺寸尚未实机验证；本机（macOS）缺少 MSVC SDK 头文件，未完成 Windows 目标的交叉 `cargo check`。
+- 桌面悬浮球在 Windows 的透明窗口渲染、`WS_EX_NOACTIVATE` 点击行为、拖动、任务栏/多显示器吸附、菜单失焦收起与弹层尺寸尚未实机验证；Windows 目标的编译、Clippy 与测试已在本机（Windows + MSVC）通过（2026-11-10）。
 - 自绘标题栏在 Windows 的实机表现：`set_decorations(false)` 是否出现原生边框闪烁、拖拽与边缘缩放是否正常、双击最大化、关闭后常驻、最大化态与不同缩放比例下的布局。需要在 Windows 实机逐项验收并记录结果。
 - Windows 10 具体小版本、arm64、长时间运行与休眠恢复。

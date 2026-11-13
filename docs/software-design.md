@@ -1,8 +1,8 @@
 # Token Refill 软件设计文档
 
-- 文档版本：0.18
-- 状态：已实现 Codex、百炼、WorkBuddy、OpenCode Go、Command Code 与 Antigravity 额度查询、多账户接入、统一状态层、后台刷新调度、菜单栏快速查看、桌面悬浮球与应用内更新
-- 最近更新：2026-11-03
+- 文档版本：0.20
+- 状态：已实现 Codex、百炼、WorkBuddy、OpenCode Go、Command Code、Antigravity 与 Cursor 额度查询、多账户接入、Codex 重置卡、统一状态层、后台刷新调度、菜单栏快速查看、桌面悬浮球与应用内更新
+- 最近更新：2026-11-06
 - 需求来源：[需求文档](./requirements.md)
 
 ## 1. 设计边界
@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | 前端界面 | 总览（订阅账户额度 / 中转站账户额度）、账户、中转站账户管理、设置四页；读取统一状态并订阅变更事件 | `src/panels/` |
 | 前端状态入口 | `get_app_state`、`refresh_usage`、`update_preferences`、`set_overview_order`、`set_relay_order`、账户授权/改名/移除命令、中转站查询/编辑/刷新/移除/访问令牌/标题命令与 `app-state-changed`、`account-login-changed` 事件；中转站账户由 `RelayProvider` 在总览与管理页之间共享 | `src/lib/desktop.ts`、`src/lib/store.tsx`、`src/lib/relay.tsx` |
-| 本地后端 | Rust 状态存储、后台刷新调度、Codex/百炼/WorkBuddy/OpenCode Go/Command Code/Antigravity 适配器、中转网关密钥额度适配器、中转站凭证存储与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/bailian.rs`、`src-tauri/src/workbuddy.rs`、`src-tauri/src/opencode.rs`、`src-tauri/src/commandcode.rs`、`src-tauri/src/antigravity.rs`、`src-tauri/src/quota/`、`src-tauri/src/relay.rs`、`src-tauri/src/discovery.rs` |
+| 本地后端 | Rust 状态存储、后台刷新调度、Codex/百炼/WorkBuddy/OpenCode Go/Command Code/Antigravity/Cursor 适配器、中转网关密钥额度适配器、中转站凭证存储与本地配置扫描 | `src-tauri/src/state.rs`、`src-tauri/src/codex.rs`、`src-tauri/src/bailian.rs`、`src-tauri/src/workbuddy.rs`、`src-tauri/src/opencode.rs`、`src-tauri/src/commandcode.rs`、`src-tauri/src/antigravity.rs`、`src-tauri/src/cursor.rs`、`src-tauri/src/quota/`、`src-tauri/src/relay.rs`、`src-tauri/src/discovery.rs` |
 | 桌面配置 | 窗口、构建、安全策略及打包配置 | `src-tauri/tauri.conf.json` |
 | 权限声明 | 窗口权限与事件监听权限 | `src-tauri/capabilities/` |
 
@@ -25,13 +25,17 @@
 
 账户分两类：本机账户沿用现有登录态；独立账户在应用数据目录的 `codex-profiles/<accountId>/` 下拥有独立 `CODEX_HOME`。启动加载状态时按本机是否存在 Codex 客户端（独立 CLI 或桌面端内置 CLI）校正本机账户：客户端不存在则移除占位账户，存在但状态里缺少时补回。未安装 Codex 的用户因此不会看到必然失败的账户，调度器也不会反复查询；卸载后重新安装会在下次启动恢复。客户端存在但未登录时仍保留账户并展示授权错误，便于用户完成登录。每次查询会在同一 app-server 会话中先读取 `account/read` 获取脱敏邮箱与套餐档位，再读取额度；即使额度请求失败（如网络异常），只要身份读取成功，账户页仍能显示当前登录账号，身份读取本身失败则保留原值，不误清空。添加或重新授权时，Rust 启动该目录下的 app-server，调用官方 `account/login/start` 取得浏览器授权 URL，等待 `account/login/completed` 后读取身份与额度。登录令牌由 Codex CLI 写入隔离目录，应用不解析、不复制、不向前端返回；`account-login-changed` 仅携带流程标识、账户标识、状态和脱敏错误。
 
-百炼账户属于独立授权账户：Rust 在 `127.0.0.1` 随机端口启动一次性回调服务，打开官方控制台登录页；浏览器把控制台 `access_token` 回传到该地址，`state` 校验通过后才写入 `bailian-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600）。一个百炼账户下有两个产品：Token Plan 与 Coding Plan。每次刷新顺序请求两类额度接口，任一失败只影响对应产品并保留其上次成功快照；两者都判定会话失效时才把账户标为需要重新授权。控制台令牌没有 refresh token，有效期实测约 24 小时；`credentials.json` 记录写入时间，启动与刷新时据此推算到期时间并只把时间戳放进 `PersistedState` 供账户页展示，到期前 2 小时提醒一次。令牌本身不进入 `PersistedState`、IPC 返回值、事件或日志；移除账户会删除该目录。
+Codex 重置卡复用同一个 app-server 通道：`account/rateLimits/read` 的响应顶层包含 `rateLimitResetCredits`。后台刷新继续传 `excludeResetCreditDetails: true`，只把 `availableCount` 写入 `QuotaSnapshot.resetCredits`，不额外请求明细；用户打开重置卡面板时才发一次不带该参数的读取，拿到每张卡的 `id`、标题、状态与到期时间。消耗走 `account/rateLimitResetCredit/consume`，参数为可选的 `creditId` 与必填的 `idempotencyKey`；界面优先选择最早到期的一张，并在调用前二次确认。后端只返回 `reset` / `nothingToReset` / `noCredit` / `alreadyRedeemed` 四种结果，不返回额度原文。消耗成功后会补一次刷新：如果此时已有查询在途，普通刷新会被合并，因此新增 `forced_refresh_pending` 排队，在在途查询收尾后再查一次，避免旧快照覆盖扣卡后的状态。同一账户的消耗用互斥集合去重，防止两个窗口同时触发多扣一张；同一次确认内的重试复用同一个幂等标识，超时等未知结果会提示先核对额度。重置卡 `id` 只存在于当前进程与本次 IPC 返回，不写入 `state.json`、日志或事件之外的持久化数据。
+
+百炼账户属于独立授权账户：Rust 在 `127.0.0.1` 随机端口启动一次性回调服务，打开官方控制台登录页；浏览器把控制台 `access_token` 回传到该地址，`state` 校验通过后才写入 `bailian-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600）。一个百炼账户下有两个产品：Token Plan 与 Coding Plan。每次刷新顺序请求两类额度接口，任一失败只影响对应产品并保留其上次成功快照；两者都判定会话失效时才把账户标为需要重新授权。控制台令牌没有 refresh token，有效期实测约 24 小时；`credentials.json` 记录写入时间，启动与刷新时据此推算到期时间并只把时间戳放进 `PersistedState` 供账户页展示，到期前 2 小时提醒一次。控制台登录令牌是单活的：应用与 `bl` CLI 使用同一个官方 `console-login` 入口和同一类 Bearer 令牌，任一端完成新的授权都会在服务端轮换掉另一端的旧令牌，日常额度查询不会；应用只写自己的 `bailian-profiles/<accountId>/credentials.json`，不读写 `~/.bailian/config.json`，也没有 logout/revoke 调用，界面在添加与重新授权流程中如实提示这一点。令牌本身不进入 `PersistedState`、IPC 返回值、事件或日志；移除账户会删除该目录。
 
 OpenCode Go 与 Command Code 属于 API Key 账户：添加时先用一次真实查询验证密钥，成功后写入 `api-profiles/<accountId>/credentials.json`（同样 0700/0600），失败不会留下账户或凭证。OpenCode Go 读取官方 `GET https://opencode.ai/zen/go/v1/usage` 的 5 小时 / 每周 / 订阅月百分比；Command Code 读取 CLI 同款 `/alpha/billing/credits`、`/alpha/usage/summary` 与 `/alpha/billing/subscriptions`，月度上限由“已用 + 剩余”推导，辅助接口失败时保留滚动窗口并记录能力缺口。密钥只在 Rust 侧使用，不进入 `PersistedState`、事件或错误消息。
 
 WorkBuddy 账户属于独立授权账户：Rust 先向官方接口申请一次性 `state` 与登录页地址，用系统浏览器打开；用户在官方页面完成登录后，Rust 轮询同一 `state` 的登录结果，取回 access token 与 refresh token，写入 `workbuddy-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600，先写临时文件再原子替换）。额度以计费摘要的官方 `CreditGroups` 为准，按套餐基础 / 套餐赠送 / 购买 / 平台奖励分别展示，每组一个周期窗口；套餐编码沿用官方客户端的分组映射（`plan_base` / `plan_bonus` / `addon` / `benefit`），从付费 / 免费套餐分页接口补充各组的重置或最近到期时间。分页失败只记录能力缺口，不影响余额展示。访问令牌到期前 60 秒或查询返回 401/403 时，使用 refresh token 调用官方续期接口；续期失效才把账户标为需要重新授权。令牌与账户标识只存在于凭证文件和 Rust 请求头，不进入 `PersistedState`、IPC 返回值、事件或日志；移除账户会删除该目录。
 
-启动后 Rust 会在后台探测本机已有登录态：OpenCode 调用官方 `opencode auth export`，存在活动 API Key 时自动创建“本机 OpenCode”账户，并在每次刷新时重新读取 CLI 凭据；Antigravity 先确认 `agy` 可执行，再实际读取一次 `/usage`，成功才创建“本机 Antigravity”账户。未探测到时不创建账户，保持“添加账户”的手动流程。探测只使用官方 CLI 命令，不直接解析 SQLite、钥匙串或浏览器 Cookie。
+Cursor 个人订阅账户属于独立授权账户：Rust 为每个账户使用 `cursor-profiles/<accountId>/` 作为子进程的独立 `HOME`，以 `AGENT_CLI_CREDENTIAL_STORE=file`、`NO_OPEN_BROWSER=1` 启动官方 Cursor Agent CLI 的 `agent login`，从 stdout 解析并校验 `https://cursor.com/loginDeepControl?...` 登录地址，再交给系统浏览器。登录完成后只读取该目录下的 `.cursor/auth.json`，每次刷新重新读取 `accessToken`，用 Bearer 调用 `POST https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage`（附 `Connect-Protocol-Version: 1`），解析 `planUsage.totalPercentUsed / autoPercentUsed / apiPercentUsed` 与 `billingCycleStart / billingCycleEnd`；界面只展示 `autoPercentUsed`（Cursor 模型）与 `apiPercentUsed`（第三方模型），只有总比例时回退到总用量。套餐包含 Grok Bot 周额度时，再调用 `GetSandUsageStatus` 解析 `usagePercent` 与 `currentPeriodStart / nextResetTimestampUtc`，作为独立的周额度窗口展示；企业共享额度（`usesPooledEnterpriseAllowance`）或未附带额度的套餐不显示该窗口，该请求失败也只隐藏窗口，不影响主额度。令牌不复制到 `PersistedState`、不进入前端、事件或日志；登录输出中的邮箱也不写入日志。不读取用户已有 `~/.cursor`、Cursor.app 的 `state.vscdb`、Keychain 或浏览器 Cookie。该接口未公开文档，属于实验性接入：401/403 标记需要重新登录，其他失败保留上次成功快照。
+
+启动后 Rust 会在后台探测本机已有登录态：OpenCode 调用官方 `opencode auth export`，存在活动 API Key 时自动创建“本机 OpenCode”账户，并在每次刷新时重新读取 CLI 凭据；Antigravity 先确认 `agy` 可执行，再实际读取一次 `/usage`，成功才创建“本机 Antigravity”账户。未探测到时不创建账户，保持“添加账户”的手动流程。探测只使用官方 CLI 命令，不直接解析 SQLite、钥匙串或浏览器 Cookie。Cursor 不参与自动探测，只通过账户页显式发起隔离登录，避免读取用户已有的 `~/.cursor` 登录态。
 
 Antigravity 是本机账户：应用只调用 `agy -p /usage --output-format json` 读取官方打印结果，不读取 CLI 的钥匙串、令牌文件或浏览器会话。查询前校验 `agy --version` ≥ 1.1.11，并设置 `AGY_CLI_DISABLE_AUTO_UPDATE=true`；查询带超时并能主动结束未登录时等待交互的进程。返回按模型分组展示每周 / 5 小时剩余比例与重置时间。
 
@@ -80,7 +84,7 @@ Windows 安装包与界面运行验收尚未完成，最低 Windows 版本待确
 - 面板失焦自动收起，但只有“确实获得过焦点且距上次显示已超过 400 ms”才收起：托盘点击唤出的窗口在 Windows 上可能因前台锁停在未激活状态，此时收到的失焦是杂散事件，收起会让左键看起来毫无反应。非 macOS 在显示后没拿到激活态会补一次聚焦（仍失败也不隐藏，置顶窗口至少可见、可再点托盘收起）；macOS 的非激活 `NSPanel` 由 `makeKeyWindow` 取得 key 焦点，因此既不读 `is_focused` 也不补焦——补焦会激活应用并切回主桌面空间。另外记录失焦时间避免“点击图标关闭”时又立刻重开；按 Esc 收起。
 - 创建与显示请求一律经后台线程转投主线程，不在托盘回调里就地创建：托盘回调本身在主线程，`run_on_main_thread` 会内联执行，而创建窗口要等 WebView2 初始化（零 WebView 冷启动更慢，内部还会自行泵消息），就地执行会卡住托盘菜单，重入的点击还会重复创建窗口、作废正在加载那一代的显示回调。加载标志改成在创建入口处判断，创建期间的再次左键点击视为取消。
 - 窗口与托盘的生命周期事件写 `logs/window.log`（同时输出 stderr）：发布包在 Windows 上是 GUI 子系统，没有控制台，`eprintln!` 会被丢弃，没有文件日志就无法判断“点击是否到达事件循环”。
-- 关闭主窗口只隐藏，隐藏满 60 秒后销毁 WebView（有登录流程或更新下载在进行时跳过），再次打开时按配置重建并等待页面加载；应用继续在菜单栏驻留并刷新。销毁最后一个窗口会让 Tauri 请求退出，`RunEvent::ExitRequested` 在“没有窗口且非程序化退出”时调用 `prevent_exit`，避免空闲销毁把常驻应用结束掉。只有菜单或面板中的退出入口会结束进程并停止调度。macOS 关闭主窗口时把激活策略切到 `Accessory`，Dock 图标、Cmd+Tab 与应用菜单栏一并消失；显示主窗口前先切回 `Regular` 再显示并聚焦，否则窗口拿不到 key 焦点，也没有应用菜单栏。
+- 关闭主窗口只隐藏，隐藏满 60 秒后销毁 WebView（有登录流程或更新下载在进行时跳过），再次打开时按配置重建并等待页面加载；应用继续在菜单栏驻留并刷新。销毁最后一个窗口会让 Tauri 请求退出，`RunEvent::ExitRequested` 在“没有窗口且非程序化退出”时调用 `prevent_exit`，避免空闲销毁把常驻应用结束掉。只有菜单或面板中的退出入口会结束进程并停止调度。macOS 关闭主窗口时把激活策略切到 `Accessory`，Dock 图标、Cmd+Tab 与应用菜单栏一并消失；显示主窗口前先切回 `Regular` 再显示并聚焦，否则窗口拿不到 key 焦点，也没有应用菜单栏。应用包通过 `src-tauri/Info.plist` 合并 `LSUIElement = true`，进程启动时就是附件形态：登录项启动不再先闪出 Dock 图标，手动启动则由 `show_main_window` 切回 `Regular`。
 - 面板打开时先展示现有额度与更新时间，再按刷新间隔补查中转站账户；订阅账户继续由 Rust 调度器后台刷新。版本检查只由主窗口发起，面板不重复请求 GitHub。
 
 ### 3.3 桌面悬浮球（已实现）
@@ -147,7 +151,7 @@ Rust 侧实现两类中转平台适配器，代码在 `src-tauri/src/quota/`（`
 - 手动填写的服务地址、API Key、New API 访问令牌与用户 ID 保存在 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 的按用户 ACL），先写临时文件再原子替换。凭证只在 Rust 侧读取，不进入前端状态、事件、日志或错误消息。用户设置的账户标题（最多 40 个字符，非凭证）与凭证同文件保存；扫描导入的条目保存在 `source.json` 的来源引用里，重启后优先使用已保存的标题。编辑手动账户的服务地址或 API Key 会立即重新识别并刷新额度；来源引用账户的地址与密钥始终从源配置读取，界面只允许修改标题，避免应用内的值覆盖真实来源。
 - 从 cc-switch、Claude Code / Codex 配置扫描到的密钥不复制到应用目录。用户勾选导入后，`relay-profiles/<relayId>/source.json` 只保存来源引用（来源、app_type、provider id、导入时的地址、provider 类型与用户主动填写的访问令牌），同一目录的 `snapshot.json` 保存脱敏额度快照；启动与每次刷新前按引用重新读取源配置取出密钥；启动时取不到就跳过该账户，刷新时记录错误并保留上次快照。界面用「凭证已保存 / 来源已保存 / 凭证仅本次运行」区分手动凭证、来源引用与仅内存条目。
 - 扫描是管理页上的手动入口：点击「扫描本地配置」后只列出候选（来源、provider 名称、地址、是否已在列表中），不发起网络请求、不自动登记；用户勾选并确认导入后，Rust 才对选中的候选识别上游并查询额度。扫描候选的密钥保留在 Rust 内存中，前端只拿到不含密钥的视图。
-- 打开“中转站账户管理”页，或切到总览的「中转站账户额度」标签页时，只加载已保存条目及上次成功快照；启动时仅在存在 `source.json` 的情况下读取对应源配置（只读、不发网络请求），随后每次刷新（含自动刷新）前也会重新读取来源账户的源配置；没有来源账户时不扫描。随后把距上次成功查询已超过刷新间隔（沿用设置中的分钟数）的账户批量刷新一次；自动刷新失败按同一间隔退避，切换页面不会重复请求。两处共用同一份前端状态，添加、扫描导入、编辑地址与密钥、手动刷新、补充令牌、设置标题或移除后立即同步。主窗口与菜单栏面板各自持有前端副本，真正共享的是 Rust 侧注册表：条目变化后广播 `relay-accounts-changed`（带修订号与完整脱敏视图），另一侧据此更新；窗口重新显示时再读取一次列表与状态快照，兜底隐藏期间可能漏掉的事件。手动刷新失败保留旧快照并记录脱敏错误。移除条目会删除对应的 `relay-profiles/<relayId>/` 目录。
+- 打开“中转站账户管理”页，或切到总览的「中转站账户额度」标签页时，只加载已保存条目及上次成功快照；启动时仅在存在 `source.json` 的情况下读取对应源配置（只读、不发网络请求），随后每次刷新（含自动刷新）前也会重新读取来源账户的源配置；没有来源账户时不扫描。随后把距上次成功查询已超过刷新间隔（沿用设置中的分钟数）的账户批量刷新一次；自动刷新失败按同一间隔退避，切换页面不会重复请求。两处共用同一份前端状态，添加、扫描导入、编辑地址与密钥、手动刷新、补充令牌、设置标题或移除后立即同步。主窗口与菜单栏面板各自持有前端副本，真正共享的是 Rust 侧注册表：条目变化后广播 `relay-accounts-changed`（带修订号与完整脱敏视图），另一侧据此更新；窗口重新显示时再读取一次列表与状态快照，兜底隐藏期间可能漏掉的事件。手动刷新失败保留旧快照并记录脱敏错误。移除条目会删除对应的 `relay-profiles/<relayId>/` 目录，并清理该条目的余额提醒配置与轮次标记。开启余额提醒的条目另由 Rust 后台线程按同一刷新间隔顺序查询，失败按 60 秒起指数退避（上限 30 分钟）；刷新成功后按设置的币种与阈值判定并发送一次系统通知，关闭提醒或移除条目后停止刷新。手动刷新、添加、编辑、补充访问令牌与导入成功时也走同一判定；`low` 标记保证后台线程与手动路径同时判定时不会重复通知。后台线程只处理已开启提醒的条目，不改变其他中转站“未打开页面不发起请求”的行为。
 - 访问令牌只对 New API 生效；Sub2API 账户不接受或保存访问令牌。
 
 New API 二开兼容策略（响应字段不是上游协议的一部分，按“可缺省、可别名、未知即忽略”解析）：
@@ -205,11 +209,12 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | Account | 本地随机/生成 `accountId`、平台、显示名、授权来源（本机或独立授权）、可选脱敏身份标识、授权状态 | 不以邮箱作唯一主键；不在前端对象中携带凭证或安全存储引用 |
 | Product | 本地 `productId`、所属账户、产品类型、可选套餐档位及远端标识 | 首批类型为 Codex 订阅、Token Plan 个人版、Coding Plan 中国站；远端标识不可靠时不猜测 |
 | QuotaWindow | 本地窗口标识、来源窗口标识、可选平台窗口名、计量单位、可选总量/已用/剩余/比例、可选周期及重置时间 | 不强制存在绝对额度；比例必须来源可靠或能在相同口径下推导。百炼 Coding Plan 保留调用次数与三个窗口，Token Plan 只有比例 |
-| QuotaSnapshot | 对应产品、额度窗口列表、最近成功获取时间、可选来源更新时间、能力缺口 | 只保留所需快照；来源更新时间未知时不能把本地查询时间冒充平台更新时间 |
+| QuotaSnapshot | 对应产品、额度窗口列表、最近成功获取时间、可选来源更新时间、能力缺口、可选 Codex 重置卡可用数量 | 只保留所需快照；来源更新时间未知时不能把本地查询时间冒充平台更新时间；重置卡只保存数量，明细按需读取，不落盘卡片标识 |
 | QueryState | 当前是否刷新、最近尝试时间、脱敏错误、可选下次允许重试时间 | 与成功快照分开保存，失败不抹掉上次成功数据 |
 | Preferences | 刷新间隔、三类提醒开关、低额度阈值、自启意图 | 初始值采用已确认需求；OS 实际通知和自启状态另行查询，不能只信本地开关 |
 | OverviewOrder | 用户拖动后的平台键顺序与账户标识顺序 | 只保存标识与相对顺序，不含账户名、邮箱或凭证；未列出的标识保持默认顺序并排在已列出项之后；重复提交相同顺序不写盘；菜单栏面板的中转站分组以固定标识 `relay` 记在其中，总览只排列平台分组并保留该标识的原槽位 |
 | RelayOrder | 总览「中转站账户额度」中的账户标识顺序 | 只含中转站注册表标识，不含标题、地址、密钥或额度；不影响注册表本身与凭证；未列出的账户保持注册表顺序并排在后面 |
+| RelayReminder | 按 `relayId` 保存的余额提醒：是否开启、金额阈值、设置时币种、当前低余额轮次标记 | 只含脱敏金额与币种，不含服务地址、密钥或额度原文；币种缺失或与查询结果不一致时不比较；同一低余额轮次跨刷新、跨重启去重；关闭提醒不校验阈值，保留原值；已开启的提醒在查不到可比较数据时沿用保存的币种，仍可调整阈值 |
 | NotificationReceipt | 账户、产品、窗口、提醒类型、可靠周期标识或经确认的退化标识、已发送状态 | 支持重启去重；周期未知时不能构造虚假的周期身份 |
 
 ### 5.4 规范化与一致性规则
@@ -267,7 +272,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 - 打开菜单栏先显示现有数据与更新时间，过期时异步刷新。
 - 查询失败保留上次成功数据并标注失败或过期，不显示成零额度。
 - 关闭管理窗口后继续常驻和刷新；提供明确退出入口，退出后停止刷新。
-- 开机自启可选，默认关闭。
+- 开机自启可选，默认关闭；由登录项启动时只驻留菜单栏，不显示主窗口。
 - 首版包含低额度和授权失效提醒，以及默认关闭的可选重置或恢复提醒；历史用量统计不进入首版。
 
 ### 7.4 已确认的页面组织
@@ -277,7 +282,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | 页面或区域 | 已确认内容方向 | 主要操作 |
 | --- | --- | --- |
 | 菜单栏弹窗 | 按平台与账户分组的紧凑额度列表、重置信息、更新时间及异常提示；中转站按密钥/账户金额摘要展示 | 刷新全部、打开管理窗口、退出 |
-| 管理窗口：总览 | 顶部在「订阅账户额度」与「中转站账户额度」间切换；分别按账户与套餐展示完整额度周期，不合并不同计量口径的数据 | 刷新；中转站额度只读展示，管理入口在中转站页 |
+| 管理窗口：总览 | 顶部左侧在「订阅账户额度」与「中转站账户额度」间切换，右侧是「需处理」筛选按钮：没有待处理账户时整个入口不显示；存在时用琥珀色徽标显示数量，开启后按钮改为「仅看需处理」并用中性底色高亮，数量归零会自动回到全部；按账户计数、同一账户多个问题只计一次；分别按账户与套餐展示完整额度周期，不合并不同计量口径的数据 | 刷新、单账户重试；问题原因沿用原有错误提示，按类型区分颜色（授权失效/额度用尽为危险色，刷新失败为警告色）；中转站额度只读展示，管理入口在中转站页 |
 | 管理窗口：账户 | 已接入账户、授权状态、关联套餐 | 添加、改显示名称、重新授权、移除 |
 | 管理窗口：中转站账户管理 | 中转站服务地址、来源、平台、凭证保存状态与访问令牌配置；额度详情移至总览；账户以网格卡并排展示，添加与凭证操作在弹窗内完成 | 添加、扫描本地配置、编辑账户、刷新、补充访问令牌、设置标题、移除 |
 | 管理窗口：设置 | 刷新间隔、提醒及阈值、自启开关 | 保存设置、解释权限与不可用状态 |
@@ -318,13 +323,14 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 - 启用重置或恢复提醒时，应依据新查询结果与可识别周期变化确认，不仅因本地倒计时归零就宣称额度恢复。
 - 不能可靠识别周期或剩余比例时，记录限制并确定替代规则，不猜测阈值与重置事件。
 - 建议将必要去重状态持久化，避免应用重启后重复提醒；不为此引入历史统计或保存完整响应。
+- 中转站低余额提醒以 `relayReminders[relayId].low` 表示当前轮次：余额首次低于阈值时置位并通知，持续低于阈值或重启后不重复；余额回升到阈值或以上时清除，允许下一轮再次提醒。查询失败、额度不受限制、余额或币种缺失、币种与设置不一致时跳过比较，且不改变轮次标记。通知只显示站点名称、余额与阈值。
 - 低额度与失效提醒默认开启，低额度阈值默认剩余 20% 可调；重置或恢复提醒默认关闭。通知设置与系统权限分开表达，不能因开关已开启就宣称系统允许通知。
-- Codex、百炼、OpenCode Go、Command Code 与 Antigravity 的状态更新统一维护 `reminders.authExpired[accountId]`；百炼本地凭证错误与控制台会话失效均被覆盖，只要仍有一类套餐查询成功就不误报整个账户失效。中转站尚未接入授权失效系统通知。
+- Codex、百炼、OpenCode Go、Command Code、Antigravity 与 Cursor 的状态更新统一维护 `reminders.authExpired[accountId]`；百炼本地凭证错误与控制台会话失效均被覆盖，只要仍有一类套餐查询成功就不误报整个账户失效。中转站尚未接入授权失效系统通知。
 - 每次失效保存独立的 `noticeId`、`delivered`、`attempts` 与 `nextAttemptEpoch`，不再用 `authState` 充当发送成功回执。账户恢复、重新授权或移除后清理记录；异步发送结果只允许确认相同 `noticeId`，不能覆盖恢复后新一轮失效。
 - 调度器是授权提醒唯一发送入口，不依赖额度刷新间隔；发送前严格落盘预留下一次尝试时间，落盘失败不发送。失败间隔按 60、120、240、480、960、1920、3600 秒递增，此后封顶 3600 秒；重复查询与重启不能绕过退避。重试不重新调用第三方额度接口，不重复申请系统权限。
 - 系统确认接收后写入成功回执并跨重启去重；提醒关闭时暂停，重新开启时允许尚未成功的提醒在下一次调度尝试，但不会重发已有成功回执的提醒。正在重新授权的账户暂停发送。
 - 状态文件保持 schema v1，授权提醒记录作为带 `#[serde(default)]` 的可选字段追加：读取旧文件时保留账户、偏好、额度快照与原低额度去重记录，为仍失效且没有回执的账户补建待提醒项；原文件在下一次成功原子写入前保持不变。不升版本号是为了让已发布的旧版本仍能读写同一文件（它们会忽略并丢弃新字段），降级不会触发备份重置。损坏或未知版本先备份再回退。无法确认旧版是否已提醒，因此旧失效状态升级后可能补提醒一次。
-- 系统通知权限在应用启动时申请一次；拒绝后在设置页提示，不阻断额度查询。macOS 使用 `UNUserNotificationCenter`，只有无错误的提交回调才算接收成功；回调超时或断连不冒充成功。重试复用通知标识，但系统提交与状态落盘不是跨系统事务，回调未知或提交后崩溃仍可能重复，不能承诺严格恰好一次。横幅展示、前台抑制与专注模式仍由系统决定，不以用户未见横幅为由重发。
+- 系统通知权限在应用启动时申请一次；拒绝后在设置页提示，不阻断额度查询。macOS 使用 `UNUserNotificationCenter`，只有无错误的提交回调才算接收成功；回调超时或断连不冒充成功。未打包的 macOS 开发运行（主 bundle 不是 `.app` 容器）退回 `tauri-plugin-notification`：只检查 bundle identifier 不够，首次通知触发 AppKit 初始化后它可能变为非空，而进程仍无 bundle proxy，继续使用 `UNUserNotificationCenter` 会抛异常终止应用。重试复用通知标识，但系统提交与状态落盘不是跨系统事务，回调未知或提交后崩溃仍可能重复，不能承诺严格恰好一次。横幅展示、前台抑制与专注模式仍由系统决定，不以用户未见横幅为由重发。
 
 ### 8.3 验证重点
 
@@ -333,7 +339,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 - 关闭管理窗口仍调度，退出后不再产生查询；休眠恢复不积压补发大量错过的任务。
 - 网络失败保留快照与成功时间，首次无数据不显示零额度。
 - 已成功提交的授权提醒在重复刷新、重启或开关切换后不重复；发送失败按退避跨重启重试，禁用时暂停，恢复授权时清理，旧回调不能确认新一轮失效。验证旧状态补建提醒、回执保留与损坏备份。重置提醒默认关闭；普通网络故障不触发授权失效通知。
-- 自启开关初始关闭，系统拒绝或修改失败时不假装已保存成功。
+- 自启开关初始关闭，系统拒绝或修改失败时不假装已保存成功；登录项启动时主窗口保持隐藏，只驻留菜单栏。
 
 ## 9. 开源与安装包设计
 
@@ -367,7 +373,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 
 ## 10. IPC 与平台适配契约草案
 
-下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`set_overview_order`、`set_relay_order`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_scan`、`relay_import`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`、`download_update`、`downloaded_update_version`、`install_update`。其余仍为计划名称。
+下列名称描述内部命令边界。已实现：`get_app_state`、`refresh_usage`、`update_preferences`、`set_overview_order`、`set_relay_order`、`begin_account_login`、`begin_bailian_login`、`cancel_account_login`、`rename_account`、`add_api_key_account`、`replace_api_key`、`add_antigravity_account`、`remove_account`、`relay_query`、`relay_set_account_token`、`relay_set_reminder`、`relay_scan`、`relay_import`、`relay_refresh`、`relay_list`、`relay_remove`、`open_external_url`、`check_for_update`、`download_update`、`downloaded_update_version`、`install_update`。其余仍为计划名称。
 
 ### 10.1 前端命令边界
 
@@ -375,6 +381,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | --- | --- | --- | --- |
 | get_app_state | 无敏感输入 | 返回脱敏账户、产品、快照、查询状态、设置与版本标记；不返回凭证 | REQ-001、REQ-002、REQ-008 |
 | begin_account_login（已实现） | 可选账户标识与显示名 | 为独立 `CODEX_HOME` 启动官方 ChatGPT 授权，返回 `loginId` 与浏览器授权 URL；令牌不经过前端 | REQ-003 |
+| begin_cursor_login（已实现） | 可选账户标识与显示名 | 在隔离 `HOME` 中启动官方 Cursor Agent CLI 登录，返回 `loginId` 与浏览器授权 URL；令牌只写入该目录，不经过前端 | REQ-003 |
 | cancel_account_login（已实现） | 流程标识 | 取消本应用授权流程；不改变本机 Codex 登录 | REQ-003 |
 | rename_account（已实现） | 本地账户标识、显示名 | 校验并保存名称，向两个界面同步 | REQ-003 |
 | add_api_key_account（已实现） | 平台、可选显示名、API Key | 先真实查询验证，成功后写入 `api-profiles/<accountId>/credentials.json`；密钥不回传前端 | REQ-003 |
@@ -385,6 +392,7 @@ New API 二开兼容策略（响应字段不是上游协议的一部分，按“
 | update_preferences | 经校验的设置变更 | 保存常规设置并协调系统操作；系统拒绝通知或自启时如实返回实际状态 | REQ-004、REQ-006、REQ-010 |
 | set_overview_order（已实现） | 平台键列表与账户标识列表 | 去重、去空白并限制条目数与单项长度后写入状态文件；只改变展示顺序，不改账户或额度数据，并向两个界面广播 | REQ-001、REQ-005 |
 | set_relay_order（已实现） | 中转站账户标识列表 | 同样清洗后写入状态文件；只改变总览与快速面板的展示顺序，不改注册表、凭证或额度 | REQ-001、REQ-005 |
+| relay_set_reminder（已实现） | 中转站标识、开关、金额阈值 | 先确认条目仍存在；开启时优先采用最近一次成功查询能明确给出的余额与币种，已开启的提醒在查不到可比较数据时沿用保存的币种；开启时校验金额为有限正数、上限 100 万、最多两位小数，关闭时不校验阈值；关闭时清除当前低余额轮次标记；写入状态并广播 | REQ-006 |
 | get_system_permissions / request_notification_permission | 读取状态或用户明确触发的权限请求 | 区分应用设置与系统许可；不在额度查询失败时反复弹出权限申请 | REQ-006、REQ-010 |
 | open_management_window / quit_app | 用户明确操作 | 窗口复用或退出清理，不能把关闭管理窗口等同于退出 | REQ-005、REQ-009 |
 | check_for_update（已实现） | 无敏感输入 | 读取 GitHub Releases 最新正式版本的版本号与发布页地址；只比较与展示，不下载、不安装。测试渠道直接返回“无更新”，不发起网络请求 | REQ-012 |

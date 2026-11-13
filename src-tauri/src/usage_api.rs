@@ -92,3 +92,50 @@ pub fn get_json(url: &str, api_key: &str, timeout: Duration) -> Result<Value, Ht
         message: "额度响应格式无法识别。".to_string(),
     })
 }
+
+/// 发起带 Bearer 认证的 JSON POST 请求。
+///
+/// `headers` 用于平台要求的额外请求头（例如 Cursor 的
+/// `Connect-Protocol-Version`）。请求体与响应正文都不写入错误消息。
+pub fn post_json(
+    url: &str,
+    api_key: &str,
+    body: &str,
+    timeout: Duration,
+    headers: &[(&str, &str)],
+) -> Result<Value, HttpError> {
+    let mut request = agent(url, timeout)
+        .post(url)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {api_key}"));
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+
+    let mut response = match request.send(body) {
+        Ok(response) => response,
+        Err(ureq::Error::StatusCode(status)) => {
+            return Err(HttpError {
+                status: Some(status),
+                message: format!("额度接口返回 HTTP {status}。"),
+            })
+        }
+        Err(error) => return Err(HttpError::network(error)),
+    };
+
+    let body = response
+        .body_mut()
+        .with_config()
+        .limit(MAX_RESPONSE_BYTES)
+        .read_to_string()
+        .map_err(|_| HttpError {
+            status: None,
+            message: "读取额度响应失败。".to_string(),
+        })?;
+
+    serde_json::from_str(&body).map_err(|_| HttpError {
+        status: None,
+        message: "额度响应格式无法识别。".to_string(),
+    })
+}
