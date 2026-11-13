@@ -192,16 +192,14 @@ pub fn check_for_update(app: &AppHandle) -> Result<UpdateStatus, String> {
 /// 只有通过 NSIS 安装、且当前 exe 位于注册表记录的安装目录时才启用应用内更新。
 /// 测试版与 Next 预览版永远不支持应用内更新，避免被正式版更新包替换。
 pub fn self_update_supported(app: &AppHandle) -> bool {
-    if crate::channel::is_preview(app) {
-        return false;
-    }
     #[cfg(windows)]
     {
-        windows_install::is_installed_copy(&app.package_info().name)
+        !crate::channel::is_preview(app)
+            && windows_install::is_installed_copy(&app.package_info().name)
     }
     #[cfg(not(windows))]
     {
-        true
+        !crate::channel::is_preview(app)
     }
 }
 
