@@ -1,11 +1,11 @@
-/* Windows 自绘标题栏：与侧栏同底色，底部一条发丝线收口。 */
+/* Windows 自绘标题栏：透出 Mica / 侧栏底色，底部一条发丝线收口。 */
 .titleBar {
   display: flex;
   align-items: center;
-  height: 36px;
+  height: 32px;
   width: 100%;
   flex-shrink: 0;
-  background: var(--surface);
+  background: transparent;
   border-bottom: 1px solid var(--border);
   user-select: none;
   -webkit-user-select: none;

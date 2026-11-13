@@ -1049,6 +1049,10 @@ fn create_popover(app: &AppHandle) {
     };
 
     prepare_native_popover(&window);
+    #[cfg(windows)]
+    if let Err(err) = crate::window_material::apply_panel(&window) {
+        lifecycle!("[float] float-popover 应用 Acrylic 失败：{err}");
+    }
     attach_popover_handlers(&window);
     let _ = window.set_title(&app.package_info().name);
     // 首帧后前端会按内容高度调用 resize；这里先按模式默认高度显示。

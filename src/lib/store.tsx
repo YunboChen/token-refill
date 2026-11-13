@@ -56,6 +56,7 @@ const fallbackAppInfo: AppInfo = {
   platform: 'web',
   arch: 'unknown',
   channel: 'pro',
+  material: 'solid',
 };
 
 /** 发起授权的结果：失败原因随结果返回，由发起方在弹窗内展示，不进入页面级提示。 */
@@ -162,6 +163,13 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       disposed = true;
     };
   }, [desktop]);
+
+  // 材质类型由 Rust 判定（macOS 玻璃 / Windows Mica / 实色回退），
+  // 挂到根元素上让各窗口的 CSS 选用对应底色。
+  useEffect(() => {
+    if (!appInfo) return;
+    document.documentElement.dataset.material = appInfo.material;
+  }, [appInfo]);
 
   // 启动时静默检查一次版本；失败（离线、限流）不打扰用户，设置页仍可手动重试。
   // 应用会长时间驻留（支持开机自启），只查一次会错过启动之后发布的新版本，

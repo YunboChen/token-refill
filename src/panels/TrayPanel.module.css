@@ -597,3 +597,40 @@
 :global(html[data-platform='macos']) .account {
   background: var(--panel-card);
 }
+
+/* ---------- Windows Fluent 2 材质 ----------
+   面板与弹层使用 Acrylic；系统不支持透明效果时由 data-material='solid'
+   回退到实色，避免把桌面直接透出来。 */
+:global(html[data-platform='windows']) .panel {
+  border-color: var(--panel-border);
+  border-radius: 8px;
+  background: var(--panel-glass);
+}
+
+:global(html[data-platform='windows']) .header,
+:global(html[data-platform='windows']) .footer {
+  background: var(--panel-chrome);
+}
+
+:global(html[data-platform='windows']) .account {
+  border-radius: 8px;
+  background: var(--panel-card);
+}
+
+:global(html[data-platform='windows']) .sectionHead,
+:global(html[data-platform='windows']) .refreshButton {
+  border-radius: 4px;
+}
+
+:global(html[data-platform='windows'][data-material='solid']) .panel {
+  background: var(--background);
+}
+
+:global(html[data-platform='windows'][data-material='solid']) .header,
+:global(html[data-platform='windows'][data-material='solid']) .footer {
+  background: var(--surface);
+}
+
+:global(html[data-platform='windows'][data-material='solid']) .account {
+  background: var(--surface);
+}

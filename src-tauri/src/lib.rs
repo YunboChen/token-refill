@@ -46,6 +46,8 @@ struct AppInfo {
     platform: &'static str,
     arch: &'static str,
     channel: &'static str,
+    /// glass：macOS 系统玻璃；mica：Windows 11 材质；solid：实色回退。
+    material: &'static str,
 }
 
 /// 应用名与版本来自合并后的 `tauri.conf.json`（测试渠道由 `--config` 覆盖），
@@ -57,6 +59,7 @@ fn compose_app_info(name: String, version: String, channel: channel::Channel) ->
         platform: std::env::consts::OS,
         arch: std::env::consts::ARCH,
         channel: channel.as_str(),
+        material: window_material::material_kind(),
     }
 }
 
@@ -608,9 +611,9 @@ pub fn run() {
                 });
             }
 
-            // macOS 主窗口改用系统玻璃/毛玻璃外壳；必须先于窗口显示，
+            // 主窗口材质（macOS 玻璃 / Windows Mica）必须先于窗口显示，
             // 否则首帧会先露出不透明底色再切成材质。
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             if let Some(main) = app.get_webview_window("main") {
                 if let Err(err) = window_material::apply_main(&main) {
                     logging::lifecycle!("[window] 应用主窗口材质失败：{err}");
@@ -711,6 +714,7 @@ pub fn run() {
 mod tests {
     use super::{compose_app_info, theme_override};
     use crate::channel::Channel;
+    use crate::window_material;
 
     #[test]
     fn app_info_reports_the_merged_config_and_channel() {
@@ -724,6 +728,7 @@ mod tests {
         assert_eq!(pro.channel, "pro");
         assert_eq!(pro.platform, std::env::consts::OS);
         assert_eq!(pro.arch, std::env::consts::ARCH);
+        assert_eq!(pro.material, window_material::material_kind());
 
         let test = compose_app_info(
             "Token Refill Test".to_string(),

@@ -23,6 +23,11 @@ const platformHint = hostPlatformHint();
 if (platformHint) {
   document.documentElement.dataset.platform = platformHint;
 }
+// Windows 先按实色渲染，等 Rust 返回材质类型后再切到 Mica / Acrylic；
+// 反过来先按透明渲染，在材质不可用的机器上会把桌面透出来。
+if (platformHint === 'windows') {
+  document.documentElement.dataset.material = 'solid';
+}
 // 不同窗口的根层背景规则不同：托盘/悬浮球透明，主窗口在 macOS 上也是透明材质。
 document.documentElement.dataset.view = WINDOW_VIEW;
 

@@ -167,6 +167,25 @@ macOS 主窗口从「整块画布」改为「系统材质外壳 + 实色内容�
 - 低于 macOS 26 只降级材质，布局与尺寸不变；Windows 仍使用原来的画布 + 页头结构，Fluent 2 改造另行处理。
 - 不要把浮卡再拆成第二层卡片，也不要在浮卡内使用半透明底色；玻璃只出现在外壳与工具栏。
 
+### 2.8 Windows Fluent 2（界面 v2）
+
+Windows 保持现有 DOM 与页面结构，只替换 Fluent 2 的 token、尺寸与窗口材质：
+
+| 项 | 规则 |
+| --- | --- |
+| 材质 | 主窗口 Mica；菜单栏面板与悬浮球弹层 Acrylic。Windows 10 或系统关闭“透明效果”时由 `AppInfo.material = "solid"` 驱动 CSS 回退实色，不把桌面透出来 |
+| 颜色 | 浅色 `--background #f9fafc`、`--surface #ffffff`、`--accent #005fb8`；深色 `#202020` / `#2b2b2b` / `#60cdff`；描边与强调底色使用带透明度的 Fluent 2 色 |
+| 尺寸 | 卡片 8px、控件 4px；页标题 28px、副标题 13px；侧栏内边距 `10px 12px 12px`；导航项 36px |
+| 导航选中 | `--accent-soft` 底 + 左侧 3×16 指示条，文字用 `--text` 而不是主色 |
+| 标题栏 | `TitleBar` 高 32px，背景透明，底部发丝线；窗口非最大化时保留 1px 内描边 |
+| 内容区 | `.main` 叠 `--content-layer`（半透明白），页头透明；总览平台分组不再用通栏发丝线 |
+| 浮层 | 菜单栏面板与弹层圆角 8px，面板底 `--panel-glass`、头部/页脚 `--panel-chrome`、账户卡 `--panel-card` |
+| 字体 | 系统 UI 字体栈优先 `Segoe UI Variable Text` / `Segoe UI Variable` |
+
+- 材质不可用时只换实色，布局、间距与圆角保持不变。
+- 悬浮球在 Windows 上不使用背景模糊，保留玻璃渐变球体。
+- 窗口圆角、Mica/Acrylic 的实际表现与 Windows 10 回退仍需 Windows 实机验收。
+
 ## 3. 应用骨架
 
 ```
@@ -200,6 +219,7 @@ macOS v2 下侧栏与页头透出窗口材质，`.mainScroll` 是浮在材质上
 - 平台信息来自 `getAppInfo()`；首次渲染用 UA 同步兜底（避免 Windows 标题栏首帧缺失），读取失败保持 macOS 布局，不阻塞界面。
 - macOS 主窗口在 `setup()` 中调用 `window_material::apply_main`：窗口与 WKWebView 设为透明，底部铺系统材质，Overlay 标题栏一并透明；材质失败只记生命周期日志，不阻止窗口显示。
 - 根元素在 `main.tsx` 首帧写入 `data-platform`（UA 兜底）与 `data-view`；平台专用 token 与材质样式都挂在 `html` 上，菜单栏面板、悬浮球与主窗口共用同一套判定。
+- Windows 在 `setup()` / 主窗口重建时调用 `window_material::apply_main` 铺 Mica，菜单栏面板与悬浮球弹层创建时调用 `apply_panel` 铺 Acrylic；Rust 通过 `AppInfo.material` 告知前端材质是否生效，前端写入 `html[data-material]`，CSS 据此选择透明材质或实色回退。
 
 ### 3.3 新增页面的接入点
 

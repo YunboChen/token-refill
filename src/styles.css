@@ -4,6 +4,8 @@
     BlinkMacSystemFont,
     'SF Pro Text',
     'PingFang SC',
+    'Segoe UI Variable Text',
+    'Segoe UI Variable',
     'Segoe UI',
     'Microsoft YaHei',
     sans-serif;
@@ -93,6 +95,49 @@
   background: transparent;
 }
 
+/* Windows Fluent 2：主窗口 Mica，菜单栏面板与弹层 Acrylic。
+   材质不可用时 `data-material='solid'`，由 CSS 铺实色，不依赖系统透明效果。 */
+:root[data-platform='windows'] {
+  --background: #f9fafc;
+  --surface: #ffffff;
+  --sunken: #f3f3f3;
+  --hover: rgb(0 0 0 / 0.04);
+  --text: #1b1b1b;
+  --muted: #5d5d5d;
+  --border: rgb(0 0 0 / 0.085);
+  --border-strong: rgb(0 0 0 / 0.14);
+  --accent: #005fb8;
+  --accent-strong: #005fb8;
+  --accent-strong-hover: #0078d4;
+  --accent-text: #ffffff;
+  --accent-soft: rgb(0 95 184 / 0.09);
+  --ok: #0f7b45;
+  --ok-soft: rgb(15 123 69 / 0.09);
+  --warning: #9d5d00;
+  --warning-soft: rgb(157 93 0 / 0.1);
+  --danger: #c42b1c;
+  --danger-soft: rgb(196 43 28 / 0.09);
+  --focus: #005fb8;
+  --accent-ring: rgb(0 95 184 / 0.14);
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+  --mica: #edf0f5;
+  --content-layer: rgb(255 255 255 / 0.58);
+  --panel-glass: rgb(249 249 249 / 0.91);
+  --panel-chrome: rgb(252 252 252 / 0.55);
+  --panel-card: rgb(255 255 255 / 0.66);
+  --panel-border: rgb(0 0 0 / 0.1);
+  --ball-glass-start: #fafafa;
+  --ball-glass-end: #eaeaea;
+  --radius-card: 8px;
+  --radius-control: 4px;
+}
+
+/* Mica 生效时根层必须透明，否则 body 的实色会盖住 DWM 背景。 */
+:root[data-platform='windows'][data-material='mica'],
+:root[data-platform='windows'][data-material='mica'] body {
+  background: transparent;
+}
+
 /* 外观偏好写在 <html data-theme> 上：light / dark 显式覆盖，
    system（或尚未写入时）由下方的媒体查询跟随系统。 */
 :root[data-theme='dark'] {
@@ -154,6 +199,39 @@
   --ball-border: rgb(255 255 255 / 0.16);
 }
 
+:root[data-theme='dark'][data-platform='windows'] {
+  --background: #202020;
+  --surface: #2b2b2b;
+  --sunken: #262626;
+  --hover: rgb(255 255 255 / 0.06);
+  --text: #f3f3f3;
+  --muted: #b0b0b0;
+  --border: rgb(255 255 255 / 0.085);
+  --border-strong: rgb(255 255 255 / 0.14);
+  --accent: #60cdff;
+  --accent-strong: #60cdff;
+  --accent-strong-hover: #9ae1ff;
+  --accent-text: #00303f;
+  --accent-soft: rgb(96 205 255 / 0.12);
+  --ok: #6ccb8f;
+  --ok-soft: rgb(108 203 143 / 0.12);
+  --warning: #f0b429;
+  --warning-soft: rgb(240 180 41 / 0.12);
+  --danger: #ff99a4;
+  --danger-soft: rgb(255 153 164 / 0.12);
+  --focus: #60cdff;
+  --accent-ring: rgb(96 205 255 / 0.18);
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
+  --mica: #202226;
+  --content-layer: rgb(255 255 255 / 0.035);
+  --panel-glass: rgb(38 38 38 / 0.92);
+  --panel-chrome: rgb(40 40 40 / 0.56);
+  --panel-card: rgb(255 255 255 / 0.07);
+  --panel-border: rgb(255 255 255 / 0.1);
+  --ball-glass-start: #363636;
+  --ball-glass-end: #252525;
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     color-scheme: dark;
@@ -211,6 +289,39 @@
     --ball-logo: var(--ball-text);
     --ball-detail: #aaaaaa;
     --ball-border: rgb(255 255 255 / 0.16);
+  }
+
+  :root:not([data-theme='light'])[data-platform='windows'] {
+    --background: #202020;
+    --surface: #2b2b2b;
+    --sunken: #262626;
+    --hover: rgb(255 255 255 / 0.06);
+    --text: #f3f3f3;
+    --muted: #b0b0b0;
+    --border: rgb(255 255 255 / 0.085);
+    --border-strong: rgb(255 255 255 / 0.14);
+    --accent: #60cdff;
+    --accent-strong: #60cdff;
+    --accent-strong-hover: #9ae1ff;
+    --accent-text: #00303f;
+    --accent-soft: rgb(96 205 255 / 0.12);
+    --ok: #6ccb8f;
+    --ok-soft: rgb(108 203 143 / 0.12);
+    --warning: #f0b429;
+    --warning-soft: rgb(240 180 41 / 0.12);
+    --danger: #ff99a4;
+    --danger-soft: rgb(255 153 164 / 0.12);
+    --focus: #60cdff;
+    --accent-ring: rgb(96 205 255 / 0.18);
+    --card-shadow: 0 1px 2px rgb(0 0 0 / 0.18);
+    --mica: #202226;
+    --content-layer: rgb(255 255 255 / 0.035);
+    --panel-glass: rgb(38 38 38 / 0.92);
+    --panel-chrome: rgb(40 40 40 / 0.56);
+    --panel-card: rgb(255 255 255 / 0.07);
+    --panel-border: rgb(255 255 255 / 0.1);
+    --ball-glass-start: #363636;
+    --ball-glass-end: #252525;
   }
 }
 

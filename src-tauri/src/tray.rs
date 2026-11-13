@@ -365,6 +365,11 @@ fn create_panel(app: &AppHandle) -> Option<WebviewWindow> {
         return None;
     }
 
+    #[cfg(windows)]
+    if let Err(err) = crate::window_material::apply_panel(&panel) {
+        lifecycle!("[window] tray-panel 应用 Acrylic 失败：{err}");
+    }
+
     attach_panel_handlers(&panel);
     start_load_fallback(app, &panel, generation);
     Some(panel)
@@ -744,7 +749,7 @@ fn create_main_window(app: &AppHandle) -> Option<WebviewWindow> {
 
     // 空闲销毁后重建的窗口不会经过 `setup()`，材质必须在这里补一次，
     // 否则关闭再打开主窗口会退回不透明底色。
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     if let Err(err) = crate::window_material::apply_main(&main) {
         lifecycle!("[window] 重建主窗口材质失败：{err}");
     }

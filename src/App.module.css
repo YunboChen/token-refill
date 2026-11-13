@@ -370,6 +370,93 @@
   border-color: var(--overview-account-divider);
 }
 
+/* ---------- Windows Fluent 2 外壳 ----------
+   主窗口铺 Mica（不可用时用 --mica 实色），侧栏与标题栏透出材质，
+   内容区叠一层半透明底色。结构不动，只换 token、尺寸与导航选中态。 */
+
+.app[data-platform='windows'] {
+  background: var(--mica);
+}
+
+:global(html[data-material='mica']) .app[data-platform='windows'] {
+  background: transparent;
+}
+
+.app[data-platform='windows'] .sidebar {
+  padding: 10px 12px 12px;
+  background: transparent;
+}
+
+.app[data-platform='windows'] .wordmark {
+  margin: 4px 0 16px 4px;
+}
+
+.app[data-platform='windows'] .navItem {
+  height: 36px;
+}
+
+.app[data-platform='windows'] .navLabel {
+  font-size: 14px;
+}
+
+/* 选中项：Fluent 2 NavigationView 的左侧 3×16 指示条 + 轻底色。 */
+.app[data-platform='windows'] .navItem[data-active] .navLabel {
+  position: relative;
+  color: var(--text);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.app[data-platform='windows'] .navItem[data-active] .navLabel::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--accent);
+  transform: translateY(-50%);
+}
+
+.app[data-platform='windows'] .main {
+  background: var(--content-layer);
+}
+
+.app[data-platform='windows'] .pageHeader {
+  padding: 24px 28px 14px;
+  border-bottom: 0;
+  background: transparent;
+}
+
+.app[data-platform='windows'] .mainScroll {
+  padding: 4px 28px 28px;
+}
+
+.app[data-platform='windows'] .overviewStack > * + * {
+  padding-top: 8px;
+  border-top: 0;
+}
+
+.app[data-platform='windows'] .panelTitle {
+  font-size: 28px;
+}
+
+.app[data-platform='windows'] .subtitle {
+  font-size: 13px;
+}
+
+.app[data-platform='windows'] .overviewTabs,
+.app[data-platform='windows'] .overviewTab,
+.app[data-platform='windows'] .pillThumb {
+  border-radius: 4px;
+}
+
+.app[data-platform='windows'] .quotaBoard {
+  border-radius: 8px;
+  box-shadow: var(--card-shadow);
+}
+
 /* 面板标题：字重收一档，靠字号与颜色建立层级，不靠加粗 */
 .panelTitle {
   margin: 0;

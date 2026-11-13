@@ -3,6 +3,9 @@ import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 export type AppChannel = 'pro' | 'test';
 
+/** 窗口材质：macOS 系统玻璃、Windows 11 Mica、或实色回退。 */
+export type WindowMaterial = 'glass' | 'mica' | 'solid';
+
 export interface AppInfo {
   name: string;
   version: string;
@@ -10,6 +13,7 @@ export interface AppInfo {
   arch: string;
   /** pro：正式版；test：独立标识的测试版。 */
   channel: AppChannel;
+  material: WindowMaterial;
 }
 
 export function getAppInfo(): Promise<AppInfo> {

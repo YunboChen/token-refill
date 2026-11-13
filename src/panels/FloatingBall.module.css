@@ -600,3 +600,29 @@
   background: var(--overview-sheet);
   box-shadow: var(--overview-shadow);
 }
+
+/* ---------- Windows Fluent 2 材质 ----------
+   弹层使用 Acrylic；不支持透明效果时回退实色。 */
+:global(html[data-platform='windows']) .popover {
+  border-color: var(--panel-border);
+  border-radius: 8px;
+  background: var(--panel-glass);
+}
+
+:global(html[data-platform='windows']) .planLogo {
+  border-radius: 8px;
+}
+
+:global(html[data-platform='windows'][data-material='solid']) .popover {
+  background: var(--surface);
+}
+
+:global(html[data-platform='windows']) .ball {
+  background: radial-gradient(
+    circle at 32% 22%,
+    var(--ball-glass-start) 0%,
+    var(--ball-glass-end) 68%
+  );
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
