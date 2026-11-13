@@ -29,6 +29,8 @@ macOS 安装包采用 ad-hoc 签名，尚未公证。Windows 安装版与便携�
 
 正式版会检查更新。macOS 和 Windows 安装版可在设置中分别确认下载和安装，Windows 便携版通过发布页手动更新。
 
+大版本改造期间还会发布 `Token Refill Next` 预览版（GitHub prerelease，文件名以 `Token.Refill_Next_` 开头）。它使用独立的应用标识，可与正式版同时安装，不参与应用内更新；预览版仅用于验证外观与改造内容，稳定使用请安装正式版。
+
 ## 支持的服务
 
 | 服务 | 接入方式 |
@@ -60,10 +62,11 @@ Codex 授权由官方 CLI 管理，独立账户使用隔离的 `CODEX_HOME`。�
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm tauri:dev:test
+pnpm tauri:dev:test   # 测试渠道
+pnpm tauri:dev:next   # Next 预览渠道
 ```
 
-本地测试版与正式版使用独立数据目录。已安装的 CI 测试包与本地测试版共用数据目录和单实例锁，请分别运行。
+正式版、测试版与 Next 预览版使用各自独立的数据目录与单实例锁。已安装的 CI 测试包 / Next 包与对应的本地开发渠道共用数据目录，请分别运行。
 
 ```sh
 pnpm build

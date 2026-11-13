@@ -12,12 +12,14 @@
   - Windows `%APPDATA%\dev.tokenrefill.desktop\`
   - 目录内：`state.json`（设置、账户、额度快照、提醒去重、悬浮球当前套餐与位置）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）、`workbuddy-profiles/<accountId>/`（WorkBuddy 访问令牌与续期令牌）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
   - `logs/` 只写固定文案、窗口标签与耗时，用途是排查发布包没有控制台（Windows GUI 子系统丢弃 `eprintln!`）时的“点了没反应”。令牌、Cookie、邮箱、密钥、请求内容一律不得写入。
-- 分发渠道分正式版（pro）与测试版（test），共用代码、靠 `src-tauri/tauri.test.conf.json` 覆盖身份：
+  - 测试版与 Next 预览版的数据目录分别是 `.../dev.tokenrefill.desktop.test/` 与 `.../dev.tokenrefill.desktop.next/`，内部结构相同，三者互不共享状态与凭证。
+- 分发渠道分正式版（pro）、测试版（test）与 Next 预览版（next），共用代码，靠 `src-tauri/tauri.test.conf.json` / `src-tauri/tauri.next.conf.json` 覆盖身份：
   - 正式版：`productName` `Token Refill`、identifier `dev.tokenrefill.desktop`、版本 `X.Y.Z`，由 `release.yml` 发布并参与应用内更新。
   - 测试版：`productName` `Token Refill Test`、identifier `dev.tokenrefill.desktop.test`、版本 `<X.Y.Z>-test.g<7位提交>`（CI 构建时注入，不写回源文件），数据目录为 `.../dev.tokenrefill.desktop.test/`；不检查更新、不提供应用内更新，只从 `build-test` artifact 下载。
-  - 渠道由 Rust `channel.rs` 按 identifier 是否以 `.test` 结尾判定；前端只消费 `get_app_info().channel`。测试配置不得自带 `version`，正式配置不得使用测试 identifier 或 prerelease 版本（CI 两侧都有断言）。
-  - 本地 `pnpm tauri:dev:test` 使用测试标识，可与已安装的正式版同时运行；它与 CI 测试包共用测试数据目录和单实例锁，不要同时启动。
-  - 两个版本共用上游 Codex OAuth 的固定回调端口 1455/1457，不要同时发起 Codex 授权；百炼回调使用临时端口，无此限制。
+  - Next 预览版：`productName` `Token Refill Next`、identifier `dev.tokenrefill.desktop.next`、版本 `<X.Y.Z>-next.<序号>`（CI 构建时注入，不写回源文件），数据目录为 `.../dev.tokenrefill.desktop.next/`；不检查更新、不提供应用内更新，由 `release-next.yml` 发布为 GitHub prerelease，可与正式版同时安装。
+  - 渠道由 Rust `channel.rs` 按 identifier 是否以 `.test` / `.next` 结尾判定；前端只消费 `get_app_info().channel`。测试版与 Next 配置不得自带 `version`，正式配置不得使用测试 / Next identifier 或 prerelease 版本（CI 两侧都有断言）。
+  - 本地 `pnpm tauri:dev:test` / `pnpm tauri:dev:next` 使用独立标识，可与已安装的正式版同时运行；它们分别与 CI 测试包 / Next 包共用各自数据目录和单实例锁，不要同时启动同一渠道。
+  - 三个版本共用上游 Codex OAuth 的固定回调端口 1455/1457，不要同时发起 Codex 授权；百炼回调使用临时端口，无此限制。
 - 已实现业务：Codex 订阅额度查询、多账户官方浏览器授权、百炼 / WorkBuddy / OpenCode Go / Command Code / Antigravity 额度查询、中转站（New API / Sub2API）密钥与账户额度查询、从 cc-switch 与 Claude Code / Codex 当前配置手动扫描并勾选导入中转站候选、菜单栏常驻与快速查看面板、桌面悬浮球（默认关闭，设置中开启）、系统提醒、开机自启、版本检查、应用内下载与安装更新（仅 NSIS 安装版，下载与安装两段确认）。
 - 尚未实现：系统级凭证存储、Windows 免安装 exe 的原地更新。
 - 菜单栏行为是产品约定：关闭主窗口只隐藏，应用继续常驻并后台刷新；退出只通过菜单栏菜单或面板中的退出入口。菜单栏面板是独立窗口 `tray-panel`（380×560 点、无边框、透明、置顶），与主窗口共用同一份状态与事件；不要把它扩展成第二个带侧栏的管理窗口。面板在配置里是 `create: false`，第一次点开才创建；面板与主窗口隐藏 60 秒后销毁 WebView 以释放内存，重新打开时重建并等待页面加载。登录流程或更新下载进行期间不得销毁主窗口（前端弹窗与进度只存在于该窗口）。销毁最后一个窗口会让系统请求退出，必须在 `RunEvent::ExitRequested` 里拦截（仅拦截“没有窗口且非程序化退出”的情况），否则应用会在空闲销毁后自行结束。
@@ -89,6 +91,7 @@
 - 应用内更新的 minisign 私钥存放在 GitHub Secrets（`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`），不进仓库、不写日志；`createUpdaterArtifacts` 只在 CI 用 `--config` 打开，本地构建不依赖私钥。私钥丢失只能换公钥并要求用户手动重装，发布前确认已离线备份。
 - Release 构建成功后直接发布（`draft: false`），不设草稿确认环节；推送 `main` 前必须自行确认版本号、产物与签名状态，发布即对用户可见。
 - 测试包走 `.github/workflows/build-test.yml`（手动触发，用 `ref` 输入选择任意分支与平台），只上传 workflow artifact，不创建 Release、不打 tag、不改版本号；验证分支不必先合入 `main`，也不得用 `release.yml` 的手动触发代替测试构建。GitHub 只为默认分支（`main`）登记手动触发入口，该工作流文件需保留在 `main` 上；目标分支靠 `ref` 指定，因此不必包含该文件。
+- Next 预览版走 `.github/workflows/release-next.yml`：在 `next` 分支推送 `v<X.Y.Z>-next.<序号>` tag 即可构建并发布 GitHub prerelease；也可在 `main` 上手动触发。它使用 `tauri.next.conf.json` 的独立身份，注入版本但不写回源文件，不生成 updater 产物与 `latest.json`，不参与应用内更新。`release.yml` 会跳过 `-next.` 标签，避免用正式 identifier 再构建一次；不要用 `release.yml` 手动触发来发 Next 包。
 - 版本检查只做「比较 + 提示」；应用内更新由用户分别确认下载与安装，更新包经 minisign 校验后才替换。不做后台静默安装，也没有自动回滚：更新出问题只能发新版本或让用户手动重装。
 
 ## 6. 开发与验证

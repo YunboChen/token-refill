@@ -138,8 +138,8 @@ fn map_request_error(error: ureq::Error) -> String {
     }
 }
 
-/// 测试渠道的本地状态：不请求 GitHub，也不提供任何下载/安装入口。
-fn test_channel_status(current: &str) -> UpdateStatus {
+/// 测试版 / Next 预览版的本地状态：不请求 GitHub，也不提供任何下载/安装入口。
+fn preview_channel_status(current: &str) -> UpdateStatus {
     UpdateStatus {
         current_version: current.to_string(),
         latest_version: None,
@@ -151,10 +151,12 @@ fn test_channel_status(current: &str) -> UpdateStatus {
     }
 }
 
-/// 读取最新正式 Release 并与当前版本比较；测试渠道直接返回本地状态。
+/// 读取最新正式 Release 并与当前版本比较；测试版与 Next 预览版直接返回本地状态。
 pub fn check_for_update(app: &AppHandle) -> Result<UpdateStatus, String> {
-    if crate::channel::is_test(app) {
-        return Ok(test_channel_status(&app.package_info().version.to_string()));
+    if crate::channel::is_preview(app) {
+        return Ok(preview_channel_status(
+            &app.package_info().version.to_string(),
+        ));
     }
 
     let current = app.package_info().version.to_string();
@@ -188,9 +190,9 @@ pub fn check_for_update(app: &AppHandle) -> Result<UpdateStatus, String> {
 
 /// Windows 的免安装单文件 exe 没有安装目录，NSIS 更新器无法原地替换；
 /// 只有通过 NSIS 安装、且当前 exe 位于注册表记录的安装目录时才启用应用内更新。
-/// 测试渠道永远不支持应用内更新，避免被正式版更新包替换。
+/// 测试版与 Next 预览版永远不支持应用内更新，避免被正式版更新包替换。
 pub fn self_update_supported(app: &AppHandle) -> bool {
-    if crate::channel::is_test(app) {
+    if crate::channel::is_preview(app) {
         return false;
     }
     #[cfg(windows)]
@@ -237,8 +239,10 @@ fn updater_for(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String>
 /// 或远端响应带进界面。
 #[tauri::command]
 pub async fn download_update(app: AppHandle) -> Result<String, String> {
-    if crate::channel::is_test(&app) {
-        return Err("测试版不支持应用内更新，请下载新的测试包后手动安装。".to_string());
+    if crate::channel::is_preview(&app) {
+        return Err(
+            "测试版与 Next 预览版不支持应用内更新，请下载新的预览包后手动安装。".to_string(),
+        );
     }
     if !self_update_supported(&app) {
         return Err("当前是免安装版本，请在发布页下载新版本后手动替换。".to_string());
@@ -344,8 +348,10 @@ pub fn downloaded_update_version(store: tauri::State<'_, UpdateStore>) -> Option
 /// 安装已下载的更新。macOS 替换应用包后重启；Windows 启动 NSIS 安装器并退出。
 #[tauri::command]
 pub async fn install_update(app: AppHandle) -> Result<(), String> {
-    if crate::channel::is_test(&app) {
-        return Err("测试版不支持应用内更新，请下载新的测试包后手动安装。".to_string());
+    if crate::channel::is_preview(&app) {
+        return Err(
+            "测试版与 Next 预览版不支持应用内更新，请下载新的预览包后手动安装。".to_string(),
+        );
     }
     let downloaded = {
         let store = app.state::<UpdateStore>();
@@ -468,7 +474,7 @@ mod tests {
 
     #[test]
     fn test_channel_never_offers_update_or_self_update() {
-        let status = test_channel_status("0.2.6-test.a1b2c3d");
+        let status = preview_channel_status("0.2.6-test.a1b2c3d");
 
         assert_eq!(status.current_version, "0.2.6-test.a1b2c3d");
         assert!(status.latest_version.is_none());
