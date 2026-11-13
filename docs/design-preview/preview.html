@@ -1,0 +1,2121 @@
+<title>Token Refill 外观方案</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+/* ── 工作台：只服务于对比，不参与产品主题 ─────────────────────────── */
+:root {
+  color-scheme: dark;
+  --studio-bg: #0e1014;
+  --studio-panel: #14171d;
+  --studio-panel-2: #1a1e26;
+  --studio-line: rgba(255, 255, 255, 0.09);
+  --studio-text: #eef1f6;
+  --studio-muted: #98a1b0;
+  --studio-accent: #79b8ff;
+  --studio-font: Inter, "Noto Sans SC", system-ui, -apple-system, "PingFang SC", sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--studio-bg);
+  color: var(--studio-text);
+  font-family: var(--studio-font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+.page {
+  max-width: 1520px;
+  margin: 0 auto;
+  padding-left: max(20px, env(safe-area-inset-left, 0px));
+  padding-right: max(20px, env(safe-area-inset-right, 0px));
+  padding-block: 8px 34px;
+}
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ── 页头与切换 ───────────────────────────────────────────────────── */
+.masthead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 22px;
+  flex-wrap: wrap;
+  padding-block: 24px 20px;
+}
+.mastBrand { display: flex; align-items: center; gap: 13px; min-width: 0; }
+.mastLogo { width: 40px; height: 44px; object-fit: contain; }
+.masthead h1 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.022em;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+.mastSub { margin: 4px 0 0; font-size: 12.5px; color: var(--studio-muted); }
+.controls { display: flex; gap: 9px; flex-wrap: wrap; }
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--studio-line);
+  border-radius: 11px;
+  background: var(--studio-panel);
+}
+.seg button {
+  appearance: none;
+  border: 0;
+  padding: 6px 13px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--studio-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 140ms ease-out, background-color 140ms ease-out;
+}
+.seg button:hover { color: var(--studio-text); }
+.seg button[aria-pressed="true"] {
+  background: var(--studio-panel-2);
+  color: var(--studio-text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.seg button:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: 2px; }
+
+/* ── 舞台 ─────────────────────────────────────────────────────────── */
+.stageSection { display: flex; flex-direction: column; gap: 9px; }
+.stageMeta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: var(--studio-muted);
+}
+#caption { color: var(--studio-text); font-weight: 550; }
+.stageScroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--studio-line);
+  border-radius: 20px;
+  background: #0a0c10;
+  scrollbar-width: thin;
+}
+.stageFrame { position: relative; overflow: hidden; }
+.wall { position: absolute; inset: 0; }
+.wall::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(130% 110% at 50% -10%, transparent 42%, rgba(0, 0, 0, 0.14));
+}
+.stageFrame[data-platform="macos"][data-mode="light"] .wall {
+  background:
+    radial-gradient(760px 520px at 10% 4%, rgba(248, 214, 230, 0.9), transparent 62%),
+    radial-gradient(820px 560px at 78% 8%, rgba(198, 220, 252, 0.95), transparent 66%),
+    radial-gradient(700px 520px at 55% 100%, rgba(186, 230, 221, 0.75), transparent 64%),
+    linear-gradient(155deg, #e9eef8 0%, #dfe7f2 48%, #f0e9f1 100%);
+}
+.stageFrame[data-platform="macos"][data-mode="dark"] .wall {
+  background:
+    radial-gradient(760px 520px at 10% 4%, rgba(58, 42, 92, 0.85), transparent 64%),
+    radial-gradient(820px 560px at 82% 10%, rgba(32, 63, 112, 0.9), transparent 66%),
+    radial-gradient(760px 520px at 58% 100%, rgba(15, 74, 72, 0.7), transparent 64%),
+    linear-gradient(155deg, #0b101b, #0c1220 52%, #121020);
+}
+.stageFrame[data-platform="windows"][data-mode="light"] .wall {
+  background:
+    radial-gradient(720px 520px at 12% 10%, rgba(255, 216, 194, 0.95), transparent 62%),
+    radial-gradient(760px 560px at 68% 6%, rgba(203, 224, 255, 0.98), transparent 64%),
+    radial-gradient(680px 520px at 92% 88%, rgba(230, 212, 255, 0.85), transparent 62%),
+    linear-gradient(150deg, #eef2f8, #e9eef7 55%, #f4f0f7);
+}
+.stageFrame[data-platform="windows"][data-mode="dark"] .wall {
+  background:
+    radial-gradient(720px 520px at 12% 10%, rgba(74, 42, 28, 0.75), transparent 62%),
+    radial-gradient(760px 560px at 70% 6%, rgba(23, 50, 77, 0.9), transparent 64%),
+    radial-gradient(680px 520px at 92% 88%, rgba(60, 35, 80, 0.8), transparent 62%),
+    linear-gradient(150deg, #15171c, #131519 55%, #17141a);
+}
+.stageFit {
+  position: relative;
+  width: calc(1440px * var(--k, 1));
+  height: calc(840px * var(--k, 1));
+  margin: 0 auto;
+}
+.artboard {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1440px;
+  height: 840px;
+  transform: scale(var(--k, 1));
+  transform-origin: top left;
+}
+
+/* ── 现有设计 token：与原应用完全一致 ─────────────────────────────── */
+.stageFrame[data-platform] {
+  --radius-card: 14px;
+  --radius-control: 9px;
+  --radius-pill: 999px;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+.stageFrame[data-platform="macos"] {
+  --app-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+}
+.stageFrame[data-platform="windows"] {
+  --app-font: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", Inter, "Noto Sans SC", sans-serif;
+}
+
+.stageFrame[data-platform="macos"][data-mode="light"],
+.stageFrame[data-platform="windows"][data-mode="light"] {
+  --background: #f5f6f8;
+  --surface: #ffffff;
+  --sunken: #eceff3;
+  --hover: rgb(15 23 42 / 0.04);
+  --text: #14181f;
+  --muted: #5a6472;
+  --border: #e3e7ed;
+  --border-strong: #cbd3dd;
+  --accent: #0b63ce;
+  --accent-strong: #0f66d6;
+  --accent-strong-hover: #0a57b8;
+  --accent-text: #f7faff;
+  --accent-soft: #e7eefb;
+  --ok: #167a4a;
+  --ok-soft: #e6f4ec;
+  --warning: #b06f00;
+  --warning-soft: #fdf1db;
+  --danger: #b4233b;
+  --danger-soft: #fbeaed;
+  --focus: #0b63ce;
+  --accent-ring: rgb(11 99 206 / 0.14);
+  --wordmark-filter: none;
+  --hud-accent: var(--accent-strong);
+  --hud-warning: var(--warning);
+  --hud-danger: var(--danger);
+  --hud-muted: var(--muted);
+  --ball-fill-start: #ffffff;
+  --ball-fill-end: #e3e8ef;
+  --ball-border: rgb(15 23 42 / 0.22);
+  --ball-shadow: inset 0 1px 0 rgb(255 255 255 / 0.9), inset 0 -8px 16px rgb(15 23 42 / 0.05);
+  --ball-text: #14181f;
+  --ball-logo: #2b3440;
+  --ball-detail: #5a6472;
+  --ball-track: rgb(15 23 42 / 0.14);
+  --ball-spinner: rgb(15 23 42 / 0.42);
+}
+.stageFrame[data-platform="macos"][data-mode="dark"],
+.stageFrame[data-platform="windows"][data-mode="dark"] {
+  --background: #0a0d11;
+  --surface: #12171d;
+  --sunken: #0c1015;
+  --hover: rgb(255 255 255 / 0.045);
+  --text: #e7ecf3;
+  --muted: #8d98a7;
+  --border: #1e252e;
+  --border-strong: #2b3440;
+  --accent: #79b8ff;
+  --accent-strong: #3f8ff5;
+  --accent-strong-hover: #58a0ff;
+  --accent-text: #06121f;
+  --accent-soft: #18293f;
+  --ok: #4fbf82;
+  --ok-soft: #13281d;
+  --warning: #f0b429;
+  --warning-soft: #332912;
+  --danger: #ff8b9c;
+  --danger-soft: #341c23;
+  --focus: #79b8ff;
+  --accent-ring: rgb(121 184 255 / 0.18);
+  --wordmark-filter: brightness(1.12) saturate(1.02);
+  --hud-accent: var(--accent-strong);
+  --hud-warning: var(--warning);
+  --hud-danger: var(--danger);
+  --hud-muted: var(--muted);
+  --ball-fill-start: #1c2a3c;
+  --ball-fill-end: #0c121b;
+  --ball-border: rgb(148 180 220 / 0.16);
+  --ball-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07);
+  --ball-text: #eef4ff;
+  --ball-logo: #dbe8fb;
+  --ball-detail: #93a4ba;
+  --ball-track: rgb(255 255 255 / 0.13);
+  --ball-spinner: rgb(255 255 255 / 0.42);
+}
+
+/* ── 平台材质：只加在窗口与浮层上 ─────────────────────────────────── */
+.stageFrame[data-platform="macos"][data-mode="light"] {
+  --shell-glass: rgba(255, 255, 255, 0.52);
+  --shell-border: rgba(255, 255, 255, 0.66);
+  --panel-glass: rgba(248, 250, 253, 0.72);
+  --panel-chrome: rgba(255, 255, 255, 0.52);
+  --panel-card: rgba(255, 255, 255, 0.72);
+  --panel-border: rgba(255, 255, 255, 0.55);
+  --ball-glass-start: rgba(255, 255, 255, 0.95);
+  --ball-glass-end: rgba(227, 232, 239, 0.58);
+  --sheet: #fbfcfd;
+  --sheet-border: rgba(15, 23, 42, 0.07);
+  --glass-button: rgba(255, 255, 255, 0.42);
+  --app-shadow: 0 42px 100px rgba(9, 17, 32, 0.34), 0 6px 20px rgba(9, 17, 32, 0.16);
+}
+.stageFrame[data-platform="macos"][data-mode="dark"] {
+  --shell-glass: rgba(18, 23, 30, 0.55);
+  --shell-border: rgba(255, 255, 255, 0.14);
+  --panel-glass: rgba(18, 23, 29, 0.74);
+  --panel-chrome: rgba(22, 27, 35, 0.56);
+  --panel-card: rgba(28, 34, 43, 0.7);
+  --panel-border: rgba(255, 255, 255, 0.12);
+  --ball-glass-start: rgba(43, 58, 80, 0.92);
+  --ball-glass-end: rgba(12, 18, 27, 0.62);
+  --sheet: #10151c;
+  --sheet-border: rgba(255, 255, 255, 0.06);
+  --glass-button: rgba(255, 255, 255, 0.08);
+  --app-shadow: 0 46px 110px rgba(0, 0, 0, 0.55), 0 6px 22px rgba(0, 0, 0, 0.3);
+}
+.stageFrame[data-platform="windows"][data-mode="light"] {
+  --mica: rgba(243, 246, 250, 0.6);
+  --shell-border: rgba(255, 255, 255, 0.5);
+  --panel-glass: rgba(250, 250, 250, 0.74);
+  --panel-chrome: rgba(252, 252, 252, 0.62);
+  --panel-card: rgba(255, 255, 255, 0.8);
+  --panel-border: rgba(0, 0, 0, 0.1);
+  --ball-glass-start: rgba(255, 255, 255, 0.88);
+  --ball-glass-end: rgba(227, 232, 239, 0.62);
+  --app-shadow: 0 34px 78px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+.stageFrame[data-platform="windows"][data-mode="dark"] {
+  --mica: rgba(28, 30, 34, 0.66);
+  --shell-border: rgba(255, 255, 255, 0.12);
+  --panel-glass: rgba(40, 40, 40, 0.76);
+  --panel-chrome: rgba(44, 44, 44, 0.64);
+  --panel-card: rgba(52, 52, 52, 0.72);
+  --panel-border: rgba(255, 255, 255, 0.1);
+  --ball-glass-start: rgba(43, 58, 80, 0.9);
+  --ball-glass-end: rgba(12, 18, 27, 0.7);
+  --app-shadow: 0 38px 88px rgba(0, 0, 0, 0.5), 0 2px 10px rgba(0, 0, 0, 0.32);
+}
+
+/* ── 主窗口外壳：内容布局不动，只换窗口材质 ───────────────────────── */
+.app {
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  display: flex;
+  flex-direction: column;
+  width: 960px;
+  height: 780px;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--app-font);
+  font-size: 13px;
+  box-shadow: var(--app-shadow);
+}
+.stageFrame[data-platform="macos"] .app {
+  border: 1px solid var(--shell-border);
+  border-radius: 16px;
+  background: var(--shell-glass);
+  -webkit-backdrop-filter: blur(42px) saturate(180%);
+  backdrop-filter: blur(42px) saturate(180%);
+}
+.stageFrame[data-platform="windows"] .app {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--mica);
+  -webkit-backdrop-filter: blur(46px) saturate(140%);
+  backdrop-filter: blur(46px) saturate(140%);
+}
+.stageFrame[data-platform="windows"] .app::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.14;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+  background-size: 120px 120px;
+}
+.app > * { position: relative; z-index: 1; }
+
+/* Windows 自绘标题栏：高度与现有实现一致（36px） */
+.winTitle { display: none; }
+.stageFrame[data-platform="windows"] .winTitle {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: 36px;
+  padding-left: 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.winTitle .appIcon { width: 16px; height: 16px; margin-right: 8px; object-fit: contain; }
+.winName { font-size: 12px; font-weight: 500; letter-spacing: 0.01em; }
+.caption { display: flex; height: 100%; margin-left: auto; }
+.capBtn {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 36px;
+  color: var(--text);
+  transition: background-color 100ms ease-out, color 100ms ease-out;
+}
+.capBtn .icon { width: 10px; height: 10px; stroke-width: 1.2; }
+.capBtn:hover { background: var(--hover); }
+.capBtn.close:hover { background: #e81123; color: #ffffff; }
+
+.appBody { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+
+/* ── 侧栏：现有导航结构，只把底色换成玻璃 / Mica ─────────────────── */
+.sidebar {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  width: 212px;
+  padding: 0 14px 14px;
+  border-right: 1px solid var(--border);
+}
+.stageFrame[data-platform="macos"] .sidebar {
+  background: transparent;
+  border-right: 0;
+}
+.stageFrame[data-platform="windows"] .sidebar {
+  background: transparent;
+}
+.titlebarSafeArea { display: none; }
+.stageFrame[data-platform="macos"] .titlebarSafeArea {
+  display: block;
+  flex-shrink: 0;
+  height: 44px;
+}
+.traffic {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding-left: 8px;
+}
+.traffic i {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.18);
+}
+.t-red { background: #ff5f57; }
+.t-yel { background: #febc2e; }
+.t-grn { background: #28c840; }
+
+.wordmark {
+  display: block;
+  width: calc(100% - 4px);
+  max-width: 136px;
+  height: auto;
+  margin: 2px 0 20px 4px;
+  filter: var(--wordmark-filter);
+}
+.stageFrame[data-platform="windows"] .wordmark { margin-top: 14px; }
+
+.nav { position: relative; display: grid; gap: 2px; }
+.navItem { height: 34px; }
+.navLabel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px 7px 8px;
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color 150ms ease-out, background-color 150ms ease-out;
+}
+.navIcon { width: 17px; height: 17px; }
+.navItem:hover .navLabel { color: var(--text); background: var(--hover); }
+.navItem.active .navLabel { color: var(--accent); background: var(--accent-soft); }
+
+.sidebarFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+  padding: 12px 8px 0;
+  border-top: 1px solid var(--border);
+}
+.versionGroup { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.version {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.updateChip {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 3px;
+  min-height: 22px;
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+.updateChip .icon { width: 11px; height: 11px; }
+
+/* ── 主区域：页头与内容保持现有结构与底色 ─────────────────────────── */
+.main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--background);
+}
+.pageHeader {
+  flex-shrink: 0;
+  padding: 22px 28px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+}
+.panelTitle {
+  margin: 0;
+  font-size: 27px;
+  font-weight: 600;
+  letter-spacing: -0.022em;
+  line-height: 1.2;
+}
+.subtitle {
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.65;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mainScroll {
+  flex: 1;
+  min-height: 0;
+  padding: 20px 28px 32px;
+  overflow-y: auto;
+  overscroll-behavior: none;
+  scrollbar-width: thin;
+}
+
+/* macOS：玻璃工具栏 + 实色内容浮卡；卡内仍是现有总览设计 */
+.stageFrame[data-platform="macos"] .main {
+  background: transparent;
+  overflow: visible;
+}
+.stageFrame[data-platform="macos"] .pageHeader {
+  display: flex;
+  align-items: center;
+  height: 56px;
+  padding: 0 18px;
+  border-bottom: 0;
+  background: transparent;
+}
+.stageFrame[data-platform="macos"] .pageHeaderInner {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.macToolbarRight { display: none; }
+.stageFrame[data-platform="macos"] .macToolbarRight {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 9px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.macRefreshBtn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--shell-border);
+  border-radius: 7px;
+  background: var(--glass-button);
+  color: var(--text);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+.macRefreshBtn .icon { width: 13px; height: 13px; }
+.stageFrame[data-platform="macos"][data-mode="dark"] .macRefreshBtn {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+.stageFrame[data-platform="macos"] .panelTitle {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+.stageFrame[data-platform="macos"] .subtitle {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.stageFrame[data-platform="macos"] .mainScroll {
+  margin: 0 8px 8px 0;
+  padding: 18px 22px 22px;
+  border: 0.5px solid var(--sheet-border);
+  border-radius: 14px;
+  background: var(--sheet);
+  box-shadow: 0 12px 32px rgba(9, 17, 32, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+.stageFrame[data-platform="macos"][data-mode="dark"] .mainScroll {
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.mainScroll > * { width: 100%; max-width: 920px; margin-inline: auto; }
+
+/* ── 总览类别切换：沿用现有分段控件 ───────────────────────────────── */
+.overviewTabs {
+  position: relative;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  max-width: 100%;
+  gap: 2px;
+  margin-bottom: 20px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+}
+.pillThumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  z-index: 0;
+  width: calc((100% - 6px - (var(--pill-count) - 1) * 2px) / var(--pill-count));
+  border-radius: 7px;
+  background: var(--accent-strong);
+  box-shadow: 0 1px 2px rgb(15 20 28 / 0.18);
+  transform: translateX(calc(var(--pill-index) * (100% + 2px)));
+}
+.overviewTab {
+  position: relative;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.overviewTab .icon { width: 15px; height: 15px; }
+.overviewTab.active { color: var(--accent-text); }
+
+/* ── 平台分组与账户卡：现有结构与尺寸 ─────────────────────────────── */
+.overviewStack { display: grid; gap: 26px; margin-top: 2px; }
+.overviewStack > * + * { padding-top: 24px; border-top: 1px solid var(--border); }
+.platformGroup { min-width: 0; }
+.platformHeading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 4px;
+}
+.platformBadge {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 0;
+  color: var(--muted);
+  background: transparent;
+}
+.platformBadge .icon { width: 19px; height: 19px; }
+.platformIdentity { display: grid; flex: 1; gap: 2px; min-width: 0; }
+.platformNameRow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.platformName {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  line-height: 1.3;
+}
+.platformVendor { color: var(--muted); font-size: 11px; }
+.platformDescription {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.platformAside { display: flex; flex-shrink: 0; align-items: center; gap: 10px; }
+.platformCount { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.reorderHandle {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: var(--muted);
+  opacity: 0.6;
+}
+.reorderHandle .icon { width: 14px; height: 14px; }
+
+.quotaBoard {
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+.quotaAccount { padding: 18px 20px 20px; }
+.quotaAccount + .quotaAccount { border-top: 1px solid var(--border); }
+.quotaAccountHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.quotaAccountToggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 26px;
+  text-align: left;
+}
+.quotaAccountInfo { display: grid; flex: 0 1 auto; gap: 4px; min-width: 0; }
+.quotaAccountIdentity {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 132px;
+}
+.quotaAccountName {
+  overflow: hidden;
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: 15.5px;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.planTier {
+  flex-shrink: 0;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  background: var(--sunken);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+}
+.quotaAccountMeta {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.quotaSummary {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quotaAccountTools { display: flex; flex-shrink: 0; align-items: center; gap: 2px; }
+.updatedAt { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.refreshButton {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  color: var(--muted);
+}
+.refreshButton .icon { width: 16px; height: 16px; }
+.chevronButton {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: var(--muted);
+}
+.chevronButton .icon { width: 13px; height: 13px; }
+.chevronButton.down .icon { transform: rotate(90deg); }
+
+.quotaBody { overflow: hidden; }
+.quotaBodyInner { display: grid; gap: 14px; padding-top: 14px; }
+.metricGrid { display: flex; align-items: stretch; }
+.metric {
+  display: grid;
+  flex: 1 1 0;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+  padding-inline: 14px;
+}
+.metric:first-child { padding-left: 0; }
+.metric:last-child { padding-right: 0; }
+.metricDivider {
+  flex: 0 0 1px;
+  align-self: stretch;
+  margin-block: 16px;
+  background: var(--border);
+}
+.metricDivider.strong { margin-block: 0; }
+.metricEyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  min-height: 17px;
+}
+.metricProduct {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.metricLabel {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quotaBarRow { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.quotaPercent {
+  flex-shrink: 0;
+  color: var(--text);
+  font-size: 21px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+.quotaBarTrack {
+  display: block;
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border);
+}
+.quotaBarFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-strong);
+}
+.quotaBarRow[data-level="warning"] .quotaPercent { color: var(--warning); }
+.quotaBarRow[data-level="danger"] .quotaPercent { color: var(--danger); }
+.quotaBarRow[data-level="unknown"] .quotaPercent { color: var(--muted); }
+.quotaBarRow[data-level="warning"] .quotaBarFill { background: var(--warning); }
+.quotaBarRow[data-level="danger"] .quotaBarFill { background: var(--danger); }
+.metricMeta {
+  display: grid;
+  gap: 1px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+.metricMetaPart { white-space: nowrap; }
+
+/* ── 菜单栏面板：现有分区与卡片不变，只换表面材质 ─────────────────── */
+.tray {
+  position: absolute;
+  left: 1000px;
+  top: 20px;
+  display: flex;
+  flex-direction: column;
+  width: 380px;
+  height: 560px;
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+  border-radius: 13px;
+  background: var(--panel-glass);
+  color: var(--text);
+  font-family: var(--app-font);
+  box-shadow: 0 28px 66px rgba(9, 17, 32, 0.3), 0 2px 7px rgba(9, 17, 32, 0.12);
+  -webkit-backdrop-filter: blur(46px) saturate(180%);
+  backdrop-filter: blur(46px) saturate(180%);
+}
+.stageFrame[data-platform="windows"] .tray::after,
+.stageFrame[data-platform="windows"] .popover::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.15;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+  background-size: 120px 120px;
+}
+.tray > *, .popover > * { position: relative; z-index: 1; }
+
+.trayHeader {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 9px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-chrome);
+}
+.trayBrand { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
+.trayWordmark {
+  align-self: flex-start;
+  display: block;
+  width: auto;
+  height: 19px;
+  filter: var(--wordmark-filter);
+}
+.trayUpdated {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.refreshAll {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.refreshAll .icon { width: 13px; height: 13px; }
+
+.trayScroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 12px 12px 14px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.traySection { display: flex; flex-shrink: 0; flex-direction: column; }
+.sectionHeadRow { display: flex; align-items: center; gap: 2px; }
+.sectionHead {
+  display: flex;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  cursor: pointer;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 4px;
+  border-radius: 8px;
+  text-align: left;
+}
+.sectionHead:hover { background: var(--hover); }
+.sectionBadge {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+.sectionBadge .icon { width: 16px; height: 16px; }
+.sectionName {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sectionCount {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.chevron {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--muted);
+  transform: rotate(-90deg);
+}
+.chevron.collapsed { transform: rotate(90deg); }
+.chevron .icon { width: 12px; height: 12px; }
+
+.cardsWrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  padding-top: 0;
+  visibility: hidden;
+  opacity: 0;
+}
+.cardsWrap.open {
+  grid-template-rows: 1fr;
+  padding-top: 7px;
+  visibility: visible;
+  opacity: 1;
+}
+.cards { display: flex; flex-direction: column; gap: 7px; overflow: hidden; min-height: 0; }
+.trayAccount {
+  padding: 9px 11px 10px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--panel-card);
+}
+.accountHead { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.accountName {
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.accountTime {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.trayRefresh {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--muted);
+}
+.trayRefresh .icon { width: 13px; height: 13px; }
+.tier, .eyebrow {
+  display: block;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.tier { margin-top: 3px; }
+.eyebrow { margin-bottom: 4px; }
+.quotaGroup { margin-top: 8px; }
+.trayRow {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr) max-content;
+  align-items: center;
+  column-gap: 9px;
+  row-gap: 3px;
+}
+.trayLabel {
+  grid-area: 1 / 1;
+  overflow: hidden;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trayBar {
+  grid-area: 1 / 2;
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+}
+.trayBarFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-strong);
+}
+.trayPercent {
+  grid-area: 1 / 3;
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  text-align: right;
+  white-space: nowrap;
+}
+.trayMeta {
+  display: block;
+  overflow: hidden;
+  grid-area: 2 / 2 / 3 / 4;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.trayRow[data-level="warning"] .trayBarFill { background: var(--warning); }
+.trayRow[data-level="danger"] .trayBarFill { background: var(--danger); }
+.trayRow[data-level="warning"] .trayPercent { color: var(--warning); }
+.trayRow[data-level="danger"] .trayPercent { color: var(--danger); }
+
+.trayFooter {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--panel-chrome);
+}
+.trayVersion { color: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.footerActions { display: inline-flex; align-items: center; gap: 12px; margin-left: auto; }
+.openButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.openButton .icon { width: 14px; height: 14px; }
+.quitButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.quitButton .icon { width: 14px; height: 14px; }
+.footerDivider { width: 1px; height: 15px; background: var(--border-strong); }
+
+/* ── 悬浮球：几何、文字层级与现有实现一致，只换球体材质 ───────────── */
+.ball {
+  position: absolute;
+  left: 1010px;
+  top: 610px;
+  z-index: 4;
+  width: 60px;
+  height: 60px;
+  border: 1px solid var(--ball-border);
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 22%, var(--ball-glass-start) 0%, var(--ball-glass-end) 68%);
+  box-shadow: var(--ball-shadow);
+  color: var(--ball-text);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  backdrop-filter: blur(16px) saturate(160%);
+  --ball-accent: var(--hud-warning);
+}
+.ball .ring { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.ball .track { fill: none; stroke: var(--ball-track); stroke-width: 3.5; }
+.ball .progress { fill: none; stroke: var(--ball-accent); stroke-linecap: round; stroke-width: 3.5; }
+.ball .center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  pointer-events: none;
+}
+.ball .logo { display: flex; align-items: center; justify-content: center; height: 12px; color: var(--ball-logo); }
+.ball .logo .icon { width: 12px; height: 12px; }
+.ball .value {
+  max-width: 48px;
+  overflow: hidden;
+  font-size: 16px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+.ball .detail { color: var(--ball-detail); font-size: 8px; font-weight: 600; line-height: 1; }
+
+/* ── 详情弹层：现有 hover 卡结构 ───────────────────────────────────── */
+.popover {
+  position: absolute;
+  left: 1090px;
+  top: 600px;
+  z-index: 3;
+  width: 340px;
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  background: var(--panel-glass);
+  color: var(--text);
+  font-family: var(--app-font);
+  font-size: 12px;
+  box-shadow: 0 26px 60px rgba(9, 17, 32, 0.28), 0 2px 7px rgba(9, 17, 32, 0.12);
+  -webkit-backdrop-filter: blur(46px) saturate(180%);
+  backdrop-filter: blur(46px) saturate(180%);
+}
+.popover .hover { padding: 14px 16px 0; }
+.popover .eyebrow {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+.hoverHead { display: flex; flex-direction: column; gap: 4px; }
+.hoverTitleRow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.planLogo {
+  display: grid;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--sunken);
+  color: var(--text);
+}
+.planLogo .icon { width: 17px; height: 17px; }
+.hoverTitle {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tierBadge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+}
+.hoverAccount {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rows { display: flex; flex-direction: column; max-height: 260px; margin-top: 10px; overflow-y: auto; }
+.row { padding: 9px 0; border-top: 1px solid var(--border); }
+.rows .row:first-child { padding-top: 4px; border-top: none; }
+.rowHead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.rowLabel {
+  overflow: hidden;
+  min-width: 0;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rowValue { flex: none; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rowValue[data-level="warning"] { color: var(--warning); }
+.rowValue[data-level="danger"] { color: var(--danger); }
+.rowBar {
+  display: block;
+  height: 5px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+}
+.rowBarFill { display: block; height: 100%; border-radius: inherit; background: var(--accent-strong); }
+.rowBarFill[data-level="warning"] { background: var(--warning); }
+.rowBarFill[data-level="danger"] { background: var(--danger); }
+.rowMeta { display: block; margin-top: 4px; color: var(--muted); font-size: 10.5px; }
+.footerButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: calc(100% + 32px);
+  margin: 10px -16px 0;
+  padding: 11px 16px;
+  border-top: 1px solid var(--border);
+  background: transparent;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+.footerButton .icon { width: 12px; height: 12px; }
+
+/* ── Windows：按第一版记录恢复 Fluent 2 外壳与 token ─────────────── */
+.stageFrame[data-platform="windows"][data-mode="light"] {
+  --background: #f9fafc;
+  --surface: #ffffff;
+  --sunken: #f3f3f3;
+  --hover: rgba(0, 0, 0, 0.04);
+  --text: #1b1b1b;
+  --muted: #5d5d5d;
+  --border: rgba(0, 0, 0, 0.085);
+  --border-strong: rgba(0, 0, 0, 0.14);
+  --accent: #005fb8;
+  --accent-strong: #005fb8;
+  --accent-strong-hover: #0078d4;
+  --accent-text: #ffffff;
+  --accent-soft: rgba(0, 95, 184, 0.09);
+  --ok: #0f7b45;
+  --ok-soft: rgba(15, 123, 69, 0.09);
+  --warning: #9d5d00;
+  --warning-soft: rgba(157, 93, 0, 0.1);
+  --danger: #c42b1c;
+  --danger-soft: rgba(196, 43, 28, 0.09);
+  --focus: #005fb8;
+  --accent-ring: rgba(0, 95, 184, 0.14);
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --mica: rgba(243, 246, 250, 0.6);
+  --panel-glass: rgba(252, 252, 252, 0.62);
+  --panel-chrome: rgba(252, 252, 252, 0.55);
+  --panel-card: rgba(255, 255, 255, 0.66);
+  --panel-border: rgba(0, 0, 0, 0.1);
+}
+.stageFrame[data-platform="windows"][data-mode="dark"] {
+  --background: #202020;
+  --surface: #2b2b2b;
+  --sunken: #262626;
+  --hover: rgba(255, 255, 255, 0.06);
+  --text: #f3f3f3;
+  --muted: #b0b0b0;
+  --border: rgba(255, 255, 255, 0.085);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --accent: #60cdff;
+  --accent-strong: #60cdff;
+  --accent-strong-hover: #9ae1ff;
+  --accent-text: #00303f;
+  --accent-soft: rgba(96, 205, 255, 0.12);
+  --ok: #6ccb8f;
+  --ok-soft: rgba(108, 203, 143, 0.12);
+  --warning: #f0b429;
+  --warning-soft: rgba(240, 180, 41, 0.12);
+  --danger: #ff99a4;
+  --danger-soft: rgba(255, 153, 164, 0.12);
+  --focus: #60cdff;
+  --accent-ring: rgba(96, 205, 255, 0.18);
+  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  --mica: rgba(28, 30, 34, 0.64);
+  --panel-glass: rgba(43, 43, 43, 0.64);
+  --panel-chrome: rgba(40, 40, 40, 0.56);
+  --panel-card: rgba(255, 255, 255, 0.07);
+  --panel-border: rgba(255, 255, 255, 0.1);
+}
+.stageFrame[data-platform="windows"] {
+  --radius-card: 8px;
+  --radius-control: 4px;
+}
+.stageFrame[data-platform="windows"] .winTitle { height: 32px; }
+.stageFrame[data-platform="windows"] .capBtn { height: 32px; }
+.stageFrame[data-platform="windows"] .sidebar { padding: 10px 12px 12px; }
+.stageFrame[data-platform="windows"] .wordmark { margin: 4px 0 16px 4px; }
+.stageFrame[data-platform="windows"] .navItem { height: 36px; }
+.stageFrame[data-platform="windows"] .navLabel { font-size: 14px; }
+.stageFrame[data-platform="windows"] .navItem.active .navLabel {
+  position: relative;
+  color: var(--text);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+.stageFrame[data-platform="windows"] .navItem.active .navLabel::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--accent);
+  transform: translateY(-50%);
+}
+.stageFrame[data-platform="windows"] .pageHeader { padding: 24px 28px 14px; }
+.stageFrame[data-platform="windows"] .panelTitle { font-size: 28px; }
+.stageFrame[data-platform="windows"] .subtitle { font-size: 13px; }
+.stageFrame[data-platform="windows"] .scrollBody { padding: 4px 28px 28px; }
+.stageFrame[data-platform="windows"] .overviewTabs { border-radius: 4px; }
+.stageFrame[data-platform="windows"] .overviewTab { border-radius: 4px; }
+.stageFrame[data-platform="windows"] .pillThumb { border-radius: 4px; }
+.stageFrame[data-platform="windows"] .quotaBoard {
+  border-radius: 8px;
+  box-shadow: var(--card-shadow);
+}
+.stageFrame[data-platform="windows"] .tray { border-radius: 8px; }
+.stageFrame[data-platform="windows"] .sectionHead { border-radius: 4px; }
+.stageFrame[data-platform="windows"] .trayAccount { border-radius: 8px; }
+.stageFrame[data-platform="windows"] .trayRefresh { border-radius: 4px; }
+.stageFrame[data-platform="windows"] .popover { border-radius: 8px; }
+.stageFrame[data-platform="windows"] .planLogo { border-radius: 8px; }
+
+</style>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-gauge" viewBox="0 0 24 24">
+    <path d="M5.2 18.2a9 9 0 1 1 13.6 0"/>
+    <path d="m12 13 4.2-4.2"/>
+    <circle cx="12" cy="13" r="1.4" fill="currentColor" stroke="none"/>
+  </symbol>
+  <symbol id="i-users" viewBox="0 0 24 24">
+    <circle cx="9" cy="8" r="3"/>
+    <path d="M3.6 19a5.4 5.4 0 0 1 10.8 0"/>
+    <path d="M16 5.6a3 3 0 0 1 0 5.5"/>
+    <path d="M17.6 13.6a5 5 0 0 1 3 4.6"/>
+  </symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24">
+    <path d="M9 3v5M15 3v5"/>
+    <path d="M6.5 8h11v3.2a5.5 5.5 0 0 1-11 0V8Z"/>
+    <path d="M12 16.7V21"/>
+  </symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="3.1"/>
+    <path d="M12 2.8v2.4M12 18.8v2.4M3.9 7.6l2.1 1.2M18 15.2l2.1 1.2M3.9 16.4l2.1-1.2M18 8.8l2.1-1.2"/>
+  </symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24">
+    <path d="M20 11a8 8 0 1 1-2.4-5.7"/>
+    <path d="M20 4.2V9h-4.8"/>
+  </symbol>
+  <symbol id="i-hex" viewBox="0 0 24 24">
+    <path d="m12 3 7 4v10l-7 4-7-4V7l7-4Z"/>
+    <path d="m5 7 7 4 7-4M12 11v10"/>
+  </symbol>
+  <symbol id="i-drop" viewBox="0 0 24 24">
+    <path d="M12 3s6 6.7 6 11a6 6 0 0 1-12 0c0-4.3 6-11 6-11Z"/>
+  </symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="i-grip" viewBox="0 0 24 24">
+    <circle cx="9" cy="6" r="1.2" fill="currentColor" stroke="none"/>
+    <circle cx="15" cy="6" r="1.2" fill="currentColor" stroke="none"/>
+    <circle cx="9" cy="12" r="1.2" fill="currentColor" stroke="none"/>
+    <circle cx="15" cy="12" r="1.2" fill="currentColor" stroke="none"/>
+    <circle cx="9" cy="18" r="1.2" fill="currentColor" stroke="none"/>
+    <circle cx="15" cy="18" r="1.2" fill="currentColor" stroke="none"/>
+  </symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-out" viewBox="0 0 24 24">
+    <path d="M14 4h6v6"/>
+    <path d="M20 4 11 13"/>
+    <path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/>
+  </symbol>
+  <symbol id="i-power" viewBox="0 0 24 24">
+    <path d="M12 3v8"/>
+    <path d="M7 5.8a8 8 0 1 0 10 0"/>
+  </symbol>
+  <symbol id="i-min" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+  <symbol id="i-max" viewBox="0 0 24 24"><rect x="5.5" y="5.5" width="13" height="13" rx="1.5"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+</svg>
+
+<div class="page">
+  <header class="masthead">
+    <div class="mastBrand">
+      <img class="mastLogo" src="assets/logo.png" alt="" width="40" height="44">
+      <div>
+        <h1>Token Refill 外观方案</h1>
+        <p class="mastSub">保留现有总览、菜单栏面板与悬浮球，只叠加平台材质 · 示例数据</p>
+      </div>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="平台">
+        <button type="button" data-platform-btn="macos" aria-pressed="true">macOS</button>
+        <button type="button" data-platform-btn="windows" aria-pressed="false">Windows</button>
+      </div>
+      <div class="seg" role="group" aria-label="外观">
+        <button type="button" data-mode-btn="light" aria-pressed="true">浅色</button>
+        <button type="button" data-mode-btn="dark" aria-pressed="false">深色</button>
+      </div>
+    </div>
+  </header>
+
+  <section class="stageSection" aria-label="界面预览">
+    <div class="stageMeta">
+      <span id="caption">macOS · 液态玻璃 · 浅色</span>
+      <span>视觉稿，未连接真实账户</span>
+    </div>
+    <div class="stageScroll" id="stageScroll">
+      <div class="stageFrame" id="stage" data-platform="macos" data-mode="light">
+        <div class="wall" aria-hidden="true"></div>
+        <div class="stageFit">
+          <div class="artboard" id="artboard">
+            <!-- 主窗口：现有 App 骨架，不增删页面结构 -->
+            <div class="app">
+              <div class="winTitle">
+                <img class="appIcon" src="assets/logo.png" alt="">
+                <span class="winName">Token Refill</span>
+                <div class="caption">
+                  <span class="capBtn"><svg class="icon"><use href="#i-min"/></svg></span>
+                  <span class="capBtn"><svg class="icon"><use href="#i-max"/></svg></span>
+                  <span class="capBtn close"><svg class="icon"><use href="#i-close"/></svg></span>
+                </div>
+              </div>
+
+              <div class="appBody">
+                <aside class="sidebar">
+                  <div class="titlebarSafeArea">
+                    <div class="traffic" aria-hidden="true"><i class="t-red"></i><i class="t-yel"></i><i class="t-grn"></i></div>
+                  </div>
+                  <img class="wordmark" src="assets/logo-text.png" alt="Token Refill" width="480" height="87">
+                  <nav class="nav" aria-label="主导航">
+                    <div class="navItem active"><span class="navLabel"><svg class="icon navIcon"><use href="#i-gauge"/></svg>总览</span></div>
+                    <div class="navItem"><span class="navLabel"><svg class="icon navIcon"><use href="#i-users"/></svg>账户</span></div>
+                    <div class="navItem"><span class="navLabel"><svg class="icon navIcon"><use href="#i-plug"/></svg>中转站</span></div>
+                    <div class="navItem"><span class="navLabel"><svg class="icon navIcon"><use href="#i-gear"/></svg>设置</span></div>
+                  </nav>
+                  <div class="sidebarFoot">
+                    <span class="versionGroup"><span class="version">v0.7.1</span></span>
+                    <span class="updateChip"><svg class="icon"><use href="#i-up"/></svg>v0.7.2</span>
+                  </div>
+                </aside>
+
+                <main class="main">
+                  <header class="pageHeader">
+                    <div class="pageHeaderInner">
+                      <h1 class="panelTitle">总览</h1>
+                      <p class="subtitle">订阅账户与中转站账户的额度、周期与重置时间，一处看清。</p>
+                    </div>
+                    <div class="macToolbarRight">
+                      <span>更新于 12:04</span>
+                      <span class="macRefreshBtn"><svg class="icon"><use href="#i-refresh"/></svg></span>
+                    </div>
+                  </header>
+
+                  <div class="mainScroll">
+                    <div class="panelWrap">
+                      <div class="overviewTabs" style="--pill-index: 0; --pill-count: 2">
+                        <span class="pillThumb" aria-hidden="true"></span>
+                        <button class="overviewTab active"><svg class="icon"><use href="#i-users"/></svg>订阅账户额度</button>
+                        <button class="overviewTab"><svg class="icon"><use href="#i-plug"/></svg>中转站账户额度</button>
+                      </div>
+
+                      <div class="overviewStack">
+                        <section class="platformGroup">
+                          <div class="platformHeading">
+                            <span class="platformBadge"><svg class="icon"><use href="#i-hex"/></svg></span>
+                            <div class="platformIdentity">
+                              <div class="platformNameRow">
+                                <h2 class="platformName">Codex</h2>
+                                <span class="platformVendor">OpenAI</span>
+                              </div>
+                              <p class="platformDescription">ChatGPT 订阅额度 · 本机登录与独立授权</p>
+                            </div>
+                            <div class="platformAside">
+                              <span class="platformCount">2 个账户</span>
+                              <span class="reorderHandle"><svg class="icon"><use href="#i-grip"/></svg></span>
+                            </div>
+                          </div>
+
+                          <div class="quotaBoard">
+                            <article class="quotaAccount">
+                              <header class="quotaAccountHead">
+                                <div class="quotaAccountToggle">
+                                  <div class="quotaAccountInfo">
+                                    <span class="quotaAccountIdentity">
+                                      <span class="quotaAccountName">工作账户</span>
+                                      <span class="planTier">Plus</span>
+                                    </span>
+                                    <span class="quotaAccountMeta">本机登录</span>
+                                  </div>
+                                </div>
+                                <div class="quotaAccountTools">
+                                  <span class="updatedAt">更新于 12:04</span>
+                                  <span class="refreshButton"><svg class="icon"><use href="#i-refresh"/></svg></span>
+                                  <span class="reorderHandle"><svg class="icon"><use href="#i-grip"/></svg></span>
+                                  <span class="chevronButton down"><svg class="icon"><use href="#i-chevron"/></svg></span>
+                                </div>
+                              </header>
+                              <div class="quotaBody">
+                                <div class="quotaBodyInner">
+                                  <div class="metricGrid">
+                                    <div class="metric">
+                                      <span class="metricLabel">5 小时额度</span>
+                                      <div class="quotaBarRow" data-level="ok">
+                                        <span class="quotaPercent">91%</span>
+                                        <span class="quotaBarTrack"><span class="quotaBarFill" style="width: 91%"></span></span>
+                                      </div>
+                                      <span class="metricMeta">
+                                        <span class="metricMetaPart">已用 9%</span>
+                                        <span class="metricMetaPart">2 小时 14 分后重置</span>
+                                      </span>
+                                    </div>
+                                    <span class="metricDivider"></span>
+                                    <div class="metric">
+                                      <span class="metricLabel">每周额度</span>
+                                      <div class="quotaBarRow" data-level="warning">
+                                        <span class="quotaPercent">68%</span>
+                                        <span class="quotaBarTrack"><span class="quotaBarFill" style="width: 68%"></span></span>
+                                      </div>
+                                      <span class="metricMeta">
+                                        <span class="metricMetaPart">已用 32%</span>
+                                        <span class="metricMetaPart">10月18日 09:00 重置</span>
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </article>
+
+                            <article class="quotaAccount">
+                              <header class="quotaAccountHead">
+                                <div class="quotaAccountToggle">
+                                  <div class="quotaAccountInfo">
+                                    <span class="quotaAccountIdentity">
+                                      <span class="quotaAccountName">个人账户</span>
+                                      <span class="planTier">Pro</span>
+                                    </span>
+                                    <span class="quotaAccountMeta">独立授权</span>
+                                  </div>
+                                  <span class="quotaSummary">5 小时 76% · 每周 45%</span>
+                                </div>
+                                <div class="quotaAccountTools">
+                                  <span class="refreshButton"><svg class="icon"><use href="#i-refresh"/></svg></span>
+                                  <span class="reorderHandle"><svg class="icon"><use href="#i-grip"/></svg></span>
+                                  <span class="chevronButton"><svg class="icon"><use href="#i-chevron"/></svg></span>
+                                </div>
+                              </header>
+                            </article>
+                          </div>
+                        </section>
+
+                        <section class="platformGroup">
+                          <div class="platformHeading">
+                            <span class="platformBadge"><svg class="icon"><use href="#i-drop"/></svg></span>
+                            <div class="platformIdentity">
+                              <div class="platformNameRow">
+                                <h2 class="platformName">百炼</h2>
+                                <span class="platformVendor">阿里云</span>
+                              </div>
+                              <p class="platformDescription">Token Plan 个人版 · Coding Plan 中国站</p>
+                            </div>
+                            <div class="platformAside">
+                              <span class="platformCount">1 个账户</span>
+                              <span class="reorderHandle"><svg class="icon"><use href="#i-grip"/></svg></span>
+                            </div>
+                          </div>
+
+                          <div class="quotaBoard">
+                            <article class="quotaAccount">
+                              <header class="quotaAccountHead">
+                                <div class="quotaAccountToggle">
+                                  <div class="quotaAccountInfo">
+                                    <span class="quotaAccountIdentity">
+                                      <span class="quotaAccountName">主账号</span>
+                                    </span>
+                                    <span class="quotaAccountMeta">控制台授权</span>
+                                  </div>
+                                </div>
+                                <div class="quotaAccountTools">
+                                  <span class="updatedAt">更新于 12:04</span>
+                                  <span class="refreshButton"><svg class="icon"><use href="#i-refresh"/></svg></span>
+                                  <span class="reorderHandle"><svg class="icon"><use href="#i-grip"/></svg></span>
+                                  <span class="chevronButton down"><svg class="icon"><use href="#i-chevron"/></svg></span>
+                                </div>
+                              </header>
+                              <div class="quotaBody">
+                                <div class="quotaBodyInner">
+                                  <div class="metricGrid">
+                                    <div class="metric">
+                                      <div class="metricEyebrow">
+                                        <span class="metricProduct">Token Plan</span>
+                                        <span class="planTier">个人版</span>
+                                      </div>
+                                      <span class="metricLabel">5 小时额度</span>
+                                      <div class="quotaBarRow" data-level="ok">
+                                        <span class="quotaPercent">78%</span>
+                                        <span class="quotaBarTrack"><span class="quotaBarFill" style="width: 78%"></span></span>
+                                      </div>
+                                      <span class="metricMeta">
+                                        <span class="metricMetaPart">已用 22%</span>
+                                        <span class="metricMetaPart">1 小时 12 分后重置</span>
+                                      </span>
+                                    </div>
+                                    <span class="metricDivider strong"></span>
+                                    <div class="metric">
+                                      <div class="metricEyebrow">
+                                        <span class="metricProduct">Coding Plan</span>
+                                        <span class="planTier">中国站</span>
+                                      </div>
+                                      <span class="metricLabel">5 小时额度</span>
+                                      <div class="quotaBarRow" data-level="warning">
+                                        <span class="quotaPercent">45%</span>
+                                        <span class="quotaBarTrack"><span class="quotaBarFill" style="width: 45%"></span></span>
+                                      </div>
+                                      <span class="metricMeta">
+                                        <span class="metricMetaPart">已用 55%</span>
+                                        <span class="metricMetaPart">2 小时 40 分后重置</span>
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </article>
+                          </div>
+                        </section>
+                      </div>
+                    </div>
+                  </div>
+                </main>
+              </div>
+            </div>
+
+            <!-- 菜单栏面板：现有分区、账户卡与额度行 -->
+            <div class="tray">
+              <header class="trayHeader">
+                <div class="trayBrand">
+                  <img class="trayWordmark" src="assets/logo-text.png" alt="Token Refill">
+                  <span class="trayUpdated">5 个账户 · 更新于 12:04</span>
+                </div>
+                <span class="refreshAll"><svg class="icon"><use href="#i-refresh"/></svg>全部刷新</span>
+              </header>
+
+              <div class="trayScroll">
+                <section class="traySection">
+                  <div class="sectionHeadRow">
+                    <button class="sectionHead">
+                      <span class="sectionBadge"><svg class="icon"><use href="#i-hex"/></svg></span>
+                      <span class="sectionName">Codex</span>
+                      <span class="sectionCount">2</span>
+                      <span class="chevron"><svg class="icon"><use href="#i-chevron"/></svg></span>
+                    </button>
+                    <span class="reorderHandle"><svg class="icon"><use href="#i-grip"/></svg></span>
+                  </div>
+                  <div class="cardsWrap open">
+                    <div class="cards">
+                      <article class="trayAccount">
+                        <div class="accountHead">
+                          <span class="accountName">工作账户</span>
+                          <span class="accountTime">更新于 12:04</span>
+                          <span class="trayRefresh"><svg class="icon"><use href="#i-refresh"/></svg></span>
+                        </div>
+                        <span class="tier">Plus</span>
+                        <div class="quotaGroup">
+                          <div class="trayRow" data-level="ok">
+                            <span class="trayLabel">5 小时额度</span>
+                            <span class="trayBar"><span class="trayBarFill" style="width: 91%"></span></span>
+                            <span class="trayPercent">剩余 91%</span>
+                            <span class="trayMeta">已用 9% · 2 小时 14 分后重置</span>
+                          </div>
+                        </div>
+                        <div class="quotaGroup">
+                          <div class="trayRow" data-level="warning">
+                            <span class="trayLabel">每周额度</span>
+                            <span class="trayBar"><span class="trayBarFill" style="width: 68%"></span></span>
+                            <span class="trayPercent">剩余 68%</span>
+                            <span class="trayMeta">已用 32% · 10月18日 09:00 重置</span>
+                          </div>
+                        </div>
+                      </article>
+
+                      <article class="trayAccount">
+                        <div class="accountHead">
+                          <span class="accountName">个人账户</span>
+                          <span class="accountTime">更新于 11:58</span>
+                          <span class="trayRefresh"><svg class="icon"><use href="#i-refresh"/></svg></span>
+                        </div>
+                        <span class="tier">Pro</span>
+                        <div class="quotaGroup">
+                          <div class="trayRow" data-level="ok">
+                            <span class="trayLabel">5 小时额度</span>
+                            <span class="trayBar"><span class="trayBarFill" style="width: 76%"></span></span>
+                            <span class="trayPercent">剩余 76%</span>
+                            <span class="trayMeta">已用 24% · 4 小时 08 分后重置</span>
+                          </div>
+                        </div>
+                        <div class="quotaGroup">
+                          <div class="trayRow" data-level="warning">
+                            <span class="trayLabel">每周额度</span>
+                            <span class="trayBar"><span class="trayBarFill" style="width: 45%"></span></span>
+                            <span class="trayPercent">剩余 45%</span>
+                            <span class="trayMeta">已用 55% · 10月19日 21:00 重置</span>
+                          </div>
+                        </div>
+                      </article>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="traySection">
+                  <div class="sectionHeadRow">
+                    <button class="sectionHead">
+                      <span class="sectionBadge"><svg class="icon"><use href="#i-drop"/></svg></span>
+                      <span class="sectionName">百炼</span>
+                      <span class="sectionCount">1</span>
+                      <span class="chevron"><svg class="icon"><use href="#i-chevron"/></svg></span>
+                    </button>
+                    <span class="reorderHandle"><svg class="icon"><use href="#i-grip"/></svg></span>
+                  </div>
+                  <div class="cardsWrap open">
+                    <div class="cards">
+                      <article class="trayAccount">
+                        <div class="accountHead">
+                          <span class="accountName">主账号</span>
+                          <span class="accountTime">更新于 12:04</span>
+                          <span class="trayRefresh"><svg class="icon"><use href="#i-refresh"/></svg></span>
+                        </div>
+                        <div class="quotaGroup">
+                          <span class="eyebrow">Token Plan</span>
+                          <div class="trayRow" data-level="ok">
+                            <span class="trayLabel">5 小时额度</span>
+                            <span class="trayBar"><span class="trayBarFill" style="width: 78%"></span></span>
+                            <span class="trayPercent">剩余 78%</span>
+                            <span class="trayMeta">已用 22% · 1 小时 12 分后重置</span>
+                          </div>
+                        </div>
+                        <div class="quotaGroup">
+                          <span class="eyebrow">Coding Plan</span>
+                          <div class="trayRow" data-level="warning">
+                            <span class="trayLabel">5 小时额度</span>
+                            <span class="trayBar"><span class="trayBarFill" style="width: 45%"></span></span>
+                            <span class="trayPercent">剩余 45%</span>
+                            <span class="trayMeta">已用 55% · 2 小时 40 分后重置</span>
+                          </div>
+                        </div>
+                      </article>
+                    </div>
+                  </div>
+                </section>
+
+                <section class="traySection">
+                  <div class="sectionHeadRow">
+                    <button class="sectionHead">
+                      <span class="sectionBadge"><svg class="icon"><use href="#i-plug"/></svg></span>
+                      <span class="sectionName">中转站</span>
+                      <span class="sectionCount">2</span>
+                      <span class="chevron collapsed"><svg class="icon"><use href="#i-chevron"/></svg></span>
+                    </button>
+                    <span class="reorderHandle"><svg class="icon"><use href="#i-grip"/></svg></span>
+                  </div>
+                </section>
+              </div>
+
+              <footer class="trayFooter">
+                <span class="trayVersion">v0.7.1</span>
+                <div class="footerActions">
+                  <span class="openButton"><svg class="icon"><use href="#i-out"/></svg>打开主窗口</span>
+                  <span class="footerDivider"></span>
+                  <span class="quitButton"><svg class="icon"><use href="#i-power"/></svg>退出</span>
+                </div>
+              </footer>
+            </div>
+
+            <!-- 悬浮球：60×60、环、平台标识、剩余比例与周期文字均沿用现有实现 -->
+            <div class="ball">
+              <svg class="ring" viewBox="0 0 60 60" aria-hidden="true">
+                <circle class="track" cx="30" cy="30" r="26.5"></circle>
+                <circle class="progress" cx="30" cy="30" r="26.5" stroke-dasharray="166.5" stroke-dashoffset="53.28"></circle>
+              </svg>
+              <div class="center">
+                <span class="logo"><svg class="icon"><use href="#i-hex"/></svg></span>
+                <span class="value">68%</span>
+                <span class="detail">每周</span>
+              </div>
+            </div>
+
+            <!-- 详情弹层：现有 hover 卡 -->
+            <div class="popover">
+              <div class="hover">
+                <div class="hoverHead">
+                  <span class="eyebrow">正在使用</span>
+                  <div class="hoverTitleRow">
+                    <span class="planLogo"><svg class="icon"><use href="#i-hex"/></svg></span>
+                    <span class="hoverTitle">工作账户 · 每周额度</span>
+                    <span class="tierBadge">Plus</span>
+                  </div>
+                  <span class="hoverAccount">Codex · 本机登录</span>
+                </div>
+                <div class="rows">
+                  <div class="row">
+                    <div class="rowHead"><span class="rowLabel">5 小时额度</span><span class="rowValue">剩余 91%</span></div>
+                    <span class="rowBar"><span class="rowBarFill" style="width: 91%"></span></span>
+                    <span class="rowMeta">已用 9% · 2 小时 14 分后重置</span>
+                  </div>
+                  <div class="row">
+                    <div class="rowHead"><span class="rowLabel">每周额度</span><span class="rowValue" data-level="warning">剩余 68%</span></div>
+                    <span class="rowBar"><span class="rowBarFill" data-level="warning" style="width: 68%"></span></span>
+                    <span class="rowMeta">已用 32% · 10月18日 09:00 重置</span>
+                  </div>
+                </div>
+                <button class="footerButton">切换套餐<svg class="icon"><use href="#i-chevron"/></svg></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="notes" aria-label="落地说明">
+    <div class="notesHead">
+      <h2>落地要点</h2>
+      <p>内容是现有的，材质是新的。</p>
+    </div>
+    <div class="noteGrid">
+      <div class="noteCard">
+        <h3>macOS</h3>
+        <dl>
+          <div class="noteRow"><dt>材质</dt><dd>26+ 用 NSGlassEffectView；12–15 回退 NSVisualEffectView 毛玻璃。</dd></div>
+          <div class="noteRow"><dt>范围</dt><dd>玻璃工具栏、侧栏、内容浮卡外壳、菜单栏面板、悬浮球与详情弹层；浮卡内保持实色。</dd></div>
+          <div class="noteRow"><dt>不变</dt><dd>浮卡内的分段标签、平台分组、账户卡与额度行全部沿用现状；页头标题与说明移入玻璃工具栏。</dd></div>
+          <div class="noteRow"><dt>回退</dt><dd>低于 26 只降级材质，布局与尺寸不变。</dd></div>
+        </dl>
+      </div>
+      <div class="noteCard">
+        <h3>Windows</h3>
+        <dl>
+          <div class="noteRow"><dt>材质</dt><dd>主窗口 Mica；菜单栏面板与详情弹层 Acrylic；系统禁用透明效果时回落实色。</dd></div>
+          <div class="noteRow"><dt>范围</dt><dd>32px 标题栏、Mica 侧栏、Fluent 2 的 8 / 4 圆角、28px 页标题、36px 导航与 3×16 指示条；字体 Segoe UI Variable。</dd></div>
+          <div class="noteRow"><dt>不变</dt><dd>总览仍用现有分段标签、平台分组、账户卡与额度行结构，不重排内容。</dd></div>
+          <div class="noteRow"><dt>回退</dt><dd>Windows 10 或 Mica 不可用时走 Fluent 2 实色，不保留半透明。</dd></div>
+        </dl>
+      </div>
+    </div>
+    <div class="shared">
+      <span>保留 mac 玻璃工具栏 + 实色浮卡</span>
+      <span>不改总览布局</span>
+      <span>不改账户卡与额度行</span>
+      <span>不改菜单栏面板结构</span>
+      <span>不改悬浮球几何与交互</span>
+    </div>
+    <p class="next">确认后先做 Rust 材质层，再按现有 class 替换背景、边框与字体；总览与面板的 DOM 结构不动。Windows 的 Mica / Acrylic 仍需 Windows 11 实机复核。</p>
+  </section>
+
+  <footer class="pageFoot">
+    <span>Token Refill · 外观方案 v2 · 2026-11-13</span>
+    <span>示例数据，仅用于视觉确认</span>
+  </footer>
+</div>
+
+<script>
+  const stage = document.getElementById('stage');
+  const scroll = document.getElementById('stageScroll');
+  const caption = document.getElementById('caption');
+  const ART_W = 1440;
+  const ART_H = 840;
+
+  let platform = 'macos';
+  let mode = 'light';
+
+  const VALID_VIEWS = new Set(['macos-light', 'macos-dark', 'windows-light', 'windows-dark']);
+
+  function readHash() {
+    const key = location.hash.replace(/^#/, '');
+    if (VALID_VIEWS.has(key)) {
+      [platform, mode] = key.split('-');
+    }
+  }
+
+  function writeHash() {
+    const key = `${platform}-${mode}`;
+    if (location.hash.replace(/^#/, '') === key) return;
+    try {
+      history.replaceState(null, '', `#${key}`);
+    } catch {
+      location.hash = key;
+    }
+  }
+
+  const label = {
+    macos: { name: 'macOS', style: '液态玻璃' },
+    windows: { name: 'Windows', style: 'Fluent 2 · Mica' },
+  };
+
+  function fit() {
+    const avail = scroll.clientWidth;
+    const k = Math.max(0.55, Math.min(1, avail / ART_W));
+    stage.style.setProperty('--k', k.toFixed(4));
+  }
+
+  function render() {
+    stage.dataset.platform = platform;
+    stage.dataset.mode = mode;
+    document.querySelectorAll('[data-platform-btn]').forEach((btn) => {
+      btn.setAttribute('aria-pressed', String(btn.dataset.platformBtn === platform));
+    });
+    document.querySelectorAll('[data-mode-btn]').forEach((btn) => {
+      btn.setAttribute('aria-pressed', String(btn.dataset.modeBtn === mode));
+    });
+    caption.textContent = `${label[platform].name} · ${label[platform].style} · ${mode === 'light' ? '浅色' : '深色'}`;
+    writeHash();
+    fit();
+  }
+
+  document.querySelectorAll('[data-platform-btn]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      platform = btn.dataset.platformBtn;
+      render();
+    });
+  });
+
+  document.querySelectorAll('[data-mode-btn]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      mode = btn.dataset.modeBtn;
+      render();
+    });
+  });
+
+  if ('ResizeObserver' in window) {
+    new ResizeObserver(fit).observe(scroll);
+  } else {
+    window.addEventListener('resize', fit);
+  }
+
+  window.addEventListener('hashchange', () => {
+    readHash();
+    render();
+  });
+
+  readHash();
+  render();
+</script>
+
+<style>
+/* ── 说明区 ───────────────────────────────────────────────────────── */
+.notes { margin-top: 30px; }
+.notesHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.notesHead h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.notesHead p { margin: 0; color: var(--studio-muted); font-size: 12px; }
+.noteGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.noteCard {
+  padding: 16px 18px;
+  border: 1px solid var(--studio-line);
+  border-radius: 14px;
+  background: var(--studio-panel);
+}
+.noteCard h3 {
+  margin: 0 0 10px;
+  color: var(--studio-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.noteCard dl { margin: 0; }
+.noteRow {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--studio-line);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.noteRow:first-of-type { padding-top: 0; border-top: 0; }
+.noteRow dt { color: var(--studio-muted); }
+.noteRow dd { margin: 0; }
+.shared { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.shared span {
+  padding: 5px 10px;
+  border: 1px solid var(--studio-line);
+  border-radius: 999px;
+  background: var(--studio-panel-2);
+  color: var(--studio-muted);
+  font-size: 11.5px;
+}
+.next {
+  margin: 14px 0 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--studio-accent);
+  color: var(--studio-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.pageFoot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 26px;
+  padding-top: 14px;
+  border-top: 1px solid var(--studio-line);
+  color: var(--studio-muted);
+  font-size: 11px;
+}
+@media (max-width: 820px) {
+  .masthead { align-items: flex-start; }
+  .controls { width: 100%; }
+  .seg { flex: 1; }
+  .seg button { flex: 1; }
+  .noteGrid { grid-template-columns: 1fr; }
+  .page { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .masthead h1 { font-size: 19px; }
+}
+</style>
