@@ -76,7 +76,12 @@ export default function App() {
   // 兜底平台，避免 Windows 自绘标题栏与关闭装饰的窗口在首帧错位。
   const platform = appInfo?.platform ?? platformHint();
   const current = PANELS.find((panel) => panel.key === active) ?? PANELS[0];
-
+  const channelBadge =
+    appInfo?.channel === 'test'
+      ? '测试版'
+      : appInfo?.channel === 'next'
+        ? 'Next'
+        : null;
   // 启动检查只在有正式新版本时提示；设置页仍可手动重新检查。
   // 侧栏页脚只放一个轻量入口，详细状态仍在设置页。
   const updateAvailable =
@@ -163,8 +168,8 @@ export default function App() {
               <span className={styles.version}>
                 {appInfo ? `v${appInfo.version}` : 'v—'}
               </span>
-              {appInfo?.channel === 'test' ? (
-                <span className={styles.testBadge}>测试版</span>
+              {channelBadge ? (
+                <span className={styles.testBadge}>{channelBadge}</span>
               ) : null}
             </span>
             {updateAvailable ? (

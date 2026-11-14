@@ -1,0 +1,349 @@
+name: release-next
+
+# Next 预览版：从承载预览改造的分支构建带 `-next.N` 后缀的预发布包。
+#
+# 与 release.yml 的区别：
+# - 使用 `tauri.next.conf.json` 的独立 productName / identifier，安装后可与正式版共存；
+# - 发布为 GitHub prerelease，不参与应用内更新，也不生成 latest.json / 更新签名；
+# - 不修改仓库里的三处版本号，版本由 tag 或手动输入注入。
+#
+# 触发方式：
+# - 在承载预览改造的分支上打 tag `v1.0.0-next.1` 并推送（tag 所在提交需包含本工作流）；
+# - 或在 main 上手动触发（workflow_dispatch 入口只登记默认分支）。
+#
+# release.yml 会跳过 `-next.` 标签，避免用正式 identifier 再构建一次。
+
+on:
+  push:
+    tags:
+      - "v*-next.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Next 版本，例如 1.0.0-next.1"
+        type: string
+        required: true
+        default: "1.0.0-next.1"
+      ref:
+        description: "要构建的分支、tag 或提交（填承载预览改造的分支）"
+        type: string
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-next-${{ github.ref_name }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  meta:
+    name: meta
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      base_version: ${{ steps.meta.outputs.base_version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Validate next channel and version
+        id: meta
+        shell: bash
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="${{ inputs.version }}"
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-next\.[0-9]+$ ]]; then
+            echo "::error::Next 版本 ${version} 必须是 X.Y.Z-next.N 格式。"
+            exit 1
+          fi
+          base_version="${version%%-*}"
+
+          # 渠道身份是 next 包与正式版共存的唯一依据：标识写错会覆盖正式版。
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = 'src-tauri/tauri.next.conf.json';
+          const fail = (message) => {
+            console.error(`::error::${message}`);
+            process.exit(1);
+          };
+          if (!fs.existsSync(path)) {
+            fail('目标提交缺少 src-tauri/tauri.next.conf.json。');
+          }
+          const config = JSON.parse(fs.readFileSync(path, 'utf8'));
+          if (config.identifier !== 'dev.tokenrefill.desktop.next') {
+            fail(`Next 配置的 identifier 必须是 dev.tokenrefill.desktop.next（当前为 ${config.identifier}）。`);
+          }
+          if (config.productName !== 'Token Refill Next') {
+            fail(`Next 配置的 productName 必须是 Token Refill Next（当前为 ${config.productName}）。`);
+          }
+          if (config.version) {
+            fail('Next 配置不能自带 version，版本号由本工作流注入。');
+          }
+          NODE
+
+          if ! grep -q "Self::Next" src-tauri/src/channel.rs; then
+            echo "::error::目标提交的 channel.rs 还不支持 next 渠道，请先把 next 渠道改动合入该分支。"
+            exit 1
+          fi
+
+          {
+            echo "version=${version}"
+            echo "tag=v${version}"
+            echo "base_version=${base_version}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo "### Next 预览发布"
+            echo ""
+            echo "- 版本：\`${version}\`"
+            echo "- 应用标识：\`dev.tokenrefill.desktop.next\`（可与正式版共存）"
+            echo "- 发布类型：GitHub prerelease，不参与应用内更新"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  check:
+    name: check
+    needs: meta
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Check versions are in sync
+        shell: bash
+        run: |
+          conf_version=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json', 'utf8')).version")
+          pkg_version=$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version")
+          cargo_version=$(awk -F'"' '/^version = /{print $2; exit}' src-tauri/Cargo.toml)
+          for entry in "tauri.conf.json:$conf_version" "package.json:$pkg_version" "Cargo.toml:$cargo_version"; do
+            if [ "${entry#*:}" != "$conf_version" ]; then
+              echo "::error::${entry%%:*} 的版本是 ${entry#*:}，与 tauri.conf.json 的 ${conf_version} 不一致。"
+              exit 1
+            fi
+          done
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+
+      - run: pnpm test:rust
+
+  build-macos:
+    name: build macos (${{ matrix.label }})
+    needs: [meta, check]
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            label: arm64
+          - target: x86_64-apple-darwin
+            label: x64
+    env:
+      APPLE_SIGNING_IDENTITY: "-"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: next-macos-${{ matrix.target }}
+
+      - run: pnpm install --frozen-lockfile
+
+      # 与 release.yml 相同：规避 tauri#15315，使用官方 cargo-tauri 二进制。
+      - name: Install native tauri CLI
+        shell: bash
+        run: |
+          version=$(node -p "require('./node_modules/@tauri-apps/cli/package.json').version")
+          case "$(uname -m)" in
+            arm64) host=aarch64-apple-darwin ;;
+            *) host=x86_64-apple-darwin ;;
+          esac
+          url="https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v${version}/cargo-tauri-${host}.zip"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/cargo-tauri.zip" "$url"
+          unzip -q "$RUNNER_TEMP/cargo-tauri.zip" -d "$RUNNER_TEMP/cargo-tauri"
+          bin=$(find "$RUNNER_TEMP/cargo-tauri" -type f -name cargo-tauri | head -1)
+          chmod +x "$bin"
+          dirname "$bin" >> "$GITHUB_PATH"
+
+      - name: Generate next channel config
+        shell: bash
+        env:
+          NEXT_VERSION: ${{ needs.meta.outputs.version }}
+          NEXT_BASE_VERSION: ${{ needs.meta.outputs.base_version }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const config = JSON.parse(fs.readFileSync('src-tauri/tauri.next.conf.json', 'utf8'));
+          config.version = process.env.NEXT_VERSION;
+          config.bundle = {
+            ...(config.bundle || {}),
+            macOS: {
+              ...((config.bundle || {}).macOS || {}),
+              bundleVersion: process.env.NEXT_BASE_VERSION,
+            },
+          };
+          const path = `${process.env.RUNNER_TEMP}/tauri.next.build.json`;
+          fs.writeFileSync(path, JSON.stringify(config));
+          console.log(fs.readFileSync(path, 'utf8'));
+          NODE
+
+      - name: Build dmg
+        shell: bash
+        run: |
+          version="${{ needs.meta.outputs.version }}"
+          cargo tauri build --target "${{ matrix.target }}" --bundles dmg \
+            --config "$RUNNER_TEMP/tauri.next.build.json"
+          mkdir -p output
+          dmg=$(find "src-tauri/target/${{ matrix.target }}/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' 2>/dev/null | head -1) || true
+          if [ -z "$dmg" ]; then
+            echo "::error::dmg not found"
+            exit 1
+          fi
+          cp "$dmg" "output/Token.Refill_Next_${version}_macos-${{ matrix.label }}.dmg"
+          ls -lh output
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: next-macos-${{ matrix.label }}-${{ needs.meta.outputs.version }}
+          path: output/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+  build-windows:
+    name: build windows (x64)
+    needs: [meta, check]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: next-windows
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm test:rust
+
+      - name: Generate next channel config
+        shell: bash
+        env:
+          NEXT_VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const config = JSON.parse(fs.readFileSync('src-tauri/tauri.next.conf.json', 'utf8'));
+          config.version = process.env.NEXT_VERSION;
+          const path = `${process.env.RUNNER_TEMP}/tauri.next.build.json`;
+          fs.writeFileSync(path, JSON.stringify(config));
+          console.log(fs.readFileSync(path, 'utf8'));
+          NODE
+
+      - name: Build portable exe and NSIS installer
+        shell: pwsh
+        run: |
+          $version = "${{ needs.meta.outputs.version }}"
+          $config = Join-Path $env:RUNNER_TEMP "tauri.next.build.json"
+          pnpm tauri build --bundles nsis --config $config
+          New-Item -ItemType Directory -Force output | Out-Null
+          Copy-Item "src-tauri/target/release/token-refill.exe" "output/Token.Refill_Next_${version}_windows-x64.exe"
+          $setup = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          if (-not $setup) { throw "NSIS installer not found" }
+          Copy-Item $setup.FullName "output/Token.Refill_Next_${version}_windows-x64-setup.exe"
+          Get-ChildItem output | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: next-windows-x64-${{ needs.meta.outputs.version }}
+          path: output/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: publish prerelease
+    needs: [meta, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: next-*
+          merge-multiple: true
+          path: output
+
+      - name: Publish GitHub prerelease
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          name: Token Refill Next ${{ needs.meta.outputs.version }}
+          prerelease: true
+          make_latest: "false"
+          draft: false
+          files: output/*
+          body: |
+            Token Refill Next `${{ needs.meta.outputs.version }}`，用于验证大版本改造的预览包。
+
+            - 独立应用标识 `dev.tokenrefill.desktop.next`，可与正式版同时安装；
+            - 不参与应用内更新，请从本页下载新预览版手动安装；
+            - macOS 仍为 ad-hoc 签名、未公证；Windows 未配置 Authenticode 签名。

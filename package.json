@@ -16,6 +16,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev:test": "tauri dev --config src-tauri/tauri.test.conf.json",
+    "tauri:dev:next": "tauri dev --config src-tauri/tauri.next.conf.json",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml --locked",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --locked",
     "test:web": "node --experimental-strip-types --test src/lib/attention.test.ts"
