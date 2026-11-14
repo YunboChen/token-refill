@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen, type UnlistenFn } from '@tauri-apps/api/event';
 
-export type AppChannel = 'pro' | 'test';
+export type AppChannel = 'pro' | 'test' | 'next';
 
 export interface AppInfo {
   name: string;
