@@ -1008,7 +1008,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     {
         // 模板图标只保留 alpha 轮廓，菜单栏会按浅色/深色自动反色。
         // 测试版用带右下圆点的变体，两个版本同时常驻时可以一眼区分。
-        let icon = if crate::channel::is_test(app) {
+        let icon = if crate::channel::is_preview(app) {
             include_bytes!("../icons/tray-test-template.png").as_slice()
         } else {
             include_bytes!("../icons/tray-template.png").as_slice()

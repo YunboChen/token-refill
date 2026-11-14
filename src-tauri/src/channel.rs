@@ -10,6 +10,8 @@ use tauri::AppHandle;
 pub enum Channel {
     Pro,
     Test,
+    /// 大版本改造的预览渠道；与测试版一样不参与应用内更新。
+    Next,
 }
 
 impl Channel {
@@ -17,18 +19,23 @@ impl Channel {
         match self {
             Self::Pro => "pro",
             Self::Test => "test",
+            Self::Next => "next",
         }
     }
 
-    pub fn is_test(self) -> bool {
-        matches!(self, Self::Test)
+    /// 测试版与 Next 预览版都不检查、不安装应用内更新。
+    pub fn is_preview(self) -> bool {
+        matches!(self, Self::Test | Self::Next)
     }
 }
 
-/// 测试渠道的标识统一以 `.test` 结尾；正式版保持 `dev.tokenrefill.desktop`。
+/// 测试渠道以 `.test` 结尾，Next 预览渠道以 `.next` 结尾；
+/// 正式版保持 `dev.tokenrefill.desktop`。
 pub fn from_identifier(identifier: &str) -> Channel {
     if identifier.ends_with(".test") {
         Channel::Test
+    } else if identifier.ends_with(".next") {
+        Channel::Next
     } else {
         Channel::Pro
     }
@@ -38,8 +45,8 @@ pub fn of(app: &AppHandle) -> Channel {
     from_identifier(&app.config().identifier)
 }
 
-pub fn is_test(app: &AppHandle) -> bool {
-    of(app).is_test()
+pub fn is_preview(app: &AppHandle) -> bool {
+    of(app).is_preview()
 }
 
 #[cfg(test)]
@@ -53,10 +60,18 @@ mod tests {
             from_identifier("dev.tokenrefill.desktop.test"),
             Channel::Test
         );
-        // 只认完整的 `.test` 后缀，避免误伤普通标识。
+        assert_eq!(
+            from_identifier("dev.tokenrefill.desktop.next"),
+            Channel::Next
+        );
+        // 只认完整的 `.test` / `.next` 后缀，避免误伤普通标识。
         assert_eq!(from_identifier("dev.tokenrefill.testing"), Channel::Pro);
         assert_eq!(
             from_identifier("dev.tokenrefill.desktop.testing"),
+            Channel::Pro
+        );
+        assert_eq!(
+            from_identifier("dev.tokenrefill.desktop.nextgen"),
             Channel::Pro
         );
     }
@@ -65,7 +80,9 @@ mod tests {
     fn channel_strings_are_stable() {
         assert_eq!(Channel::Pro.as_str(), "pro");
         assert_eq!(Channel::Test.as_str(), "test");
-        assert!(Channel::Test.is_test());
-        assert!(!Channel::Pro.is_test());
+        assert_eq!(Channel::Next.as_str(), "next");
+        assert!(Channel::Test.is_preview());
+        assert!(Channel::Next.is_preview());
+        assert!(!Channel::Pro.is_preview());
     }
 }

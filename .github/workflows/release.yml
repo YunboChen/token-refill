@@ -54,6 +54,14 @@ jobs:
             exit 1
           fi
 
+          # Next 预览版由 release-next workflow 构建并发布为 prerelease；
+          # 它的 tag 也匹配 v*，这里直接跳过，避免用正式 identifier 再构建一次。
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [[ "${GITHUB_REF_NAME}" == *-next.* ]]; then
+            echo "::notice::Next 预览标签由 release-next workflow 处理，正式发布跳过。"
+            echo "should_build=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
           version=$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json', 'utf8')).version")
           # 版本号会进入安装包名、updater 清单与 shell 命令，先按 semver 约束格式。
           if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then

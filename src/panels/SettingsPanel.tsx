@@ -103,7 +103,7 @@ export default function SettingsPanel() {
     setFloatingBall,
     desktop,
   } = useAppState();
-  const isTestBuild = appInfo?.channel === 'test';
+  const isPreviewBuild = appInfo ? appInfo.channel !== 'pro' : false;
   const appName = appInfo?.name ?? 'Token Refill';
   const [prefs, setPrefs] = useState<Preferences>(state.preferences);
   const [theme, setTheme] = useState<ThemePref>(loadTheme);
@@ -220,10 +220,10 @@ export default function SettingsPanel() {
   // 重复进入设置页不会反复请求 GitHub，失败后下次仍可重试。
   // 测试渠道不参与更新链路，等 appInfo 到达后直接跳过。
   useEffect(() => {
-    if (!desktop || !appInfo || isTestBuild) return;
+    if (!desktop || !appInfo || isPreviewBuild) return;
     void runUpdateCheck(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desktop, appInfo, isTestBuild]);
+  }, [desktop, appInfo, isPreviewBuild]);
 
   // 下载进度由 Rust 推送；组件卸载时取消订阅。
   useEffect(() => {
@@ -243,7 +243,7 @@ export default function SettingsPanel() {
   }, [desktop]);
 
   async function runUpdateCheck(force: boolean) {
-    if (!desktop || isTestBuild || updateState === 'checking') return;
+    if (!desktop || isPreviewBuild || updateState === 'checking') return;
     setUpdateState('checking');
     setUpdateError(null);
     try {
@@ -330,8 +330,10 @@ export default function SettingsPanel() {
       ? 100
       : (progressPercent ?? 0);
 
-  const updateStatusText = isTestBuild
-    ? '测试版不检查更新；新测试包请从 GitHub Actions 的 build-test 产物下载。'
+  const updateStatusText = isPreviewBuild
+    ? appInfo?.channel === 'next'
+      ? 'Next 预览版不检查更新；请从 GitHub Releases 的预发布下载新版本。'
+      : '测试版不检查更新；新测试包请从 GitHub Actions 的 build-test 产物下载。'
     : updateState === 'checking'
       ? '正在检查 GitHub Releases…'
       : updateState === 'downloading'
@@ -620,7 +622,11 @@ export default function SettingsPanel() {
           <div className={styles.settingText}>
             <span className={styles.settingLabel}>
               当前版本 v{appInfo?.version ?? '—'}
-              {isTestBuild ? '（测试版）' : ''}
+              {isPreviewBuild
+                ? appInfo?.channel === 'next'
+                  ? '（Next 预览版）'
+                  : '（测试版）'
+                : ''}
             </span>
             <span
               className={styles.settingHint}
@@ -630,7 +636,7 @@ export default function SettingsPanel() {
               {updateStatusText}
             </span>
           </div>
-          {isTestBuild ? null : (
+          {isPreviewBuild ? null : (
           <div className={styles.buttonRow}>
             {updateInfo?.updateAvailable && updateInfo.selfUpdateSupported ? (
               updateState === 'downloaded' || updateState === 'installing' ? (
@@ -703,7 +709,7 @@ export default function SettingsPanel() {
           </div>
         ) : null}
       </section>
-      {isTestBuild ? null : (
+      {isPreviewBuild ? null : (
         <p className={`${styles.settingHint} ${styles.groupNote}`}>
           下载与安装都需要手动确认；更新包通过签名校验后才会安装，安装期间应用会退出并重启。
           免安装版 Windows exe 无法原地替换，请从发布页手动下载。
