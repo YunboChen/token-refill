@@ -256,6 +256,42 @@ async fn replace_api_key(
         .map_err(|err| format!("更新 API Key 失败：{err}"))?
 }
 
+/// 用阿里云 AccessKey 接入百炼；AK/SK 只交给 Rust，不进入前端状态。
+#[tauri::command]
+async fn add_bailian_access_key_account(
+    store: tauri::State<'_, Arc<StateStore>>,
+    display_name: Option<String>,
+    access_key_id: String,
+    access_key_secret: String,
+) -> Result<PersistedState, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || {
+        store.add_bailian_access_key_account(
+            display_name.as_deref(),
+            &access_key_id,
+            &access_key_secret,
+        )
+    })
+    .await
+    .map_err(|err| format!("添加百炼账户失败：{err}"))?
+}
+
+/// 更新百炼 AccessKey 账户的 AK/SK；验证通过才覆盖。
+#[tauri::command]
+async fn replace_bailian_access_key(
+    store: tauri::State<'_, Arc<StateStore>>,
+    account_id: String,
+    access_key_id: String,
+    access_key_secret: String,
+) -> Result<PersistedState, String> {
+    let store = Arc::clone(&store);
+    tauri::async_runtime::spawn_blocking(move || {
+        store.replace_bailian_access_key(&account_id, &access_key_id, &access_key_secret)
+    })
+    .await
+    .map_err(|err| format!("更新百炼 AccessKey 失败：{err}"))?
+}
+
 /// 接入本机 Antigravity CLI 登录态；额度在后台刷新。
 #[tauri::command]
 fn add_antigravity_account(
@@ -813,6 +849,8 @@ pub fn run() {
             rename_account,
             add_api_key_account,
             replace_api_key,
+            add_bailian_access_key_account,
+            replace_bailian_access_key,
             add_antigravity_account,
             remove_account,
             open_external_url,

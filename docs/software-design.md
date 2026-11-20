@@ -29,6 +29,8 @@ Codex 重置卡复用同一个 app-server 通道：`account/rateLimits/read` 的
 
 百炼账户属于独立授权账户：Rust 在 `127.0.0.1` 随机端口启动一次性回调服务，打开官方控制台登录页；浏览器把控制台 `access_token` 回传到该地址，`state` 校验通过后才写入 `bailian-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600）。一个百炼账户下有两个产品：Token Plan 与 Coding Plan。每次刷新顺序请求两类额度接口，任一失败只影响对应产品并保留其上次成功快照；两者都判定会话失效时才把账户标为需要重新授权。控制台令牌没有 refresh token，有效期实测约 24 小时；`credentials.json` 记录写入时间，启动与刷新时据此推算到期时间并只把时间戳放进 `PersistedState` 供账户页展示，到期前 2 小时提醒一次。控制台登录令牌是单活的：应用与 `bl` CLI 使用同一个官方 `console-login` 入口和同一类 Bearer 令牌，任一端完成新的授权都会在服务端轮换掉另一端的旧令牌，日常额度查询不会；应用只写自己的 `bailian-profiles/<accountId>/credentials.json`，不读写 `~/.bailian/config.json`，也没有 logout/revoke 调用，界面在添加与重新授权流程中如实提示这一点。令牌本身不进入 `PersistedState`、IPC 返回值、事件或日志；移除账户会删除该目录。
 
+百炼也可用阿里云 AccessKey 接入：用户在添加弹窗中主动填写 AK/SK，应用按阿里云 OpenAPI V3（`ACS3-HMAC-SHA256`）签名调用 `GenerateCLIAccessToken`（`modelstudio.cn-beijing.aliyuncs.com`，版本 `2026-02-10`）换取短期 CLI 访问令牌，再走与控制台完全相同的两类额度接口。添加时先换取令牌并真实查询一次，任一套餐成功才保存；AK/SK 与令牌缓存写入 `bailian-profiles/<accountId>/access-key.json`（Unix 目录 0700、文件 0600，先写临时文件再原子替换），`PersistedState` 只记录 `authMethod: access-key`。令牌本地缓存 20 小时，超过后重新换取；查询返回授权类错误时先换新令牌重试一次，仍失败才按授权失效处理。这类账户没有控制台到期时间，`credentialExpiresAtEpoch` 为 `null`，不参与到期提醒。AccessKey 只能由用户手动填写，不读取 `~/.aliyun`、`~/.bailian`、环境变量或其他工具的 AK 配置。RAM 用户需要系统策略 `AliyunBailianFullAccess`、`AliyunBSSReadOnlyAccess`、`AliyunTokenPlanReadOnlyAccess`，并需在百炼账号管理中添加该 RAM 用户、授予「智能体-操作」「订阅套餐」权限；界面在添加步骤中列出这几项，不使用主账号 AccessKey。刷新与更新 AccessKey 可能并发：换取令牌和写入结果前都会核对磁盘上的 AccessKey 是否仍是同一份，避免旧令牌或旧快照覆盖新填写的凭据。控制台授权与 AccessKey 可以互相切换：重新授权入口提供两种方式，切换只更新 `authMethod` 与对应凭证文件，账户标识、名称、套餐快照与排序不变；切换成功后删除另一种方式遗留的凭证文件，刷新途中切换时旧方式的查询结果会被丢弃。
+
 OpenCode Go 与 Command Code 属于 API Key 账户：添加时先用一次真实查询验证密钥，成功后写入 `api-profiles/<accountId>/credentials.json`（同样 0700/0600），失败不会留下账户或凭证。OpenCode Go 读取官方 `GET https://opencode.ai/zen/go/v1/usage` 的 5 小时 / 每周 / 订阅月百分比；Command Code 读取 CLI 同款 `/alpha/billing/credits`、`/alpha/usage/summary` 与 `/alpha/billing/subscriptions`，月度上限由“已用 + 剩余”推导，辅助接口失败时保留滚动窗口并记录能力缺口。密钥只在 Rust 侧使用，不进入 `PersistedState`、事件或错误消息。
 
 WorkBuddy 账户属于独立授权账户：Rust 先向官方接口申请一次性 `state` 与登录页地址，用系统浏览器打开；用户在官方页面完成登录后，Rust 轮询同一 `state` 的登录结果，取回 access token 与 refresh token，写入 `workbuddy-profiles/<accountId>/credentials.json`（Unix 目录 0700、文件 0600，先写临时文件再原子替换）。额度以计费摘要的官方 `CreditGroups` 为准，按套餐基础 / 套餐赠送 / 购买 / 平台奖励分别展示，每组一个周期窗口；套餐编码沿用官方客户端的分组映射（`plan_base` / `plan_bonus` / `addon` / `benefit`），从付费 / 免费套餐分页接口补充各组的重置或最近到期时间。分页失败只记录能力缺口，不影响余额展示。访问令牌到期前 60 秒或查询返回 401/403 时，使用 refresh token 调用官方续期接口；续期失效才把账户标为需要重新授权。令牌与账户标识只存在于凭证文件和 Rust 请求头，不进入 `PersistedState`、IPC 返回值、事件或日志；移除账户会删除该目录。
@@ -112,10 +114,10 @@ Codex 与百炼两类套餐均已完成真实读取验证，百炼的协议与�
 | 接入对象 | 当前已知线索 | 仍需验证 |
 | --- | --- | --- |
 | Codex 订阅，当前测试 Plus | 用户截图确认 Plus，当前界面按剩余百分比展示 5 小时及 1 周窗口；无身份化展示约束见需求文档 | 允许的查询来源、鉴权及续期、百分比口径、实际窗口与时间语义；截图不作为已验证协议 |
-| 百炼 Token Plan 个人版 | 已核实：控制台网关 API 返回订阅月已用比例（0..1）与重置时间；控制台浏览器登录可拿到所需令牌 | 第二个账号的隔离、限流；令牌有效期约 24 小时且无 refresh token，只能重新授权；不返回绝对 Credits 余额 |
-| 百炼 Coding Plan 中国站 | 已核实：控制台网关 API 返回有效订阅的调用次数与 5 小时、周、订阅月三个窗口，以及套餐档位 | 第二个账号的隔离、限流；令牌有效期约 24 小时且无 refresh token，只能重新授权；不提供 token 消耗或单模型用量 |
+| 百炼 Token Plan 个人版 | 已核实：控制台网关 API 返回订阅月已用比例（0..1）与重置时间；控制台浏览器登录或 AK/SK 换取 CLI 令牌均可拿到所需令牌 | 第二个账号的隔离、限流；控制台令牌有效期约 24 小时且无 refresh token，需改用 AccessKey 接入或重新授权；不返回绝对 Credits 余额 |
+| 百炼 Coding Plan 中国站 | 已核实：控制台网关 API 返回有效订阅的调用次数与 5 小时、周、订阅月三个窗口，以及套餐档位 | 第二个账号的隔离、限流；控制台令牌有效期约 24 小时且无 refresh token，需改用 AccessKey 接入或重新授权；不提供 token 消耗或单模型用量 |
 
-百炼接入不依赖 `bl` CLI，而是直接使用控制台登录回调和网关协议；已在用户本机环境完成真实读取。运行模型推理所用的 API Key 与查询套餐用量所需的控制台授权不能等同，应用会明确区分。
+百炼接入不依赖也不调用 `bl` CLI，而是直接使用控制台登录回调与网关协议，或用 AK/SK 按官方 OpenAPI 签名换取同一类 CLI 令牌；两类路径都已在用户本机环境完成真实读取。运行模型推理所用的 API Key 与查询套餐用量所需的控制台授权不能等同，应用会明确区分。
 
 ### 4.2 已确认的接入原则，具体实现待能力验证
 

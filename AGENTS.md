@@ -10,7 +10,7 @@
 - 应用标识 `dev.tokenrefill.desktop`；数据目录由 Tauri `app_data_dir()` 决定：
   - macOS `~/Library/Application Support/dev.tokenrefill.desktop/`
   - Windows `%APPDATA%\dev.tokenrefill.desktop\`
-  - 目录内：`state.json`（设置、账户、额度快照、提醒去重、悬浮球当前套餐与位置）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌）、`workbuddy-profiles/<accountId>/`（WorkBuddy 访问令牌与续期令牌）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
+  - 目录内：`state.json`（设置、账户、额度快照、提醒去重、悬浮球当前套餐与位置）、`codex-profiles/<accountId>/`（独立账户的 `CODEX_HOME`）、`api-profiles/<accountId>/`（API Key 账户凭证）、`bailian-profiles/<accountId>/`（百炼控制台令牌 `credentials.json`，或 AccessKey 接入时保存的 `access-key.json`）、`workbuddy-profiles/<accountId>/`（WorkBuddy 访问令牌与续期令牌）、`relay-profiles/<relayId>/`（手动填写的中转站凭证 `credentials.json`，或扫描导入的来源引用 `source.json` 与额度快照 `snapshot.json`）与 `logs/window.log`（窗口、托盘生命周期日志，单文件上限 256 KiB，轮转保留一份）。
   - `logs/` 只写固定文案、窗口标签与耗时，用途是排查发布包没有控制台（Windows GUI 子系统丢弃 `eprintln!`）时的“点了没反应”。令牌、Cookie、邮箱、密钥、请求内容一律不得写入。
   - 测试版与 Next 预览版的数据目录分别是 `.../dev.tokenrefill.desktop.test/` 与 `.../dev.tokenrefill.desktop.next/`，内部结构相同，三者互不共享状态与凭证。
 - 分发渠道分正式版（pro）、测试版（test）与 Next 预览版（next），共用代码，靠 `src-tauri/tauri.test.conf.json` / `src-tauri/tauri.next.conf.json` 覆盖身份：
@@ -31,7 +31,8 @@
 
 - 任何令牌、Cookie、密钥、邮箱原文都不得进入前端状态、日志、错误消息、测试样例或提交内容。
 - Codex 只通过官方 CLI 的 `app-server --stdio` JSON-RPC 交互；不解析、不复制、不迁移授权文件，令牌由 Codex CLI 维护在隔离目录。
-- 百炼控制台会话令牌由官方登录页回传，有效期约 24 小时且没有 refresh token。只能按凭证写入时间推算到期并在到期前提醒用户重新授权；不得读取浏览器 Cookie、不得用 AK/SK 换取长期令牌来绕过重新授权。状态文件只保存推算出的到期时间戳，不保存令牌。
+- 百炼控制台会话令牌由官方登录页回传，有效期约 24 小时且没有 refresh token。只能按凭证写入时间推算到期并在到期前提醒用户重新授权；不得读取浏览器 Cookie，也不得用 AK/SK 换取长效凭据来绕过重新授权。状态文件只保存推算出的到期时间戳，不保存令牌。
+- 百炼另提供用户主动填写的 AccessKey 接入：AK/SK 写入 `bailian-profiles/<accountId>/access-key.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 按用户 ACL，先写临时文件再原子替换），只用于调用阿里云 OpenAPI `GenerateCLIAccessToken` 换取百炼 CLI 访问令牌，该令牌就是控制台网关的短期 Bearer，本地缓存 20 小时后重新换取，失效时也会自动重换；它不延长控制台浏览器授权的会话，也不代替其他平台的授权。不得读取 `~/.bailian`、`~/.aliyun`、环境变量或任何工具的 AK 配置，不自动扫描，必须由用户在添加账户时主动填写。AK/SK 与换出的令牌不得进入前端状态、日志、错误消息、测试样例或提交内容；状态文件只记录该账户的 `authMethod`。RAM 用户需要系统策略 `AliyunBailianFullAccess`、`AliyunBSSReadOnlyAccess`、`AliyunTokenPlanReadOnlyAccess`，并需在百炼账号管理中添加该 RAM 用户、授予「智能体-操作」与「订阅套餐」权限；不要使用主账号 AccessKey。控制台授权的账户可在重新授权入口原地改用 AccessKey，AccessKey 账户也可切回浏览器授权：切换只改 `authMethod`，保留账户标识、名称与快照，不再使用的凭证文件要删除。
 - 独立账户必须使用自己的 `CODEX_HOME`；本机账户只沿用本机登录态，不得修改或覆盖它。
 - 移除账户只清理本应用目录，不触发源工具注销，不影响其他账户。
 - 中转站手动填写的 API Key 与 New API 访问令牌写入 `relay-profiles/<relayId>/credentials.json`（Unix 目录 0700、文件 0600，Windows 沿用 `%APPDATA%` 按用户 ACL），先写临时文件再原子替换；只保存用户主动填写的凭证。从 cc-switch、Claude Code / Codex 配置扫描到的密钥不得复制到应用目录；勾选导入后只能在 `relay-profiles/<relayId>/source.json` 保存来源引用（来源、provider id、地址、provider 类型与用户主动填写的访问令牌），启动时按引用重新读取源配置，取不到就跳过该账户。扫描只列候选、不联网，必须由用户勾选确认后才查询额度。cc-switch 的 `~/.cc-switch/cc-switch.db` 只能只读打开，不修改、不迁移、不复制其中的数据。New API 访问令牌只用于 `/api/user/self` 与 `/api/subscription/self`，不进入前端状态、日志或错误消息；旧版单令牌需要的 `New-Api-User` 用户 ID 与令牌一并保存，只作为请求头发送，不写入日志。
@@ -91,7 +92,7 @@
 - 应用内更新的 minisign 私钥存放在 GitHub Secrets（`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`），不进仓库、不写日志；`createUpdaterArtifacts` 只在 CI 用 `--config` 打开，本地构建不依赖私钥。私钥丢失只能换公钥并要求用户手动重装，发布前确认已离线备份。
 - Release 构建成功后直接发布（`draft: false`），不设草稿确认环节；推送 `main` 前必须自行确认版本号、产物与签名状态，发布即对用户可见。
 - 测试包走 `.github/workflows/build-test.yml`（手动触发，用 `ref` 输入选择任意分支与平台），只上传 workflow artifact，不创建 Release、不打 tag、不改版本号；验证分支不必先合入 `main`，也不得用 `release.yml` 的手动触发代替测试构建。GitHub 只为默认分支（`main`）登记手动触发入口，该工作流文件需保留在 `main` 上；目标分支靠 `ref` 指定，因此不必包含该文件。
-- Next 预览版走 `.github/workflows/release-next.yml`：在承载预览改造的分支上推送 `v<X.Y.Z>-next.<序号>` tag 即可构建并发布 GitHub prerelease（tag 所在提交需包含本工作流与 `tauri.next.conf.json`）；也可在 `main` 上手动触发并通过 `ref` 指定分支。它使用 `tauri.next.conf.json` 的独立身份，注入版本但不写回源文件，不生成 updater 产物与 `latest.json`，不参与应用内更新。`release.yml` 会跳过 `-next.` 标签，避免用正式 identifier 再构建一次；不要用 `release.yml` 手动触发来发 Next 包。
+- Next 预览版走 `.github/workflows/release-next.yml`：在承载预览改造的分支上推送 `v<X.Y.Z>-next.<序号>` tag 即可构建并发布 GitHub prerelease（tag 所在提交需包含本工作流与 `tauri.next.conf.json`）；也可在 `main` 上手动触发并通过 `ref` 指定分支。它使用 `tauri.next.conf.json` 的独立身份，注入版本但不写回源文件，不生成 updater 产物与 `latest.json`，不参与应用内更新。`release.yml` 会跳过 `-next.` 标签，避免用正式 identifier 再构建一次；正式发布的版本单调性检查只比较正式 tag，Next 预览 tag（可能高于当前正式线）不参与，否则会反过来阻断正式版本。不要用 `release.yml` 手动触发来发 Next 包。
 - 版本检查只做「比较 + 提示」；应用内更新由用户分别确认下载与安装，更新包经 minisign 校验后才替换。不做后台静默安装，也没有自动回滚：更新出问题只能发新版本或让用户手动重装。
 
 ## 6. 开发与验证

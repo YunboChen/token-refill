@@ -38,6 +38,7 @@ export function defaultAppState(): AppState {
         source: 'local',
         identityHint: null,
         credentialExpiresAtEpoch: null,
+        authMethod: null,
         products: [
           {
             productId: 'codex-subscription',

@@ -263,6 +263,15 @@ pub enum AccountSource {
     Managed,
 }
 
+/// 百炼账户的登录方式。旧状态文件没有该字段，按控制台授权处理；
+/// AccessKey 账户用 AK/SK 换取短期控制台令牌，不再有过期倒计时。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BailianAuthMethod {
+    Console,
+    AccessKey,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountState {
@@ -272,6 +281,9 @@ pub struct AccountState {
     pub auth_state: AuthState,
     #[serde(default)]
     pub source: AccountSource,
+    /// 百炼账户的登录方式；其他平台保持 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_method: Option<BailianAuthMethod>,
     /// 脱敏身份提示（如 j***@example.com），不包含令牌。
     #[serde(default)]
     pub identity_hint: Option<String>,
@@ -453,6 +465,7 @@ pub fn default_state() -> PersistedState {
 
 fn local_codex_account() -> AccountState {
     AccountState {
+        auth_method: None,
         account_id: DEFAULT_ACCOUNT_ID.to_string(),
         platform: "codex".to_string(),
         display_name: "本机 Codex".to_string(),
@@ -1617,6 +1630,7 @@ fn apply_login_success(
         .or_else(|| identity_hint.clone())
         .unwrap_or_else(|| "Codex 账户".to_string());
     state.accounts.push(AccountState {
+        auth_method: None,
         account_id: account_id.to_string(),
         platform: "codex".to_string(),
         display_name,
@@ -3063,6 +3077,7 @@ impl StateStore {
         let checked_at = snapshot.checked_at_epoch;
         let result = self.update_strict(|state| {
             state.accounts.push(AccountState {
+                auth_method: None,
                 account_id: account_id.clone(),
                 platform: platform.to_string(),
                 display_name: name,
@@ -3120,6 +3135,111 @@ impl StateStore {
         })
     }
 
+    /// 用阿里云 AccessKey 接入百炼：先换取控制台令牌并真实读取一次额度，
+    /// 成功后才保存 AK/SK。AK/SK 只写入该账户的私有目录，不进入前端状态。
+    pub fn add_bailian_access_key_account(
+        &self,
+        display_name: Option<&str>,
+        access_key_id: &str,
+        access_key_secret: &str,
+    ) -> Result<PersistedState, String> {
+        let (access_key_id, access_key_secret) =
+            bailian::validate_access_key_pair(access_key_id, access_key_secret)?;
+        let (readout, credentials) = bailian::probe_access_key(&access_key_id, &access_key_secret)
+            .map_err(|error| error.message)?;
+
+        let account_id = new_account_id("bailian");
+        let profile = self
+            .private_bailian_dir(&account_id)
+            .ok_or_else(|| "账户标识无效".to_string())?;
+        bailian::save_access_key_credentials(&profile, &credentials)?;
+
+        let name = display_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                readout
+                    .identity
+                    .as_ref()
+                    .and_then(|identity| identity.nickname())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "百炼账户".to_string());
+        let identity_hint = readout
+            .identity
+            .as_ref()
+            .and_then(|identity| identity.hint());
+        let checked_at = readout.checked_at_epoch;
+        let result = self.update_strict(|state| {
+            state.accounts.push(AccountState {
+                auth_method: Some(BailianAuthMethod::AccessKey),
+                account_id: account_id.clone(),
+                platform: "bailian".to_string(),
+                display_name: name,
+                auth_state: AuthState::Unknown,
+                source: AccountSource::Managed,
+                identity_hint,
+                credential_expires_at_epoch: None,
+                products: bailian_products(),
+            });
+            apply_bailian_readout(state, &account_id, &readout, checked_at);
+        });
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&profile);
+        }
+        result
+    }
+
+    /// 为百炼账户设置 AccessKey：控制台授权的账户可原地切换到 AccessKey，
+    /// 账户标识、名称、套餐与排序保持不变。验证通过才覆盖旧凭据。
+    pub fn replace_bailian_access_key(
+        &self,
+        account_id: &str,
+        access_key_id: &str,
+        access_key_secret: &str,
+    ) -> Result<PersistedState, String> {
+        let state = self.snapshot();
+        let account = state
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)
+            .ok_or_else(|| format!("未知账户：{account_id}"))?;
+        if account.platform != "bailian" || account.source != AccountSource::Managed {
+            return Err("该账户不能使用 AccessKey 授权。".to_string());
+        }
+        let (access_key_id, access_key_secret) =
+            bailian::validate_access_key_pair(access_key_id, access_key_secret)?;
+        let (readout, credentials) = bailian::probe_access_key(&access_key_id, &access_key_secret)
+            .map_err(|error| error.message)?;
+        let profile = self
+            .private_bailian_dir(account_id)
+            .ok_or_else(|| "账户标识无效".to_string())?;
+        bailian::save_access_key_credentials(&profile, &credentials)?;
+        let checked_at = readout.checked_at_epoch;
+        let identity_hint = readout
+            .identity
+            .as_ref()
+            .and_then(|identity| identity.hint());
+        let result = self.update_strict(|state| {
+            if let Some(account) = account_mut(state, account_id) {
+                account.auth_method = Some(BailianAuthMethod::AccessKey);
+                account.auth_state = AuthState::Unknown;
+                account.credential_expires_at_epoch = None;
+                // 切换接入方式时 AK 可能属于另一个阿里云账号，提示跟随新身份。
+                if identity_hint.is_some() {
+                    account.identity_hint = identity_hint;
+                }
+            }
+            apply_bailian_readout(state, account_id, &readout, checked_at);
+        });
+        if result.is_ok() {
+            // 控制台令牌不再使用；切换后由 AK/SK 换取短期令牌。
+            let _ = fs::remove_file(bailian::credentials_path(&profile));
+        }
+        result
+    }
+
     /// 接入本机 Antigravity CLI 登录态。额度查询走 `agy` 官方打印模式，
     /// 应用不读取或复制 CLI 的令牌。查询在后台执行，命令立即返回。
     pub fn add_antigravity_account(
@@ -3141,6 +3261,7 @@ impl StateStore {
             .unwrap_or_else(|| platform_display_name(ANTIGRAVITY_PLATFORM).to_string());
         let state = self.update_strict(|state| {
             state.accounts.push(AccountState {
+                auth_method: None,
                 account_id: ANTIGRAVITY_ACCOUNT_ID.to_string(),
                 platform: ANTIGRAVITY_PLATFORM.to_string(),
                 display_name: name,
@@ -3182,6 +3303,7 @@ impl StateStore {
                 return;
             }
             state.accounts.push(AccountState {
+                auth_method: None,
                 account_id: OPENCODE_LOCAL_ACCOUNT_ID.to_string(),
                 platform: OPENCODE_GO_PLATFORM.to_string(),
                 display_name: "本机 OpenCode".to_string(),
@@ -3241,6 +3363,7 @@ impl StateStore {
                 return;
             }
             state.accounts.push(AccountState {
+                auth_method: None,
                 account_id: ANTIGRAVITY_ACCOUNT_ID.to_string(),
                 platform: ANTIGRAVITY_PLATFORM.to_string(),
                 display_name: platform_display_name(ANTIGRAVITY_PLATFORM).to_string(),
@@ -3710,6 +3833,7 @@ impl StateStore {
                 return;
             }
             state.accounts.push(AccountState {
+                auth_method: None,
                 account_id: account_id.to_string(),
                 platform: CURSOR_PLATFORM.to_string(),
                 display_name: requested_name.unwrap_or_else(|| "Cursor 账户".to_string()),
@@ -3757,6 +3881,7 @@ impl StateStore {
                 return;
             }
             state.accounts.push(AccountState {
+                auth_method: None,
                 account_id: account_id.to_string(),
                 platform: WORKBUDDY_PLATFORM.to_string(),
                 display_name: requested_name
@@ -3783,6 +3908,7 @@ impl StateStore {
             if let Some(account) = account_mut(state, account_id) {
                 account.auth_state = AuthState::Unknown;
                 account.source = AccountSource::Managed;
+                account.auth_method = Some(BailianAuthMethod::Console);
                 account.credential_expires_at_epoch = credential_expires_at_epoch;
                 if let Some(name) = &requested_name {
                     account.display_name = name.clone();
@@ -3800,6 +3926,7 @@ impl StateStore {
                 return;
             }
             state.accounts.push(AccountState {
+                auth_method: Some(BailianAuthMethod::Console),
                 account_id: account_id.to_string(),
                 platform: "bailian".to_string(),
                 display_name: requested_name.unwrap_or_else(|| "百炼账户".to_string()),
@@ -3810,6 +3937,10 @@ impl StateStore {
                 products: bailian_products(),
             });
         });
+        // 从 AccessKey 切回控制台授权时清掉不再使用的 AK/SK。
+        if let Some(dir) = self.private_bailian_dir(account_id) {
+            let _ = fs::remove_file(bailian::access_key_credentials_path(&dir));
+        }
     }
 
     fn finish_login(
@@ -4005,6 +4136,15 @@ impl StateStore {
             return None;
         }
         self.private_bailian_dir(account_id)
+    }
+
+    fn bailian_auth_method_for(&self, account_id: &str) -> Option<BailianAuthMethod> {
+        self.snapshot()
+            .accounts
+            .iter()
+            .find(|account| account.account_id == account_id)
+            .filter(|account| account.platform == "bailian")
+            .map(|account| account.auth_method.unwrap_or(BailianAuthMethod::Console))
     }
 
     fn workbuddy_profile_dir_for(&self, account_id: &str) -> Option<PathBuf> {
@@ -4353,6 +4493,10 @@ fn refresh_bailian(store: &Arc<StateStore>, account_id: &str) {
         store.update_soft(|state| clear_refreshing(state, account_id));
         return;
     };
+    if store.bailian_auth_method_for(account_id) == Some(BailianAuthMethod::AccessKey) {
+        refresh_bailian_access_key(store, account_id, profile);
+        return;
+    }
     let credentials = bailian::load_credentials(&profile);
     if store.has_pending_login(account_id) {
         store.update_soft(|state| clear_refreshing(state, account_id));
@@ -4374,6 +4518,11 @@ fn refresh_bailian(store: &Arc<StateStore>, account_id: &str) {
         store.update_soft(|state| clear_refreshing(state, account_id));
         return;
     }
+    // 查询期间账户可能已切换为 AccessKey 接入；控制台令牌的结果不再适用。
+    if store.bailian_auth_method_for(account_id) != Some(BailianAuthMethod::Console) {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    }
 
     let mut low_notices = Vec::new();
     let mut reset_notices = Vec::new();
@@ -4392,6 +4541,119 @@ fn refresh_bailian(store: &Arc<StateStore>, account_id: &str) {
     for notice in &reset_notices {
         store.notify_reset(notice);
     }
+}
+
+/// AccessKey 账户：用 AK/SK 换取短期控制台令牌后走既有的两类套餐查询。
+/// 令牌过期时自动换新，不产生“重新授权”倒计时或到期提醒。
+fn refresh_bailian_access_key(store: &Arc<StateStore>, account_id: &str, profile: PathBuf) {
+    if store.has_pending_login(account_id) {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    }
+    let mut credentials = match bailian::load_access_key_credentials(&profile) {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            store.apply_bailian_refresh_error(account_id, &error, epoch_now());
+            return;
+        }
+    };
+
+    let now = epoch_now();
+    let mut token = if credentials.has_fresh_token(now) {
+        credentials.cli_access_token.clone().unwrap_or_default()
+    } else {
+        match mint_bailian_cli_token(&profile, &mut credentials) {
+            Ok(token) => token,
+            Err(error) => {
+                store.apply_bailian_refresh_error(account_id, &error, epoch_now());
+                return;
+            }
+        }
+    };
+
+    let mut readout = bailian::read_usage(&token);
+    if readout_auth_failed(&readout) {
+        // 缓存的令牌可能已在服务端失效；换新后重试一次，仍失败才按授权失效处理。
+        match mint_bailian_cli_token(&profile, &mut credentials) {
+            Ok(fresh) => {
+                token = fresh;
+                readout = bailian::read_usage(&token);
+            }
+            Err(error) => {
+                store.apply_bailian_refresh_error(account_id, &error, epoch_now());
+                return;
+            }
+        }
+    }
+    // 查询期间可能已开始更新 AccessKey；旧 AK 的结果不能覆盖新凭据。
+    if store.has_pending_login(account_id) || !access_key_unchanged(&profile, &credentials) {
+        store.update_soft(|state| clear_refreshing(state, account_id));
+        return;
+    }
+
+    let finished_at = epoch_now();
+    let mut low_notices = Vec::new();
+    let mut reset_notices = Vec::new();
+    store.update_soft(|state| {
+        if let Some(account) = account_mut(state, account_id) {
+            // AccessKey 账户的令牌可以静默换新，不展示到期时间。
+            account.credential_expires_at_epoch = None;
+        }
+        let previous_resets = window_resets(state, account_id);
+        apply_bailian_readout(state, account_id, &readout, finished_at);
+        low_notices = low_quota_notices(state, account_id);
+        reset_notices = collect_reset_notices(state, account_id, &previous_resets);
+    });
+    for notice in &low_notices {
+        store.notify_low_quota(notice);
+    }
+    for notice in &reset_notices {
+        store.notify_reset(notice);
+    }
+}
+
+fn mint_bailian_cli_token(
+    profile: &Path,
+    credentials: &mut bailian::AccessKeyCredentials,
+) -> Result<String, BailianError> {
+    let token = bailian::generate_cli_access_token(
+        &credentials.access_key_id,
+        &credentials.access_key_secret,
+        credentials.security_token.as_deref(),
+    )?;
+    // 换取令牌期间用户可能已更新 AccessKey；旧 AK 的令牌不能写回新凭据文件。
+    if access_key_unchanged(profile, credentials) {
+        credentials.cli_access_token = Some(token.clone());
+        credentials.cli_token_issued_at_epoch = Some(epoch_now());
+        if let Err(message) = bailian::save_access_key_credentials(profile, credentials) {
+            // 缓存失败不影响本次查询；下次刷新会重新换取令牌。
+            eprintln!("保存百炼 AccessKey 令牌缓存失败：{message}");
+        }
+    }
+    Ok(token)
+}
+
+/// 磁盘上的 AccessKey 是否仍是本次查询使用的那一份；读不到也按已变更处理。
+fn access_key_unchanged(profile: &Path, credentials: &bailian::AccessKeyCredentials) -> bool {
+    bailian::load_access_key_credentials(profile)
+        .map(|latest| {
+            latest.access_key_id == credentials.access_key_id
+                && latest.access_key_secret == credentials.access_key_secret
+                && latest.security_token == credentials.security_token
+        })
+        .unwrap_or(false)
+}
+
+fn readout_auth_failed(readout: &BailianReadout) -> bool {
+    let token_plan_failed = matches!(
+        &readout.token_plan,
+        Err(error) if error.is_auth_error()
+    );
+    let coding_plan_failed = matches!(
+        &readout.coding_plan,
+        Err(error) if error.is_auth_error()
+    );
+    token_plan_failed && coding_plan_failed
 }
 
 fn probe_api_key(
@@ -5322,6 +5584,7 @@ mod tests {
             ] {
                 let mut state = default_state();
                 state.accounts.push(AccountState {
+                    auth_method: None,
                     account_id: "synthetic-provider".to_string(),
                     platform: platform.to_string(),
                     display_name: "测试账户".to_string(),
@@ -6007,6 +6270,7 @@ mod tests {
 
     fn bailian_account(id: &str) -> AccountState {
         AccountState {
+            auth_method: Some(BailianAuthMethod::Console),
             account_id: id.to_string(),
             platform: "bailian".to_string(),
             display_name: "百炼测试账户".to_string(),
@@ -6020,6 +6284,7 @@ mod tests {
 
     fn workbuddy_account(id: &str) -> AccountState {
         AccountState {
+            auth_method: None,
             account_id: id.to_string(),
             platform: WORKBUDDY_PLATFORM.to_string(),
             display_name: "WorkBuddy 账户".to_string(),
@@ -6370,6 +6635,49 @@ mod tests {
             account.products[0].query.last_error.as_ref().unwrap().code,
             "auth-expired"
         );
+    }
+
+    #[test]
+    fn bailian_permission_error_does_not_mark_account_for_reauth() {
+        let mut state = default_state();
+        state.accounts.push(bailian_account("bailian-1"));
+        let error = BailianError {
+            code: "permission".to_string(),
+            message: "AccessKey 缺少百炼 OpenAPI 权限。".to_string(),
+        };
+        apply_bailian_error(&mut state, "bailian-1", &error, 1_790_000_100);
+        let account = &state.accounts[1];
+        assert_eq!(account.auth_state, AuthState::Unknown);
+        assert!(account.products.iter().all(|product| product
+            .query
+            .last_error
+            .as_ref()
+            .is_some_and(|error| error.code == "permission")));
+    }
+
+    #[test]
+    fn access_key_refresh_reissues_token_only_when_both_plans_fail_auth() {
+        let mut readout = bailian_readout();
+        assert!(!readout_auth_failed(&readout));
+        let expired = BailianError {
+            code: "auth-expired".to_string(),
+            message: "会话已失效".to_string(),
+        };
+        readout.token_plan = Err(expired.clone());
+        assert!(!readout_auth_failed(&readout));
+        readout.coding_plan = Err(expired);
+        assert!(readout_auth_failed(&readout));
+    }
+
+    #[test]
+    fn access_key_method_is_serialized_but_other_platforms_are_not() {
+        let mut account = bailian_account("bailian-1");
+        account.auth_method = Some(BailianAuthMethod::AccessKey);
+        let value = serde_json::to_value(&account).unwrap();
+        assert_eq!(value["authMethod"], "access-key");
+
+        let value = serde_json::to_value(local_codex_account()).unwrap();
+        assert!(value.get("authMethod").is_none());
     }
 
     #[test]

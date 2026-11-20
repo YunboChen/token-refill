@@ -134,8 +134,12 @@ export interface AccountState {
   identityHint: string | null;
   /** 百炼控制台令牌的本地推算到期时间；其他平台为 null。 */
   credentialExpiresAtEpoch: number | null;
+  /** 百炼接入方式：console 走浏览器授权，access-key 走 AK/SK；其他平台为 null。 */
+  authMethod: BailianAuthMethod | null;
   products: ProductState[];
 }
+
+export type BailianAuthMethod = 'console' | 'access-key';
 
 export interface LoginStart {
   loginId: string;
@@ -335,6 +339,32 @@ export function addApiKeyAccount(
 /** 验证通过后替换已有 API Key 账户的密钥。 */
 export function replaceApiKey(accountId: string, apiKey: string): Promise<AppState> {
   return invoke<AppState>('replace_api_key', { accountId, apiKey });
+}
+
+/** 用阿里云 AccessKey 接入百炼；AK/SK 只传递给 Rust，不进入前端状态。 */
+export function addBailianAccessKeyAccount(
+  displayName: string | undefined,
+  accessKeyId: string,
+  accessKeySecret: string,
+): Promise<AppState> {
+  return invoke<AppState>('add_bailian_access_key_account', {
+    displayName: displayName ?? null,
+    accessKeyId,
+    accessKeySecret,
+  });
+}
+
+/** 验证通过后替换百炼账户的 AccessKey。 */
+export function replaceBailianAccessKey(
+  accountId: string,
+  accessKeyId: string,
+  accessKeySecret: string,
+): Promise<AppState> {
+  return invoke<AppState>('replace_bailian_access_key', {
+    accountId,
+    accessKeyId,
+    accessKeySecret,
+  });
 }
 
 /** 接入本机 Antigravity CLI 登录态。 */

@@ -13,6 +13,7 @@ import { version as packageVersion } from '../../package.json';
 import {
   addAntigravityAccount as addAntigravityAccountCommand,
   addApiKeyAccount as addApiKeyAccountCommand,
+  addBailianAccessKeyAccount as addBailianAccessKeyAccountCommand,
   beginAccountLogin,
   beginBailianLogin as beginBailianLoginCommand,
   beginCursorLogin as beginCursorLoginCommand,
@@ -28,6 +29,7 @@ import {
   removeAccount as removeAccountCommand,
   renameAccount as renameAccountCommand,
   replaceApiKey as replaceApiKeyCommand,
+  replaceBailianAccessKey as replaceBailianAccessKeyCommand,
   setAutoLaunch as setAutoLaunchCommand,
   setFloatingBallEnabled as setFloatingBallEnabledCommand,
   setOverviewOrder as setOverviewOrderCommand,
@@ -102,6 +104,17 @@ interface AppStateContextValue {
     apiKey: string,
   ) => Promise<string | null>;
   replaceApiKey: (accountId: string, apiKey: string) => Promise<string | null>;
+  /** 用阿里云 AccessKey 接入百炼；AK/SK 只传递给 Rust。 */
+  addBailianAccessKeyAccount: (
+    displayName: string | undefined,
+    accessKeyId: string,
+    accessKeySecret: string,
+  ) => Promise<string | null>;
+  replaceBailianAccessKey: (
+    accountId: string,
+    accessKeyId: string,
+    accessKeySecret: string,
+  ) => Promise<string | null>;
   addAntigravityAccount: (displayName?: string) => Promise<string | null>;
   cancelLogin: (loginId: string) => Promise<void>;
   renameAccount: (accountId: string, displayName: string) => Promise<boolean>;
@@ -448,6 +461,52 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [desktop, applyState],
   );
 
+  const addBailianAccessKeyAccount = useCallback(
+    async (
+      displayName: string | undefined,
+      accessKeyId: string,
+      accessKeySecret: string,
+    ) => {
+      if (!desktop) return '浏览器预览无法调用桌面接口。';
+      try {
+        const next = await addBailianAccessKeyAccountCommand(
+          displayName,
+          accessKeyId,
+          accessKeySecret,
+        );
+        applyState(next);
+        setError(null);
+        return null;
+      } catch (err) {
+        const message = errorMessage(err);
+        setError(message);
+        return message;
+      }
+    },
+    [desktop, applyState],
+  );
+
+  const replaceBailianAccessKey = useCallback(
+    async (accountId: string, accessKeyId: string, accessKeySecret: string) => {
+      if (!desktop) return '浏览器预览无法调用桌面接口。';
+      try {
+        const next = await replaceBailianAccessKeyCommand(
+          accountId,
+          accessKeyId,
+          accessKeySecret,
+        );
+        applyState(next);
+        setError(null);
+        return null;
+      } catch (err) {
+        const message = errorMessage(err);
+        setError(message);
+        return message;
+      }
+    },
+    [desktop, applyState],
+  );
+
   const addAntigravityAccount = useCallback(
     async (displayName?: string) => {
       if (!desktop) return '浏览器预览无法调用桌面接口。';
@@ -582,6 +641,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       beginCursorLogin,
       addApiKeyAccount,
       replaceApiKey,
+      addBailianAccessKeyAccount,
+      replaceBailianAccessKey,
       addAntigravityAccount,
       cancelLogin,
       renameAccount,
@@ -609,6 +670,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       beginCursorLogin,
       addApiKeyAccount,
       replaceApiKey,
+      addBailianAccessKeyAccount,
+      replaceBailianAccessKey,
       addAntigravityAccount,
       cancelLogin,
       renameAccount,
