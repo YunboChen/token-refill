@@ -154,7 +154,11 @@ export function planTierLabel(tier: string): string {
 
 /** 账户接入方式；总览与账户页共用同一套说法。 */
 export function sourceLabel(account: AccountState): string {
-  if (account.platform === 'bailian') return '百炼控制台授权';
+  if (account.platform === 'bailian') {
+    return account.authMethod === 'access-key'
+      ? 'AccessKey 授权'
+      : '百炼控制台授权';
+  }
   if (account.platform === 'workbuddy') return 'WorkBuddy 官方授权';
   if (account.platform === 'cursor') return 'Cursor 官方登录';
   if (account.platform === 'antigravity') return '本机 agy 登录';

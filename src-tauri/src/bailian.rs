@@ -15,8 +15,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 /// 中国站控制台网关；用户已确认只接入国内站。
 const CONSOLE_GATEWAY: &str = "https://bailian-cs.console.aliyun.com";
@@ -37,10 +39,21 @@ const CALLBACK_POLL_INTERVAL: Duration = Duration::from_millis(120);
 const MAX_CALLBACK_BYTES: usize = 64 * 1024;
 const CREDENTIALS_FILE: &str = "credentials.json";
 
+/// 中国站 OpenAPI 端点。AK/SK 只用于换取 CLI 访问令牌，不直接查询额度。
+const OPEN_API_HOST: &str = "modelstudio.cn-beijing.aliyuncs.com";
+const OPEN_API_BASE_URL: &str = "https://modelstudio.cn-beijing.aliyuncs.com";
+const OPEN_API_VERSION: &str = "2026-02-10";
+const GENERATE_TOKEN_PATH: &str = "/modelstudio/cli/generateAccessToken";
+const GENERATE_TOKEN_ACTION: &str = "GenerateCLIAccessToken";
+const ACCESS_KEY_FILE: &str = "access-key.json";
+
 /// 控制台会话令牌的有效期。登录回调只返回 `access_token`，没有 refresh token；
 /// 阿里云控制台的 CLI 授权令牌实测约 24 小时后网关即返回 NotLogined。
 /// 这里只用于本地推算到期时间与提前提醒，不作为鉴权判断。
 pub const CONSOLE_TOKEN_TTL_SECS: i64 = 24 * 60 * 60;
+/// AK/SK 换出的 CLI 访问令牌同样按控制台会话处理；保守缓存 20 小时，
+/// 提前失效时由网关响应触发重新生成，不作为鉴权判断。
+const CLI_TOKEN_TTL_SECS: i64 = 20 * 60 * 60;
 /// 到期前多久提醒用户重新授权。
 pub const CONSOLE_TOKEN_REMIND_SECS: i64 = 2 * 60 * 60;
 
@@ -62,6 +75,11 @@ impl BailianError {
 
     fn auth(message: impl Into<String>) -> Self {
         Self::new("auth-expired", message)
+    }
+
+    /// AccessKey 有效但缺少 RAM 权限；这不是“重新授权”，不应触发失效通知。
+    fn permission(message: impl Into<String>) -> Self {
+        Self::new("permission", message)
     }
 
     fn network(message: impl Into<String>) -> Self {
@@ -180,6 +198,133 @@ pub fn credential_expiry_epoch(profile_dir: &Path) -> Option<i64> {
     load_credentials(profile_dir)
         .ok()
         .and_then(|credentials| credentials.expires_at_epoch())
+}
+
+// ---------- AccessKey 凭证 ----------
+
+/// 用户主动填写的阿里云 AccessKey。AK/SK 只写入应用私有目录；`cli_access_token`
+/// 是用它换出的短期控制台令牌缓存，失效后可以重新生成，不进入前端状态或日志。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccessKeyCredentials {
+    pub access_key_id: String,
+    pub access_key_secret: String,
+    /// STS 临时凭证才需要；长期 AK 为 `None`。
+    #[serde(default)]
+    pub security_token: Option<String>,
+    #[serde(default)]
+    pub cli_access_token: Option<String>,
+    #[serde(default)]
+    pub cli_token_issued_at_epoch: Option<i64>,
+}
+
+impl AccessKeyCredentials {
+    pub fn new(access_key_id: &str, access_key_secret: &str) -> Self {
+        Self {
+            access_key_id: access_key_id.to_string(),
+            access_key_secret: access_key_secret.to_string(),
+            security_token: None,
+            cli_access_token: None,
+            cli_token_issued_at_epoch: None,
+        }
+    }
+
+    /// 缓存令牌在保守有效期内才复用；到期后重新生成，避免每次刷新都请求 OpenAPI。
+    pub fn has_fresh_token(&self, now: i64) -> bool {
+        self.cli_access_token
+            .as_deref()
+            .is_some_and(|token| !token.trim().is_empty())
+            && self
+                .cli_token_issued_at_epoch
+                .is_some_and(|issued_at| now.saturating_sub(issued_at) < CLI_TOKEN_TTL_SECS)
+    }
+}
+
+pub fn access_key_credentials_path(profile_dir: &Path) -> PathBuf {
+    profile_dir.join(ACCESS_KEY_FILE)
+}
+
+/// 校验用户填写的 AccessKey。长度按阿里云常见格式留足余量，不校验前缀。
+pub fn validate_access_key_pair(
+    access_key_id: &str,
+    access_key_secret: &str,
+) -> Result<(String, String), String> {
+    let id = access_key_id.trim();
+    let secret = access_key_secret.trim();
+    if id.is_empty() {
+        return Err("请填写 AccessKey ID。".to_string());
+    }
+    if secret.is_empty() {
+        return Err("请填写 AccessKey Secret。".to_string());
+    }
+    if !(8..=128).contains(&id.len()) {
+        return Err("AccessKey ID 长度不正确。".to_string());
+    }
+    if !(8..=256).contains(&secret.len()) {
+        return Err("AccessKey Secret 长度不正确。".to_string());
+    }
+    if id.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("AccessKey ID 不能包含空白或控制字符。".to_string());
+    }
+    if secret.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("AccessKey Secret 不能包含空白或控制字符。".to_string());
+    }
+    Ok((id.to_string(), secret.to_string()))
+}
+
+/// 写入 AccessKey 凭证与令牌缓存；Unix 0700 目录 + 0600 文件，先写临时文件再替换。
+pub fn save_access_key_credentials(
+    profile_dir: &Path,
+    credentials: &AccessKeyCredentials,
+) -> Result<(), String> {
+    fs::create_dir_all(profile_dir).map_err(|err| format!("创建百炼账户目录失败：{err}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(profile_dir, fs::Permissions::from_mode(0o700))
+            .map_err(|err| format!("设置百炼账户目录权限失败：{err}"))?;
+    }
+
+    let body = serde_json::to_vec_pretty(credentials)
+        .map_err(|err| format!("序列化百炼 AccessKey 失败：{err}"))?;
+    let path = access_key_credentials_path(profile_dir);
+    let temp = profile_dir.join(format!("{ACCESS_KEY_FILE}.tmp"));
+    {
+        let mut file =
+            fs::File::create(&temp).map_err(|err| format!("创建百炼 AccessKey 文件失败：{err}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|err| format!("设置百炼 AccessKey 权限失败：{err}"))?;
+        }
+        file.write_all(&body)
+            .map_err(|err| format!("写入百炼 AccessKey 失败：{err}"))?;
+        file.sync_all()
+            .map_err(|err| format!("保存百炼 AccessKey 失败：{err}"))?;
+    }
+    #[cfg(windows)]
+    {
+        if path.exists() {
+            fs::remove_file(&path).map_err(|err| format!("替换百炼 AccessKey 失败：{err}"))?;
+        }
+    }
+    fs::rename(&temp, &path).map_err(|err| format!("保存百炼 AccessKey 失败：{err}"))
+}
+
+pub fn load_access_key_credentials(
+    profile_dir: &Path,
+) -> Result<AccessKeyCredentials, BailianError> {
+    let path = access_key_credentials_path(profile_dir);
+    let raw = fs::read_to_string(&path)
+        .map_err(|_| BailianError::auth("未找到百炼 AccessKey，请重新填写。"))?;
+    let mut credentials: AccessKeyCredentials = serde_json::from_str(&raw)
+        .map_err(|_| BailianError::auth("百炼 AccessKey 文件无法读取，请重新填写。"))?;
+    credentials.access_key_id = credentials.access_key_id.trim().to_string();
+    credentials.access_key_secret = credentials.access_key_secret.trim().to_string();
+    if credentials.access_key_id.is_empty() || credentials.access_key_secret.is_empty() {
+        return Err(BailianError::auth("百炼 AccessKey 不完整，请重新填写。"));
+    }
+    Ok(credentials)
 }
 
 // ---------- 额度模型 ----------
@@ -612,6 +757,248 @@ pub fn read_usage(access_token: &str) -> BailianReadout {
         token_plan_subscription,
         identity,
     }
+}
+
+// ---------- AK/SK 换取 CLI 访问令牌 ----------
+
+/// 一次需要签名的阿里云 OpenAPI 调用；参数集中在一处，避免签名函数堆叠过多入参。
+struct OpenApiCall<'a> {
+    host: &'a str,
+    method: &'a str,
+    path: &'a str,
+    action: &'a str,
+    version: &'a str,
+    body: &'a str,
+    access_key_id: &'a str,
+    access_key_secret: &'a str,
+    security_token: Option<&'a str>,
+}
+
+/// 阿里云 OpenAPI V3 签名（ACS3-HMAC-SHA256）。协议与百炼 CLI 的
+/// `generate-access-token` 一致：AK/SK 只用于换取控制台 CLI 令牌。
+fn open_api_headers(call: &OpenApiCall<'_>) -> Result<Vec<(String, String)>, BailianError> {
+    let date = {
+        let now = time::OffsetDateTime::now_utc();
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+            now.year(),
+            now.month() as u8,
+            now.day(),
+            now.hour(),
+            now.minute(),
+            now.second()
+        )
+    };
+    let nonce = random_hex(16);
+    open_api_headers_at(call, &date, &nonce)
+}
+
+/// 固定日期与随机数的版本，便于用官方实现生成的向量做回归测试。
+fn open_api_headers_at(
+    call: &OpenApiCall<'_>,
+    date: &str,
+    nonce: &str,
+) -> Result<Vec<(String, String)>, BailianError> {
+    let OpenApiCall {
+        host,
+        method,
+        path,
+        action,
+        version,
+        body,
+        access_key_id,
+        access_key_secret,
+        security_token,
+    } = *call;
+    let payload_hash = sha256_hex(body.as_bytes());
+    let mut headers = vec![
+        ("content-type".to_string(), "application/json".to_string()),
+        ("host".to_string(), host.to_string()),
+        ("x-acs-action".to_string(), action.to_string()),
+        ("x-acs-version".to_string(), version.to_string()),
+        ("x-acs-date".to_string(), date.to_string()),
+        ("x-acs-signature-nonce".to_string(), nonce.to_string()),
+        ("x-acs-content-sha256".to_string(), payload_hash.clone()),
+    ];
+    if let Some(token) = security_token
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        headers.push(("x-acs-security-token".to_string(), token.to_string()));
+    }
+    headers.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let canonical_headers = headers
+        .iter()
+        .map(|(name, value)| format!("{name}:{value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    let signed_headers = headers
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>()
+        .join(";");
+    // canonical headers 末尾自带换行，拼接时再补一个换行，与官方协议一致。
+    let canonical_request =
+        format!("{method}\n{path}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
+    let string_to_sign = format!(
+        "ACS3-HMAC-SHA256\n{}",
+        sha256_hex(canonical_request.as_bytes())
+    );
+    let signature = hmac_sha256_hex(access_key_secret.as_bytes(), string_to_sign.as_bytes())?;
+    let authorization = format!(
+        "ACS3-HMAC-SHA256 Credential={access_key_id},SignedHeaders={signed_headers},Signature={signature}"
+    );
+    headers.push(("authorization".to_string(), authorization));
+    Ok(headers)
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        text.push_str(&format!("{byte:02x}"));
+    }
+    text
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    hex_lower(&Sha256::digest(data))
+}
+
+fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> Result<String, BailianError> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key)
+        .map_err(|_| BailianError::new("sign", "无法初始化阿里云 OpenAPI 签名。"))?;
+    mac.update(data);
+    Ok(hex_lower(&mac.finalize().into_bytes()))
+}
+
+/// 把 OpenAPI 错误码归类为可展示的固定文案；不转述平台原文，避免回显 AccessKey ID。
+fn open_api_error(value: &Value, status: u16) -> BailianError {
+    let raw_code = value
+        .get("Code")
+        .or_else(|| value.get("code"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    let code = raw_code.to_ascii_lowercase();
+    if code.contains("invalidaccesskeyid")
+        || code.contains("signaturedoesnotmatch")
+        || code.contains("invalidsignature")
+        || code.contains("invalidsecuritytoken")
+        || code.contains("securitytoken")
+    {
+        return BailianError::auth("阿里云 AccessKey 无效或已失效，请更新 AccessKey。");
+    }
+    if code.contains("forbidden")
+        || code.contains("nopermission")
+        || code.contains("unauthorized")
+        || code.contains("ram")
+    {
+        return BailianError::permission(
+            "AccessKey 缺少百炼 OpenAPI 权限，请在 RAM 中授权后重试。",
+        );
+    }
+    if code.is_empty() {
+        BailianError::gateway(format!("阿里云 OpenAPI 请求失败（HTTP {status}）。"))
+    } else {
+        BailianError::gateway(format!("阿里云 OpenAPI 返回错误：{raw_code}。"))
+    }
+}
+
+fn generate_cli_access_token_at(
+    base_url: &str,
+    host: &str,
+    access_key_id: &str,
+    access_key_secret: &str,
+    security_token: Option<&str>,
+) -> Result<String, BailianError> {
+    let headers = open_api_headers(&OpenApiCall {
+        host,
+        method: "POST",
+        path: GENERATE_TOKEN_PATH,
+        action: GENERATE_TOKEN_ACTION,
+        version: OPEN_API_VERSION,
+        body: "",
+        access_key_id,
+        access_key_secret,
+        security_token,
+    })?;
+    let url = format!("{base_url}{GENERATE_TOKEN_PATH}");
+    let mut config = ureq::Agent::config_builder()
+        .timeout_global(Some(REQUEST_TIMEOUT))
+        .user_agent(concat!("TokenRefill/", env!("CARGO_PKG_VERSION")))
+        // 4xx/5xx 也要读响应体里的 Code，不能直接当成传输错误。
+        .http_status_as_error(false);
+    if let Some(proxy) = crate::proxy::ureq_proxy_for(&url) {
+        config = config.proxy(Some(proxy));
+    }
+    let agent: ureq::Agent = config.build().into();
+
+    let mut request = agent.post(&url);
+    for (name, value) in &headers {
+        request = request.header(name, value);
+    }
+    let mut response = request
+        .send("")
+        .map_err(|error| BailianError::network(format!("连接阿里云 OpenAPI 失败：{error}")))?;
+    let status = response.status().as_u16();
+    let raw = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|err| BailianError::network(format!("读取阿里云 OpenAPI 响应失败：{err}")))?;
+    let value: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+
+    if !(200..300).contains(&status) || value.get("Success").and_then(Value::as_bool) == Some(false)
+    {
+        return Err(open_api_error(&value, status));
+    }
+    value
+        .get("cliAccessToken")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| BailianError::decode("阿里云 OpenAPI 未返回 CLI 访问令牌。"))
+}
+
+/// 用 AK/SK 换出一个控制台 CLI 访问令牌。令牌只作为短期缓存使用。
+pub fn generate_cli_access_token(
+    access_key_id: &str,
+    access_key_secret: &str,
+    security_token: Option<&str>,
+) -> Result<String, BailianError> {
+    generate_cli_access_token_at(
+        OPEN_API_BASE_URL,
+        OPEN_API_HOST,
+        access_key_id,
+        access_key_secret,
+        security_token,
+    )
+}
+
+/// 添加账户前先真实换一次令牌并读取额度，避免保存无法使用的 AK。
+/// 任一套餐查询成功即视为 AK 可用；两类都失败时把首个错误返回给界面。
+pub fn probe_access_key(
+    access_key_id: &str,
+    access_key_secret: &str,
+) -> Result<(BailianReadout, AccessKeyCredentials), BailianError> {
+    let token = generate_cli_access_token(access_key_id, access_key_secret, None)?;
+    let readout = read_usage(&token);
+    if readout.token_plan.is_err() && readout.coding_plan.is_err() {
+        let error = readout
+            .token_plan
+            .as_ref()
+            .err()
+            .or_else(|| readout.coding_plan.as_ref().err())
+            .cloned()
+            .unwrap_or_else(|| BailianError::gateway("百炼额度查询失败。"));
+        return Err(error);
+    }
+    let mut credentials = AccessKeyCredentials::new(access_key_id, access_key_secret);
+    credentials.cli_access_token = Some(token);
+    credentials.cli_token_issued_at_epoch = Some(epoch_now());
+    Ok((readout, credentials))
 }
 
 // ---------- 浏览器登录回调 ----------
@@ -1320,5 +1707,199 @@ mod tests {
         assert!(lower.contains("content-type: application/x-www-form-urlencoded"));
         assert!(request.contains("params="));
         assert!(request.contains("region=cn-beijing"));
+    }
+
+    fn fixed_signature_headers(security_token: Option<&str>) -> Vec<(String, String)> {
+        open_api_headers_at(
+            &OpenApiCall {
+                host: "modelstudio.cn-beijing.aliyuncs.com",
+                method: "POST",
+                path: "/modelstudio/cli/generateAccessToken",
+                action: "GenerateCLIAccessToken",
+                version: "2026-02-10",
+                body: "",
+                access_key_id: "LTAI0000000000000000",
+                access_key_secret: "fake-secret-for-signature-test",
+                security_token,
+            },
+            "2026-11-20T06:31:00Z",
+            "0123456789abcdef0123456789abcdef",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn open_api_signature_matches_official_cli_vector() {
+        let headers = fixed_signature_headers(None);
+        let authorization = headers
+            .iter()
+            .find(|(name, _)| name == "authorization")
+            .map(|(_, value)| value.clone())
+            .unwrap();
+        assert_eq!(
+            authorization,
+            "ACS3-HMAC-SHA256 Credential=LTAI0000000000000000,\
+             SignedHeaders=content-type;host;x-acs-action;x-acs-content-sha256;\
+             x-acs-date;x-acs-signature-nonce;x-acs-version,\
+             Signature=0bd6149ccd9fe1edd33154465bf8d5fd9fff9a8518b3d172e602df3ae3b4021e"
+        );
+        assert!(headers
+            .iter()
+            .any(|(name, value)| name == "x-acs-content-sha256"
+                && value == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
+    }
+
+    #[test]
+    fn open_api_signature_covers_security_token() {
+        let headers = fixed_signature_headers(Some("sts-token"));
+        let authorization = headers
+            .iter()
+            .find(|(name, _)| name == "authorization")
+            .map(|(_, value)| value.clone())
+            .unwrap();
+        assert!(authorization.contains("x-acs-security-token"));
+        assert!(headers
+            .iter()
+            .any(|(name, value)| name == "x-acs-security-token" && value == "sts-token"));
+    }
+
+    #[test]
+    fn access_key_validation_rejects_incomplete_or_malformed_values() {
+        assert!(validate_access_key_pair("", "secretsecret").is_err());
+        assert!(validate_access_key_pair("LTAI000000000000", "").is_err());
+        assert!(validate_access_key_pair("short", "secretsecret").is_err());
+        assert!(validate_access_key_pair("LTAI 000000000000", "secretsecret").is_err());
+        assert_eq!(
+            validate_access_key_pair("  LTAI000000000000  ", "  secretsecret  ").unwrap(),
+            ("LTAI000000000000".to_string(), "secretsecret".to_string())
+        );
+    }
+
+    #[test]
+    fn access_key_credentials_round_trip_with_private_permissions() {
+        let dir = std::env::temp_dir().join(format!(
+            "token-refill-bailian-ak-{}-{}",
+            std::process::id(),
+            random_hex(4)
+        ));
+        let mut credentials = AccessKeyCredentials::new("LTAI000000000000", "secretsecret");
+        credentials.cli_access_token = Some("cli-token".to_string());
+        credentials.cli_token_issued_at_epoch = Some(1_000);
+        save_access_key_credentials(&dir, &credentials).unwrap();
+        assert_eq!(
+            load_access_key_credentials(&dir).unwrap(),
+            credentials,
+            "AK/SK 与令牌缓存应完整往返"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(access_key_credentials_path(&dir))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn cli_token_cache_is_fresh_only_within_ttl() {
+        let mut credentials = AccessKeyCredentials::new("LTAI000000000000", "secretsecret");
+        assert!(!credentials.has_fresh_token(1_000));
+        credentials.cli_access_token = Some("cli-token".to_string());
+        credentials.cli_token_issued_at_epoch = Some(1_000);
+        assert!(credentials.has_fresh_token(1_000 + CLI_TOKEN_TTL_SECS - 1));
+        assert!(!credentials.has_fresh_token(1_000 + CLI_TOKEN_TTL_SECS));
+        credentials.cli_access_token = Some("  ".to_string());
+        assert!(!credentials.has_fresh_token(1_000));
+    }
+
+    #[test]
+    fn open_api_errors_are_mapped_without_echoing_platform_text() {
+        let auth = open_api_error(
+            &json!({
+                "Code": "InvalidAccessKeyId.NotFound",
+                "Message": "Specified access key LTAI000000000000 is not found."
+            }),
+            404,
+        );
+        assert!(auth.is_auth_error());
+        assert!(!auth.message.contains("LTAI"));
+
+        let permission = open_api_error(
+            &json!({ "Code": "Forbidden.RAM", "Message": "not authorized" }),
+            403,
+        );
+        assert_eq!(permission.code, "permission");
+
+        let gateway = open_api_error(&json!({ "Code": "SomeOtherError" }), 500);
+        assert_eq!(gateway.code, "gateway");
+        assert!(gateway.message.contains("SomeOtherError"));
+    }
+
+    #[test]
+    fn generate_token_posts_signed_request_and_parses_cli_token() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut buffer = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let read = stream.read(&mut chunk).unwrap();
+                if read == 0 {
+                    break;
+                }
+                buffer.extend_from_slice(&chunk[..read]);
+                if let Some(index) = find_bytes(&buffer, b"\r\n\r\n") {
+                    let header = String::from_utf8_lossy(&buffer[..index]);
+                    let length = header
+                        .lines()
+                        .find_map(|line| {
+                            line.strip_prefix("content-length: ")
+                                .or_else(|| line.strip_prefix("Content-Length: "))
+                        })
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if buffer.len() >= index + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let body = r#"{"Success":true,"cliAccessToken":"cli-token"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            stream.flush().unwrap();
+            String::from_utf8_lossy(&buffer).into_owned()
+        });
+
+        let base_url = format!("http://127.0.0.1:{port}");
+        let token = generate_cli_access_token_at(
+            &base_url,
+            &format!("127.0.0.1:{port}"),
+            "LTAI000000000000",
+            "secretsecret",
+            None,
+        )
+        .unwrap();
+        assert_eq!(token, "cli-token");
+
+        let request = server.join().unwrap();
+        let lower = request.to_ascii_lowercase();
+        assert!(request.starts_with("POST /modelstudio/cli/generateAccessToken "));
+        assert!(lower.contains(&format!(
+            "x-acs-action: {}",
+            GENERATE_TOKEN_ACTION.to_ascii_lowercase()
+        )));
+        assert!(lower.contains("authorization: acs3-hmac-sha256 credential=ltai000000000000"));
+        assert!(lower.contains("content-type: application/json"));
     }
 }
