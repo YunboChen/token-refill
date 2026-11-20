@@ -92,7 +92,7 @@
 - 应用内更新的 minisign 私钥存放在 GitHub Secrets（`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`），不进仓库、不写日志；`createUpdaterArtifacts` 只在 CI 用 `--config` 打开，本地构建不依赖私钥。私钥丢失只能换公钥并要求用户手动重装，发布前确认已离线备份。
 - Release 构建成功后直接发布（`draft: false`），不设草稿确认环节；推送 `main` 前必须自行确认版本号、产物与签名状态，发布即对用户可见。
 - 测试包走 `.github/workflows/build-test.yml`（手动触发，用 `ref` 输入选择任意分支与平台），只上传 workflow artifact，不创建 Release、不打 tag、不改版本号；验证分支不必先合入 `main`，也不得用 `release.yml` 的手动触发代替测试构建。GitHub 只为默认分支（`main`）登记手动触发入口，该工作流文件需保留在 `main` 上；目标分支靠 `ref` 指定，因此不必包含该文件。
-- Next 预览版走 `.github/workflows/release-next.yml`：在承载预览改造的分支上推送 `v<X.Y.Z>-next.<序号>` tag 即可构建并发布 GitHub prerelease（tag 所在提交需包含本工作流与 `tauri.next.conf.json`）；也可在 `main` 上手动触发并通过 `ref` 指定分支。它使用 `tauri.next.conf.json` 的独立身份，注入版本但不写回源文件，不生成 updater 产物与 `latest.json`，不参与应用内更新。`release.yml` 会跳过 `-next.` 标签，避免用正式 identifier 再构建一次；不要用 `release.yml` 手动触发来发 Next 包。
+- Next 预览版走 `.github/workflows/release-next.yml`：在承载预览改造的分支上推送 `v<X.Y.Z>-next.<序号>` tag 即可构建并发布 GitHub prerelease（tag 所在提交需包含本工作流与 `tauri.next.conf.json`）；也可在 `main` 上手动触发并通过 `ref` 指定分支。它使用 `tauri.next.conf.json` 的独立身份，注入版本但不写回源文件，不生成 updater 产物与 `latest.json`，不参与应用内更新。`release.yml` 会跳过 `-next.` 标签，避免用正式 identifier 再构建一次；正式发布的版本单调性检查只比较正式 tag，Next 预览 tag（可能高于当前正式线）不参与，否则会反过来阻断正式版本。不要用 `release.yml` 手动触发来发 Next 包。
 - 版本检查只做「比较 + 提示」；应用内更新由用户分别确认下载与安装，更新包经 minisign 校验后才替换。不做后台静默安装，也没有自动回滚：更新出问题只能发新版本或让用户手动重装。
 
 ## 6. 开发与验证

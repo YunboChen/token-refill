@@ -109,10 +109,12 @@ jobs:
           fi
 
           # 版本单调性：低于已发布版本的版本号一律拒绝。底线取「推送前的版本」与
-          # 「仓库里最新的 v* tag」中较大的一个，覆盖 tag / 手动触发没有 before 的情况。
+          # 「仓库里最新的正式 v* tag」中较大的一个，覆盖 tag / 手动触发没有 before 的情况。
           # 发布旧版本会让 releases/latest 回退，用户被更新到旧版。
+          # Next 预览 tag（如 v1.0.0-next.1）属于独立渠道、发布为 prerelease，不会成为 latest，
+          # 且版本号可能高于当前正式线，不能参与正式版本的单调性判断。
           latest_tag_version=$(git tag --list 'v[0-9]*' --sort=-v:refname \
-            | sed 's/^v//' | grep -Fvx "$version" | head -1 || true)
+            | sed 's/^v//' | grep -v -e '-' | grep -Fvx "$version" | head -1 || true)
           if [ -z "$prev_version" ]; then
             prev_version="$latest_tag_version"
           elif [ -n "$latest_tag_version" ] && version_gt "$latest_tag_version" "$prev_version"; then
