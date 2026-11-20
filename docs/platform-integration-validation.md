@@ -177,10 +177,10 @@
 - 响应：`cliAccessToken`；该令牌就是控制台网关接受的 Bearer，因此两类套餐继续走 7.1 的网关接口与字段，不新增额度解析逻辑。
 - 真实读取：用户在本机用官方 CLI 的 `bl usage token-plan --output json` 与 `bl usage coding-plan --output json` 验证同一令牌可用；Token Plan 返回用量数据，未订阅 Coding Plan 时返回空对象 `{}`，与 7.3 的“空列表按数据缺口处理”一致。
 - 缓存与失效：CLI 令牌本地缓存 20 小时后重新换取；查询被判定为授权失效时先换新令牌重试一次。AccessKey 账户不写入控制台到期时间，也不触发到期提醒。
-- 权限与隔离：只保存用户主动填写的 AK/SK 与换取出的短期令牌，不读取 `~/.aliyun`、`~/.bailian` 或环境变量；建议使用只授予百炼查询权限的 RAM 用户。AK/SK 与令牌不进入前端状态、日志或错误消息。
+- 权限与隔离：只保存用户主动填写的 AK/SK 与换取出的短期令牌，不读取 `~/.aliyun`、`~/.bailian` 或环境变量。RAM 用户需要系统策略 `AliyunBailianFullAccess`、`AliyunBSSReadOnlyAccess`、`AliyunTokenPlanReadOnlyAccess`，并需在百炼账号管理中添加该 RAM 用户、授予「智能体-操作」与「订阅套餐」权限，否则额度查询会提示无权限。AK/SK 与令牌不进入前端状态、日志或错误消息。
 - 切换：已有控制台授权账户可在重新授权入口原地改用 AccessKey，AccessKey 账户也可切回浏览器授权；切换只更新 `authMethod`，保留账户标识、名称、套餐快照与排序，并删除另一种方式遗留的凭证文件。
 
-仍未验证：CLI 令牌的准确有效期与服务端是否轮换（20 小时是保守缓存值）；不同 RAM 授权范围下的最小权限组合；STS 临时凭证（`security_token`）尚未在界面开放，字段已在存储结构中预留。
+仍未验证：CLI 令牌的准确有效期与服务端是否轮换（20 小时是保守缓存值）；上述 RAM 策略与百炼账号权限组合之外是否存在更小授权；STS 临时凭证（`security_token`）尚未在界面开放，字段已在存储结构中预留。
 
 ## 8. OpenCode Go、Command Code 与 Antigravity（2026-10-23）
 

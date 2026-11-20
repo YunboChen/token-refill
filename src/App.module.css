@@ -2675,6 +2675,9 @@
   /* 标题、流程、表单各成一组，组间留白比组内大一档 */
   gap: 16px;
   width: min(460px, 100%);
+  /* 步骤较多时窗口较矮也能滚动到底部按钮，不裁掉操作区 */
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
   padding: 20px;
   border: 1px solid var(--border);
   border-radius: var(--radius-card);

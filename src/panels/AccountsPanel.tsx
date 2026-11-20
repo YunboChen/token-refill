@@ -219,8 +219,12 @@ const BAILIAN_ACCESS_KEY_CHOICE: PlatformChoice = {
   subtitle: '阿里云 · AccessKey 接入',
   steps: [
     {
-      title: '创建 AccessKey',
-      text: '在阿里云控制台为要接入的账号创建 AccessKey，建议使用只授予百炼查询权限的 RAM 用户',
+      title: '创建 RAM 用户与 AccessKey',
+      text: '在阿里云 RAM 控制台创建 RAM 用户并生成 AccessKey，授予 AliyunBailianFullAccess、AliyunBSSReadOnlyAccess、AliyunTokenPlanReadOnlyAccess',
+    },
+    {
+      title: '在百炼账号管理中添加该 RAM 用户',
+      text: '授予「智能体-操作」与「订阅套餐」权限，否则额度查询会提示无权限',
     },
     {
       title: '填写并验证',
@@ -228,7 +232,7 @@ const BAILIAN_ACCESS_KEY_CHOICE: PlatformChoice = {
     },
   ],
   note:
-    'AccessKey 只保存在本机账户目录，不写入前端状态或日志。建议使用最小权限的 RAM 用户，不要使用主账号 AccessKey。',
+    'AccessKey 只保存在本机账户目录，不写入前端状态或日志。建议为应用单独创建 RAM 用户，不要使用主账号 AccessKey。',
   namePlaceholder: '留空则显示为“百炼账户”',
   authorizeLabel: '验证并添加',
   waitingTitle: '接入百炼',
