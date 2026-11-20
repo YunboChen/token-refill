@@ -73,6 +73,7 @@ function makeAccount(overrides: Partial<AccountState> = {}): AccountState {
     source: 'managed',
     identityHint: null,
     credentialExpiresAtEpoch: null,
+    authMethod: null,
     products: [makeProduct()],
     ...overrides,
   };

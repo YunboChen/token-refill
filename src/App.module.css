@@ -2847,6 +2847,45 @@
   margin-top: 1.5px;
 }
 
+/* 百炼接入方式：两项按钮并排，不用滑块，避免中英文混排时等宽假设不成立 */
+.methodChoice {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+}
+
+.methodOption {
+  flex: 1;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 150ms ease-out, background 150ms ease-out;
+}
+
+.methodOption:hover {
+  color: var(--text);
+}
+
+.methodOption[data-active='true'] {
+  color: var(--accent-text);
+  background: var(--accent-strong);
+}
+
+.methodOption:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+}
+
 .authBlock {
   display: grid;
   gap: 6px;

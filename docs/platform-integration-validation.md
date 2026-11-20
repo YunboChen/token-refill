@@ -1,6 +1,6 @@
 # 平台接入可行性记录
 
-- 记录日期：2026-10-21；百炼补充验证：2026-10-23
+- 记录日期：2026-10-21；百炼补充验证：2026-10-23、2026-11-20（AccessKey 接入）
 - 阶段：百炼两类套餐已通过本机控制台会话完成真实读取验证（见第 7 节）；Codex 已实现适配器
 - 范围：公开搜索结果、本地已安装技术资料与原始文档快照；无账户操作
 - 关联：[需求文档](./requirements.md)、[软件设计](./software-design.md)、[开发计划](./development-plan.md)
@@ -167,6 +167,20 @@
 - Token Plan 与 Coding Plan 同时存在时的账号关系已按“同一账户两个产品”实现；其他套餐组合未验证。
 - 未订阅 Coding Plan 时接口返回空列表，已按数据缺口处理；未订阅 Token Plan 时该接口的返回尚未验证，不能据此断言为零额度。
 - 阿里云登录名（如控制台右上角展示的 `aliyunId`）来自浏览器页面配置或 Cookie，控制台令牌接口不返回该值。应用只在 `nickName` 是真实昵称时展示它，否则回退为脱敏 UID；如需显示完整登录名，需要另行确认是否允许浏览器 Cookie 导入或手动填写。
+
+### 7.5 AccessKey 换取 CLI 令牌（2026-11-20）
+
+为减少控制台会话约 24 小时过期带来的重新授权，新增用户手动填写阿里云 AccessKey 的接入方式。协议来源是官方百炼 CLI（`bl`）的 `generate-access-token` 行为，应用不调用、不读取该 CLI。
+
+- 端点：`POST https://modelstudio.cn-beijing.aliyuncs.com/modelstudio/cli/generateAccessToken`，`Action: GenerateCLIAccessToken`，`Version: 2026-02-10`，空请求体。
+- 签名：阿里云 OpenAPI V3 `ACS3-HMAC-SHA256`。参与签名的请求头为 `content-type`、`host`、`x-acs-action`、`x-acs-version`、`x-acs-date`、`x-acs-signature-nonce`、`x-acs-content-sha256`，STS 临时凭证另加 `x-acs-security-token`；规范请求为 `METHOD\nPATH\nQUERY\n规范请求头\n签名头列表\nBODY_SHA256`，再用 HMAC-SHA256(Secret) 得到十六进制签名。单元测试用官方实现生成的固定向量做回归。
+- 响应：`cliAccessToken`；该令牌就是控制台网关接受的 Bearer，因此两类套餐继续走 7.1 的网关接口与字段，不新增额度解析逻辑。
+- 真实读取：用户在本机用官方 CLI 的 `bl usage token-plan --output json` 与 `bl usage coding-plan --output json` 验证同一令牌可用；Token Plan 返回用量数据，未订阅 Coding Plan 时返回空对象 `{}`，与 7.3 的“空列表按数据缺口处理”一致。
+- 缓存与失效：CLI 令牌本地缓存 20 小时后重新换取；查询被判定为授权失效时先换新令牌重试一次。AccessKey 账户不写入控制台到期时间，也不触发到期提醒。
+- 权限与隔离：只保存用户主动填写的 AK/SK 与换取出的短期令牌，不读取 `~/.aliyun`、`~/.bailian` 或环境变量；建议使用只授予百炼查询权限的 RAM 用户。AK/SK 与令牌不进入前端状态、日志或错误消息。
+- 切换：已有控制台授权账户可在重新授权入口原地改用 AccessKey，AccessKey 账户也可切回浏览器授权；切换只更新 `authMethod`，保留账户标识、名称、套餐快照与排序，并删除另一种方式遗留的凭证文件。
+
+仍未验证：CLI 令牌的准确有效期与服务端是否轮换（20 小时是保守缓存值）；不同 RAM 授权范围下的最小权限组合；STS 临时凭证（`security_token`）尚未在界面开放，字段已在存储结构中预留。
 
 ## 8. OpenCode Go、Command Code 与 Antigravity（2026-10-23）
 

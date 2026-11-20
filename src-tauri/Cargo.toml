@@ -17,6 +17,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 阿里云 OpenAPI V3 签名：用 AK/SK 换取百炼 CLI 访问令牌。
+hmac = "0.12"
+sha2 = "0.10"
 semver = "1"
 # 跟随系统代理时 ALL_PROXY 可能是 socks5://；未开启该特性时 ureq 遇到
 # 手动配置的 SOCKS 代理会直接 panic，而不是回退直连。

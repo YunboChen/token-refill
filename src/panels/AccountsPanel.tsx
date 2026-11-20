@@ -17,6 +17,7 @@ import {
   onAccountLoginChanged,
   type AccountState,
   type AuthState,
+  type BailianAuthMethod,
   type LoginStart,
   type ProductState,
 } from '../lib/desktop';
@@ -212,6 +213,33 @@ const PLATFORM_CHOICES: Record<DialogPlatform, PlatformChoice> = {
 
 const DIALOG_PLATFORMS = Object.keys(PLATFORM_CHOICES) as DialogPlatform[];
 
+/** 百炼的另一种接入方式：用阿里云 AccessKey 换取 CLI 访问令牌，不受控制台 24 小时会话限制。 */
+const BAILIAN_ACCESS_KEY_CHOICE: PlatformChoice = {
+  addLabel: '添加百炼账户',
+  subtitle: '阿里云 · AccessKey 接入',
+  steps: [
+    {
+      title: '创建 AccessKey',
+      text: '在阿里云控制台为要接入的账号创建 AccessKey，建议使用只授予百炼查询权限的 RAM 用户',
+    },
+    {
+      title: '填写并验证',
+      text: '应用用它换取百炼 CLI 访问令牌，令牌过期后自动重新换取',
+    },
+  ],
+  note:
+    'AccessKey 只保存在本机账户目录，不写入前端状态或日志。建议使用最小权限的 RAM 用户，不要使用主账号 AccessKey。',
+  namePlaceholder: '留空则显示为“百炼账户”',
+  authorizeLabel: '验证并添加',
+  waitingTitle: '接入百炼',
+  waitingText: '正在验证 AccessKey，无需在浏览器中操作。',
+};
+
+const BAILIAN_METHODS: { value: BailianAuthMethod; label: string }[] = [
+  { value: 'console', label: '浏览器授权' },
+  { value: 'access-key', label: 'AccessKey' },
+];
+
 /** 需要用户填写 API Key 的平台；其余非登录平台直接复用本机登录态。 */
 const API_KEY_PLATFORMS: DialogPlatform[] = ['opencode-go', 'commandcode'];
 
@@ -274,6 +302,8 @@ function credentialExpiry(
   if (account.platform !== 'bailian' || account.authState === 'needs-reauth') {
     return null;
   }
+  // AccessKey 账户由长期凭据换取短期令牌，没有需要提前提醒的授权到期时间。
+  if (account.authMethod === 'access-key') return null;
   const expiresAt = account.credentialExpiresAtEpoch;
   if (expiresAt === null) return null;
   const remaining = expiresAt - nowEpoch;
@@ -324,6 +354,8 @@ export default function AccountsPanel() {
     beginCursorLogin,
     addApiKeyAccount,
     replaceApiKey,
+    addBailianAccessKeyAccount,
+    replaceBailianAccessKey,
     addAntigravityAccount,
     cancelLogin,
     renameAccount,
@@ -333,6 +365,11 @@ export default function AccountsPanel() {
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [draftName, setDraftName] = useState('');
   const [draftKey, setDraftKey] = useState('');
+  // 百炼添加弹窗里的接入方式；AccessKey 表单另有独立草稿，凭据只在这里短暂停留。
+  const [bailianMethod, setBailianMethod] =
+    useState<BailianAuthMethod>('console');
+  const [draftAccessKeyId, setDraftAccessKeyId] = useState('');
+  const [draftAccessKeySecret, setDraftAccessKeySecret] = useState('');
   // 操作失败只弹一次 toast，不占弹窗或页面的布局。
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -429,6 +466,10 @@ export default function AccountsPanel() {
     startAttemptRef.current += 1;
     // 请求若在关闭后才失败，不会再走回 startAdd 的复位分支。
     setStarting(false);
+    // 关闭弹窗即清空输入草稿，凭据不在前端内存里多留。
+    setDraftKey('');
+    setDraftAccessKeyId('');
+    setDraftAccessKeySecret('');
     setDialog(null);
   };
 
@@ -493,6 +534,45 @@ export default function AccountsPanel() {
       return;
     }
 
+    if (platform === 'bailian') {
+      if (bailianMethod === 'access-key') {
+        const accessKeyId = draftAccessKeyId.trim();
+        const accessKeySecret = draftAccessKeySecret.trim();
+        if (!accessKeyId) {
+          setToastMessage('请填写 AccessKey ID。');
+          return;
+        }
+        if (!accessKeySecret) {
+          setToastMessage('请填写 AccessKey Secret。');
+          return;
+        }
+        setStarting(true);
+        const error =
+          dialog.mode === 'reauth' && dialog.accountId
+            ? await replaceBailianAccessKey(
+                dialog.accountId,
+                accessKeyId,
+                accessKeySecret,
+              )
+            : await addBailianAccessKeyAccount(
+                draftName.trim() || undefined,
+                accessKeyId,
+                accessKeySecret,
+              );
+        setStarting(false);
+        if (error) setToastMessage(error);
+        else setDialog(null);
+        return;
+      }
+      // 浏览器授权：重新授权沿用原账户，新增才创建账户。
+      if (dialog.mode === 'reauth' && dialog.accountId) {
+        await startReauth(dialog.accountId, 'bailian');
+      } else {
+        await startAdd('bailian');
+      }
+      return;
+    }
+
     if (platform === 'antigravity') {
       setStarting(true);
       const error = await addAntigravityAccount(draftName.trim() || undefined);
@@ -548,6 +628,25 @@ export default function AccountsPanel() {
       setDialog({
         kind: 'add-form',
         platform: account.platform,
+        mode: 'reauth',
+        accountId: account.accountId,
+      });
+      return;
+    }
+    // 百炼账户的重新授权入口同时用于切换接入方式：控制台授权可原地改用 AccessKey，
+    // AccessKey 账户也可切回浏览器授权，账户标识与历史不变。
+    if (account.platform === 'bailian') {
+      setDraftName('');
+      setDraftKey('');
+      setDraftAccessKeyId('');
+      setDraftAccessKeySecret('');
+      setBailianMethod(
+        account.authMethod === 'access-key' ? 'access-key' : 'console',
+      );
+      setToastMessage(null);
+      setDialog({
+        kind: 'add-form',
+        platform: 'bailian',
         mode: 'reauth',
         accountId: account.accountId,
       });
@@ -613,6 +712,9 @@ export default function AccountsPanel() {
     captureTrigger(trigger);
     setDraftName('');
     setDraftKey('');
+    setDraftAccessKeyId('');
+    setDraftAccessKeySecret('');
+    setBailianMethod('console');
     setToastMessage(null);
     setDialog({ kind: 'add-form', platform, mode: 'add' });
   };
@@ -632,6 +734,18 @@ export default function AccountsPanel() {
     dialog && 'platform' in dialog
       ? PLATFORM_CHOICES[dialog.platform]
       : PLATFORM_CHOICES.codex;
+  // 百炼添加弹窗按选项切换说明文案；AccessKey 重新授权时固定为 AccessKey 表单。
+  const accessKeyMode =
+    dialog?.kind === 'add-form'
+    && dialog.platform === 'bailian'
+    && bailianMethod === 'access-key';
+  // 百炼的浏览器授权重新授权仍要打开浏览器；按钮文案不要写成“验证并更新”。
+  const browserReauth =
+    dialog?.kind === 'add-form'
+    && dialog.mode === 'reauth'
+    && dialog.platform === 'bailian'
+    && !accessKeyMode;
+  const guide = accessKeyMode ? BAILIAN_ACCESS_KEY_CHOICE : choice;
 
   return (
     <section>
@@ -663,6 +777,14 @@ export default function AccountsPanel() {
                 );
                 const plans = activated.length > 0 ? activated : account.products;
                 const credential = credentialExpiry(account, nowEpoch);
+                const accessKeyAccount =
+                  account.platform === 'bailian'
+                  && account.authMethod === 'access-key';
+                const reauthLabel = accessKeyAccount
+                  ? '更新 AccessKey'
+                  : account.platform === 'bailian'
+                    ? '重新授权或改用 AccessKey'
+                    : '重新授权';
                 return (
                   <article className={styles.accountTile} key={account.accountId}>
                     <div className={styles.accountIdentityCell}>
@@ -758,8 +880,8 @@ export default function AccountsPanel() {
                                 beginReauth(account, event.currentTarget)
                               }
                               disabled={!desktop}
-                              aria-label="重新授权"
-                              title="重新授权"
+                              aria-label={reauthLabel}
+                              title={reauthLabel}
                             >
                               <LinkSimple size={14} />
                             </button>
@@ -891,14 +1013,41 @@ export default function AccountsPanel() {
                   <>
                     <header className={styles.dialogHeader}>
                       <h2 id="account-dialog-title">
-                        {dialog.mode === 'reauth' ? '更新账户凭据' : choice.addLabel}
+                        {dialog.mode === 'reauth'
+                          ? accessKeyMode
+                            ? '更新 AccessKey'
+                            : browserReauth
+                              ? '重新授权账户'
+                              : '更新账户凭据'
+                          : guide.addLabel}
                       </h2>
-                      <p className={styles.dialogSubtitle}>{choice.subtitle}</p>
+                      <p className={styles.dialogSubtitle}>{guide.subtitle}</p>
                     </header>
-                    {/* 重新授权只替换凭据，不再重复说明接入流程。 */}
-                    {dialog.mode === 'add' ? (
+                    {dialog.platform === 'bailian' ? (
+                      <div
+                        className={styles.methodChoice}
+                        role="radiogroup"
+                        aria-label="接入方式"
+                      >
+                        {BAILIAN_METHODS.map((method) => (
+                          <button
+                            key={method.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={bailianMethod === method.value}
+                            className={styles.methodOption}
+                            data-active={bailianMethod === method.value}
+                            onClick={() => setBailianMethod(method.value)}
+                          >
+                            {method.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    {/* 重新授权只替换凭据，不重复说明接入流程；改用 AccessKey 时仍需要创建步骤。 */}
+                    {dialog.mode === 'add' || accessKeyMode ? (
                       <ol className={styles.dialogSteps} role="list">
-                        {choice.steps.map((step, index) => (
+                        {guide.steps.map((step, index) => (
                           <li className={styles.dialogStep} key={step.title}>
                             <span className={styles.stepMarker} aria-hidden="true">
                               {index + 1}
@@ -919,7 +1068,7 @@ export default function AccountsPanel() {
                             className={styles.textInput}
                             value={draftName}
                             onChange={(event) => setDraftName(event.target.value)}
-                            placeholder={choice.namePlaceholder}
+                            placeholder={guide.namePlaceholder}
                             maxLength={60}
                           />
                         </label>
@@ -945,9 +1094,43 @@ export default function AccountsPanel() {
                           />
                         </label>
                       ) : null}
+                      {accessKeyMode ? (
+                        <>
+                          <label className={styles.field}>
+                            <span className={styles.fieldLabel}>AccessKey ID</span>
+                            <input
+                              className={styles.textInput}
+                              value={draftAccessKeyId}
+                              onChange={(event) =>
+                                setDraftAccessKeyId(event.target.value)
+                              }
+                              placeholder="请输入 AccessKey ID"
+                              autoComplete="off"
+                              spellCheck={false}
+                              autoFocus={dialog.mode === 'reauth'}
+                            />
+                          </label>
+                          <label className={styles.field}>
+                            <span className={styles.fieldLabel}>
+                              AccessKey Secret
+                            </span>
+                            <input
+                              className={styles.textInput}
+                              type="password"
+                              value={draftAccessKeySecret}
+                              onChange={(event) =>
+                                setDraftAccessKeySecret(event.target.value)
+                              }
+                              placeholder="请输入 AccessKey Secret"
+                              autoComplete="off"
+                              spellCheck={false}
+                            />
+                          </label>
+                        </>
+                      ) : null}
                       <p className={styles.dialogNote}>
                         <LockSimple size={13} aria-hidden />
-                        {choice.note}
+                        {guide.note}
                       </p>
                     </div>
                     <div className={styles.dialogActions}>
@@ -965,17 +1148,18 @@ export default function AccountsPanel() {
                         disabled={starting}
                       >
                         {starting ? (
-                          isApiKeyPlatform(dialog.platform)
+                          isApiKeyPlatform(dialog.platform) || accessKeyMode
                             ? '正在验证…'
                             : dialog.platform === 'antigravity'
                               ? '正在接入…'
                               : '正在启动…'
                         ) : (
                           <>
-                            {dialog.mode === 'reauth'
+                            {dialog.mode === 'reauth' && !browserReauth
                               ? '验证并更新'
-                              : choice.authorizeLabel}
+                              : guide.authorizeLabel}
                             {!isApiKeyPlatform(dialog.platform)
+                            && !accessKeyMode
                             && dialog.platform !== 'antigravity' ? (
                               <ArrowSquareOut size={13} aria-hidden />
                             ) : null}
@@ -1064,14 +1248,14 @@ export default function AccountsPanel() {
                               ? '已取消授权'
                               : dialog.mode === 'reauth'
                                 ? '重新授权'
-                                : choice.waitingTitle}
+                                : guide.waitingTitle}
                       </h2>
-                      <p className={styles.dialogSubtitle}>{choice.subtitle}</p>
+                      <p className={styles.dialogSubtitle}>{guide.subtitle}</p>
                     </header>
 
                     {dialog.phase === 'waiting' ? (
                       <>
-                        <p className={styles.usageNote}>{choice.waitingText}</p>
+                        <p className={styles.usageNote}>{guide.waitingText}</p>
                         <div className={styles.authBlock}>
                           <span className={styles.fieldLabel}>授权链接</span>
                           <p className={styles.authUrl}>{dialog.start.authUrl}</p>
