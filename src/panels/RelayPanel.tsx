@@ -78,6 +78,8 @@ const REMINDER_THRESHOLD_MAX = 1_000_000;
  */
 function reminderThresholdError(raw: string): string | null {
   if (!raw.trim()) return '请填写提醒金额。';
+  // 只接受普通十进制写法；Number() 会把 0x10、1e2 等也当作合法数字。
+  if (!/^\s*\d+(?:\.\d+)?\s*$/.test(raw)) return '请填写有效的提醒金额。';
   const value = Number(raw);
   if (!Number.isFinite(value)) return '请填写有效的提醒金额。';
   if (value <= 0) return '提醒金额必须大于 0。';

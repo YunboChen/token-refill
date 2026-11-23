@@ -45,9 +45,12 @@ export function relayErrorText(error: unknown): string {
   return '查询失败，请检查服务地址与密钥。';
 }
 
-/** 卡片标题只显示主机名，完整地址留在 title 里。 */
+/**
+ * 卡片标题：去掉协议与末尾斜杠，保留端口与路径——同一主机下按路径区分的
+ * 多个中转站（如 /openai 与 /claude）仍能分辨。完整地址留在 title 里。
+ */
 export function relayHost(baseUrl: string): string {
-  return baseUrl.replace(/^https?:\/\//, '');
+  return baseUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '');
 }
 
 /** 余额提醒可比较的余额与币种；任一无法识别时返回 null。 */
