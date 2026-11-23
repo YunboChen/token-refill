@@ -192,7 +192,6 @@ fn contains_auth_marker(bytes: &[u8]) -> bool {
     .any(|marker| text.contains(marker))
 }
 
-
 /// 在超时内运行 CLI。`agy` 未登录时会打印登录链接并等待 60 秒，
 /// 因此边读 stderr 边检测认证提示，命中后立即结束进程，避免每轮刷新都空等。
 fn run(binary: &Path, args: &[&str], timeout: Duration) -> Result<ProcessOutput, ProviderError> {

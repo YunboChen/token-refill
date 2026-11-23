@@ -22,27 +22,28 @@ export function normalizeWindowName(
     return null;
   }
   const lower = name.toLowerCase();
-  // 英文按整词匹配：避免 Monday / today 被识别为「天」，15h 被识别为「5 小时」。
+  // 英文按整词匹配（起始边界），避免 Monday / today 被识别为「天」、15h 被识别为
+  // 「5 小时」；不要求结束边界，留出 week_limit、monthly_reset 这类带下划线的名字。
   if (
-    /\bfive\b/.test(lower)
-    || /(?:^|[^0-9])5\s*h(?:ours?|r)?\b/.test(lower)
+    /\bfive/.test(lower)
+    || /(?:^|[^0-9])5[\s-]*h(?:ours?|r)?\b/.test(lower)
     || name.startsWith('5 小时')
     || name.startsWith('5小时')
   ) {
     return '5 小时';
   }
   if (
-    /\bweek(?:ly)?\b/.test(lower)
+    /\bweek/.test(lower)
     || name.startsWith('1 周')
     || name.startsWith('1周')
     || name === '周'
   ) {
     return '1 周';
   }
-  if (/\bmonth(?:ly)?\b/.test(lower) || name.includes('月')) {
+  if (/\bmonth/.test(lower) || name.includes('月')) {
     return '订阅月';
   }
-  if (/\b(?:days?|daily)\b/.test(lower) || name.includes('天') || name.includes('日')) {
+  if (/\b(?:days?|daily)/.test(lower) || name.includes('天') || name.includes('日')) {
     return '1 天';
   }
   return name.replace(/(?:窗口|额度)$/, '');

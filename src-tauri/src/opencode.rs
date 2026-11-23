@@ -217,7 +217,6 @@ struct ProcessOutput {
     stdout: Vec<u8>,
 }
 
-
 fn run_cli(binary: &Path, args: &[&str]) -> Result<ProcessOutput, ProviderError> {
     let mut command = Command::new(binary);
     command

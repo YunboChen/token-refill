@@ -10,11 +10,11 @@ use std::env;
 use std::ffi::OsString;
 #[cfg(unix)]
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::io::Read;
-use std::process::{Child, Command};
+use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::Stdio;
+use std::process::{Child, Command};
 
 /// 给子进程设置 PATH：CLI 所在目录优先，其次是常见安装目录，最后是继承来的 PATH。
 pub fn apply_child_path(command: &mut Command, binary: &Path) {
