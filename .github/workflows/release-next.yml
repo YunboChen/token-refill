@@ -158,6 +158,8 @@ jobs:
 
       - run: pnpm test:rust
 
+      - run: pnpm test:web
+
   build-macos:
     name: build macos (${{ matrix.label }})
     needs: [meta, check]
