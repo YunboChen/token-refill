@@ -49,7 +49,7 @@ let raw = match fs::read_to_string(path) {
 
 `relay.rs` 编辑流程：加锁读取条目 → 释放锁联网检测 → 重新加锁写回。期间若该条目被自动刷新或其他操作修改，会被旧值覆盖；`account_token` 也使用了旧值。
 
-**处理**：写回前比较 `base_url`、`api_key`、`account_token`、`account_user_id`，任一变化则报错请用户重试。其余可并发修改的路径已核对：`set_label` 不写这些字段，`refresh_with` 对手动条目写回相同值，来源引用条目在读取阶段就拒绝编辑。
+**处理**：写回前比较 `base_url`、`api_key`、`account_token`、`account_user_id`，任一变化则报错请用户重试。其余可并发修改的路径已核对：`set_label` 不写这些字段，`refresh_with` 对手动条目写回相同值，来源引用条目在读取阶段就拒绝编辑。新增一个用延迟回环服务构造竞态的测试，覆盖冲突分支。
 
 ### 5. Windows 下孤儿进程 — 已修
 
@@ -61,7 +61,7 @@ let raw = match fs::read_to_string(path) {
 
 `read_capped` 使用 `take(MAX_OUTPUT_BYTES).read_to_end` 后不再读取；antigravity 的 stderr 线程达到上限即 `break`。子进程继续写输出时管道写满而阻塞，直到超时。
 
-**处理**：新增 `cli::read_capped`，达到上限后继续读取并丢弃直到 EOF；antigravity 的 stderr 循环同样持续排空。认证标记检测改为只扫描新数据与 64 字节重叠区，且只通知一次。
+**处理**：新增 `cli::read_capped`，达到上限后继续读取并丢弃直到 EOF；antigravity 的 stderr 循环同样持续排空。认证标记检测改为只扫描新数据与 64 字节重叠区，且只通知一次。`read_capped` 补了「保留前缀并读到 EOF」与「读错误时返回已有输出」两个单元测试。
 
 ### 7. Command Code 月度用量字段（待确认）— 未修
 

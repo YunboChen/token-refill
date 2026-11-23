@@ -208,6 +208,36 @@ mod tests {
     }
 
     #[test]
+    fn read_capped_keeps_the_prefix_and_drains_the_stream() {
+        let mut reader = std::io::Cursor::new(vec![b'a'; 100]);
+        let bytes = read_capped(&mut reader, 10);
+
+        assert_eq!(bytes, b"aaaaaaaaaa");
+        // 上限之后继续读取并丢弃，游标必须到达 EOF；否则子进程会因管道写满而阻塞。
+        assert_eq!(reader.position(), 100);
+    }
+
+    #[test]
+    fn read_capped_returns_partial_output_on_read_error() {
+        struct FailsAfterFirstChunk {
+            sent: bool,
+        }
+        impl Read for FailsAfterFirstChunk {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.sent {
+                    return Err(std::io::Error::other("boom"));
+                }
+                self.sent = true;
+                buf[..3].copy_from_slice(b"abc");
+                Ok(3)
+            }
+        }
+
+        let bytes = read_capped(FailsAfterFirstChunk { sent: false }, 8);
+        assert_eq!(bytes, b"abc");
+    }
+
+    #[test]
     fn binary_dir_comes_before_inherited_path() {
         let binary = PathBuf::from("/opt/tools/bin/codex");
         // 用 join_paths 生成，Windows 的条目分隔符是 `;`，不能直接写字面量。
