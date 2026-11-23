@@ -192,12 +192,6 @@ fn contains_auth_marker(bytes: &[u8]) -> bool {
     .any(|marker| text.contains(marker))
 }
 
-fn read_capped(reader: impl Read) -> Vec<u8> {
-    let mut buffer = Vec::new();
-    let _ = reader.take(MAX_OUTPUT_BYTES).read_to_end(&mut buffer);
-    buffer
-}
-
 /// 在超时内运行 CLI。`agy` 未登录时会打印登录链接并等待 60 秒，
 /// 因此边读 stderr 边检测认证提示，命中后立即结束进程，避免每轮刷新都空等。
 fn run(binary: &Path, args: &[&str], timeout: Duration) -> Result<ProcessOutput, ProviderError> {
@@ -228,21 +222,28 @@ fn run(binary: &Path, args: &[&str], timeout: Duration) -> Result<ProcessOutput,
         .stderr
         .take()
         .ok_or_else(|| ProviderError::new("io", "无法读取 agy 错误输出。"))?;
-    let stdout_handle = thread::spawn(move || read_capped(stdout));
+    let stdout_handle = thread::spawn(move || crate::cli::read_capped(stdout, MAX_OUTPUT_BYTES));
     let (auth_tx, auth_rx) = std::sync::mpsc::channel();
     let stderr_handle = thread::spawn(move || {
         let mut reader = stderr;
         let mut buffer = Vec::new();
         let mut chunk = [0u8; 4096];
+        let mut auth_sent = false;
+        // 只扫描新数据与上一段末尾的重叠区，避免每块都从头扫描整个缓冲区。
+        const MARKER_OVERLAP: usize = 64;
         loop {
             match reader.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(read) => {
-                    buffer.extend_from_slice(&chunk[..read]);
-                    if buffer.len() as u64 >= MAX_OUTPUT_BYTES {
-                        break;
+                    // 超过上限后继续读取并丢弃，避免管道写满让 agy 阻塞到超时。
+                    let room = (MAX_OUTPUT_BYTES as usize).saturating_sub(buffer.len());
+                    if room == 0 {
+                        continue;
                     }
-                    if contains_auth_marker(&buffer) {
+                    let start = buffer.len().saturating_sub(MARKER_OVERLAP);
+                    buffer.extend_from_slice(&chunk[..read.min(room)]);
+                    if !auth_sent && contains_auth_marker(&buffer[start..]) {
+                        auth_sent = true;
                         let _ = auth_tx.send(());
                     }
                 }
@@ -258,23 +259,21 @@ fn run(binary: &Path, args: &[&str], timeout: Duration) -> Result<ProcessOutput,
     let status = loop {
         if !auth_required && auth_rx.try_recv().is_ok() {
             auth_required = true;
-            let _ = child.kill();
-            break child.wait().ok();
+            crate::cli::kill_process_tree(&mut child);
+            break None;
         }
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
             Ok(None) => {
                 if Instant::now() >= deadline {
                     timed_out = true;
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    crate::cli::kill_process_tree(&mut child);
                     break None;
                 }
                 thread::sleep(Duration::from_millis(50));
             }
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::cli::kill_process_tree(&mut child);
                 return Err(ProviderError::new("io", "等待 agy 退出失败。"));
             }
         }

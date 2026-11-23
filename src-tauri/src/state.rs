@@ -802,7 +802,13 @@ fn derived_remaining_percent(total: f64, remaining: f64) -> i64 {
     if total <= 0.0 {
         return 0;
     }
-    clamp_percent(((remaining.clamp(0.0, total) / total) * 100.0).floor() as i64)
+    let percent = clamp_percent(((remaining.clamp(0.0, total) / total) * 100.0).floor() as i64);
+    // 仍有剩余时不显示 0%：0% 会被判定为「额度已用尽」并进入需处理。
+    if percent == 0 && remaining > 0.0 {
+        1
+    } else {
+        percent
+    }
 }
 
 /// 只有已用量时派生已用百分比；与剩余比例相反，这里向上取整，同样避免消耗被抹平。
@@ -2291,6 +2297,32 @@ fn write_state(path: &Path, state: &PersistedState) -> Result<(), String> {
     Ok(())
 }
 
+/// 读取状态文件；被其他进程短暂占用时重试几次。
+fn read_state_file(path: &Path) -> std::io::Result<String> {
+    let mut attempt = 0;
+    loop {
+        match fs::read_to_string(path) {
+            Ok(raw) => return Ok(raw),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(err),
+            Err(err) => {
+                attempt += 1;
+                if attempt >= 3 {
+                    return Err(err);
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
+        }
+    }
+}
+
+/// 复制而不是改名：原文件可能正被其他进程占用，改名同样会失败。
+/// 返回备份路径；复制失败时必须改为只读启动，否则后续写入会覆盖无法恢复的原文件。
+fn backup_copy(path: &Path) -> std::io::Result<PathBuf> {
+    let backup = path.with_extension(format!("json.unreadable-{}", epoch_now()));
+    fs::copy(path, &backup)?;
+    Ok(backup)
+}
+
 fn backup_unreadable(path: &Path) {
     let backup = path.with_extension(format!("json.corrupt-{}", epoch_now()));
     let _ = fs::rename(path, backup);
@@ -2339,7 +2371,16 @@ fn apply_refresh_panic(state: &mut PersistedState, account_id: &str, now: i64) {
     }
 }
 
-/// 启动时读到的状态，以及文件是否由更高版本写入。
+/// 状态文件存在但读不出来时的处理结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UnreadableState {
+    /// 已把原文件复制到备份位置，可以从空状态继续写。
+    BackedUp(PathBuf),
+    /// 备份也失败：本次运行只读，避免覆盖无法恢复的原文件。
+    ReadOnly,
+}
+
+/// 启动时读到的状态，以及文件是否由更高版本写入或读取失败。
 ///
 /// 更高版本写入的文件只读沿用：既不改名备份，也不回写，避免旧版本把
 /// 新版本才能识别的字段覆盖掉；用户升级后仍能读到完整内容。
@@ -2347,6 +2388,8 @@ struct LoadedState {
     state: PersistedState,
     /// 文件里高于当前 `SCHEMA_VERSION` 的版本号；为 `Some` 时本次运行只读。
     newer_schema_version: Option<u32>,
+    /// 文件存在但读取失败时的处理结果。
+    unreadable: Option<UnreadableState>,
 }
 
 impl LoadedState {
@@ -2354,6 +2397,7 @@ impl LoadedState {
         Self {
             state,
             newer_schema_version: None,
+            unreadable: None,
         }
     }
 
@@ -2361,16 +2405,54 @@ impl LoadedState {
         Self {
             state,
             newer_schema_version: Some(version),
+            unreadable: None,
+        }
+    }
+
+    /// 原文件已备份：可以从空状态继续写，用户仍可通过备份恢复。
+    fn recovered(state: PersistedState, backup: PathBuf) -> Self {
+        Self {
+            state,
+            newer_schema_version: None,
+            unreadable: Some(UnreadableState::BackedUp(backup)),
+        }
+    }
+
+    /// 原文件既读不出也备份不了：只读启动，避免任何写入。
+    fn unreadable_read_only(state: PersistedState) -> Self {
+        Self {
+            state,
+            newer_schema_version: None,
+            unreadable: Some(UnreadableState::ReadOnly),
         }
     }
 }
 
 fn load_state(path: &Path) -> LoadedState {
-    let raw = match fs::read_to_string(path) {
+    let raw = match read_state_file(path) {
         Ok(raw) => raw,
-        // 文件不存在或暂时不可读时都从默认状态启动；
-        // 后续成功写入前不会覆盖原文件。
-        Err(_) => return LoadedState::writable(default_state()),
+        // 首次启动：文件不存在，从默认状态开始。
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return LoadedState::writable(default_state());
+        }
+        // 文件存在但读不出来（被杀毒 / 同步盘占用、权限、非 UTF-8 等）：
+        // 后续刷新会以默认状态覆盖原文件，因此先复制一份备份。
+        // 备份成功才允许继续写；备份失败时改为只读，避免覆盖唯一一份数据。
+        Err(err) => match backup_copy(path) {
+            Ok(backup) => {
+                eprintln!(
+                    "读取应用状态失败，已备份到 {} 后以空状态启动：{err}",
+                    backup.display()
+                );
+                return LoadedState::recovered(default_state(), backup);
+            }
+            Err(backup_err) => {
+                eprintln!(
+                    "读取应用状态失败且无法备份，本次运行只读：{err}；备份失败：{backup_err}"
+                );
+                return LoadedState::unreadable_read_only(default_state());
+            }
+        },
     };
 
     // 先只看版本号：更高版本写入的文件不能当成损坏文件改名备份，
@@ -2464,6 +2546,8 @@ pub struct StateStore {
     /// 状态文件由更高版本写入时为 `Some(版本号)`：本次运行不落盘，
     /// 只保留内存中的查看与查询结果，避免旧版本覆盖较新的文件。
     newer_schema_version: Option<u32>,
+    /// 状态文件存在但读取失败时的处理结果；备份失败时本次运行只读。
+    unreadable: Option<UnreadableState>,
 }
 
 impl StateStore {
@@ -2519,6 +2603,7 @@ impl StateStore {
             logins: Mutex::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
             newer_schema_version: loaded.newer_schema_version,
+            unreadable: loaded.unreadable,
         }
     }
 
@@ -2526,16 +2611,42 @@ impl StateStore {
         lock(&self.inner).clone()
     }
 
-    /// 状态文件由更高版本写入时，返回面向用户的只读提示；正常读写返回 `None`。
-    pub fn state_file_notice(&self) -> Option<String> {
-        self.newer_schema_version.map(|version| {
-            format!(
+    /// 本次运行不能回写状态文件（版本更高或读取失败且无法备份）。
+    fn is_read_only(&self) -> bool {
+        self.newer_schema_version.is_some()
+            || matches!(self.unreadable, Some(UnreadableState::ReadOnly))
+    }
+
+    /// 状态文件只读运行的原因，面向用户的提示；可写时返回 `None`。
+    fn read_only_notice(&self) -> Option<String> {
+        if let Some(version) = self.newer_schema_version {
+            return Some(format!(
                 "状态文件由更新版本的 {} 写入（状态版本 {version}，当前版本支持 {SCHEMA_VERSION}）。\
                  为避免覆盖较新的数据，本次运行只读：账户与额度仍可查看，但设置、账户和授权的修改不会保存。\
                  请升级到最新版本后再操作。",
                 self.app.package_info().name
-            )
+            ));
+        }
+        matches!(self.unreadable, Some(UnreadableState::ReadOnly)).then(|| {
+            "读取状态文件失败，且无法备份原文件。为避免覆盖无法恢复的数据，本次运行只读：\
+             账户与设置未能加载，修改也不会保存。请检查文件权限后重启应用。"
+                .to_string()
         })
+    }
+
+    /// 状态文件异常或由更高版本写入时，返回面向用户的提示；正常读写返回 `None`。
+    pub fn state_file_notice(&self) -> Option<String> {
+        if let Some(notice) = self.read_only_notice() {
+            return Some(notice);
+        }
+        match self.unreadable.as_ref() {
+            Some(UnreadableState::BackedUp(backup)) => Some(format!(
+                "读取状态文件失败，账户与设置未能加载。原文件已备份到「{}」，本次运行从空状态开始，\
+                 新的修改会写入新的状态文件。如需恢复，请退出应用后用备份覆盖原文件。",
+                backup.display()
+            )),
+            _ => None,
+        }
     }
 
     fn emit(&self, state: &PersistedState) {
@@ -2735,6 +2846,12 @@ impl StateStore {
                     .to_string(),
             );
         }
+        if matches!(self.unreadable, Some(UnreadableState::ReadOnly)) {
+            return Err(
+                "读取状态文件失败且未能备份，本次运行只读，修改不会保存；请检查文件权限后重启应用。"
+                    .to_string(),
+            );
+        }
         let mut guard = lock(&self.inner);
         let mut next = guard.clone();
         change(&mut next);
@@ -2757,9 +2874,9 @@ impl StateStore {
         change(&mut next);
         sync_auth_expired_marks(&mut next);
         next.revision = next.revision.saturating_add(1);
-        // 更高版本写入的文件不回写：查询结果只在内存中展示，避免旧版本
-        // 把新版本才能识别的字段降级覆盖掉。
-        if self.newer_schema_version.is_none() {
+        // 只读运行（更高版本写入、读取失败且无法备份）不回写：查询结果只在
+        // 内存中展示，避免覆盖旧版本无法识别的字段或无法恢复的原文件。
+        if !self.is_read_only() {
             if let Err(err) = write_state(&self.path, &next) {
                 eprintln!("保存应用状态失败：{err}");
             }
@@ -2941,7 +3058,7 @@ impl StateStore {
         }
         sync_auth_expired_marks(&mut next);
         next.revision = next.revision.saturating_add(1);
-        if self.newer_schema_version.is_none() {
+        if !self.is_read_only() {
             if let Err(err) = write_state(&self.path, &next) {
                 eprintln!("保存应用状态失败：{err}");
             }
@@ -6193,6 +6310,55 @@ mod tests {
             None
         );
         assert!(is_account_due(&loaded.state.accounts[0], 15, 1_790_000_100));
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn derived_remaining_percent_keeps_tiny_remainder_above_zero() {
+        assert_eq!(derived_remaining_percent(10_000.0, 30.0), 1);
+        assert_eq!(derived_remaining_percent(10_000.0, 0.0), 0);
+        assert_eq!(derived_remaining_percent(100.0, 55.5), 55);
+    }
+
+    #[test]
+    fn missing_state_file_starts_from_default() {
+        let path = temp_state_path("missing");
+        let _ = fs::remove_file(&path);
+        let loaded = load_state(&path);
+        assert_eq!(loaded.state, default_state());
+        assert_eq!(loaded.newer_schema_version, None);
+    }
+
+    #[test]
+    fn unreadable_state_is_backed_up_before_starting_empty() {
+        let path = temp_state_path("unreadable");
+        // 非 UTF-8 内容：读取失败但不是 NotFound，模拟同步盘占用或编码异常。
+        let original: [u8; 4] = [0xff, 0xfe, 0x00, b'{'];
+        fs::write(&path, original).expect("write unreadable state");
+
+        let loaded = load_state(&path);
+
+        assert_eq!(loaded.state, default_state());
+        assert_eq!(loaded.newer_schema_version, None);
+        let Some(UnreadableState::BackedUp(backup)) = loaded.unreadable else {
+            panic!("读取失败时应先备份再以空状态启动");
+        };
+        assert_eq!(fs::read(&backup).expect("read backup"), original);
+        // 原文件仍保留，备份是额外的副本。
+        assert_eq!(fs::read(&path).expect("read original"), original);
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn unreadable_state_without_backup_starts_read_only() {
+        let path = temp_state_path("unreadable-no-backup");
+        // 用同名目录制造“存在但读不出、也复制不了”的失败。
+        fs::create_dir(&path).expect("create dir at state path");
+
+        let loaded = load_state(&path);
+
+        assert_eq!(loaded.state, default_state());
+        assert_eq!(loaded.unreadable, Some(UnreadableState::ReadOnly));
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 

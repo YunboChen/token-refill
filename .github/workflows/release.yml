@@ -221,6 +221,8 @@ jobs:
 
       - run: pnpm test:rust
 
+      - run: pnpm test:web
+
   # 按架构分开构建，各自只出一个 dmg：
   # universal 会把 arm64/x86_64 两套可执行文件塞进同一个 fat binary，安装包和 CI 编译成本都翻倍。
   build-macos:

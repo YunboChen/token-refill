@@ -64,6 +64,9 @@ jobs:
 
       - run: pnpm test:rust
 
+      # 前端纯函数（窗口名归一化、时长文案）的平台无关用例。
+      - run: pnpm test:web
+
   # Clippy 检查 Windows 专属分支的告警，Rust 测试在 Windows 上原生执行。
   check-windows:
     name: ci / check (windows)

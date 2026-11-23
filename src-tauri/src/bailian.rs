@@ -1330,12 +1330,22 @@ fn json_state(text: &str) -> Option<String> {
 fn random_hex(bytes: usize) -> String {
     let mut buffer = vec![0u8; bytes];
     if getrandom::fill(&mut buffer).is_err() {
+        // 系统随机源不可用时的兜底：标准库 `RandomState` 的 SipHash 密钥来自
+        // 进程启动时的系统随机数，再混入时间与计数，避免仅凭时间戳即可推算。
+        use std::collections::hash_map::RandomState;
+        use std::hash::{BuildHasher, Hasher};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or_default();
-        for (index, byte) in buffer.iter_mut().enumerate() {
-            *byte = (nanos.rotate_left(index as u32 % 64) as u8) ^ (index as u8);
+        for chunk in buffer.chunks_mut(8) {
+            let mut hasher = RandomState::new().build_hasher();
+            hasher.write_u128(nanos);
+            hasher.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
+            let bytes = hasher.finish().to_le_bytes();
+            chunk.copy_from_slice(&bytes[..chunk.len()]);
         }
     }
     buffer.iter().map(|byte| format!("{byte:02x}")).collect()

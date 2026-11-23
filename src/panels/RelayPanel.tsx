@@ -72,12 +72,15 @@ type RelayDialog =
 const REMINDER_THRESHOLD_MAX = 1_000_000;
 
 /**
- * 金额的即时校验，规则与 Rust `validate_relay_threshold` 保持一致：
+ * 金额的即时校验，范围规则与 Rust `validate_relay_threshold` 一致：
  * 有限正数、上限 100 万、最多两位小数。Rust 仍是权威校验，这里只是
  * 让用户在输入时就能看到中文错误，避免依赖浏览器原生的英文提示。
+ * 前端额外要求普通十进制写法（含 `.5` 这种省略整数部分的写法），
+ * 不接受 Number() 也能解析的 `0x10`、`1e2`。
  */
 function reminderThresholdError(raw: string): string | null {
   if (!raw.trim()) return '请填写提醒金额。';
+  if (!/^\s*(?:\d+(?:\.\d+)?|\.\d+)\s*$/.test(raw)) return '请填写有效的提醒金额。';
   const value = Number(raw);
   if (!Number.isFinite(value)) return '请填写有效的提醒金额。';
   if (value <= 0) return '提醒金额必须大于 0。';

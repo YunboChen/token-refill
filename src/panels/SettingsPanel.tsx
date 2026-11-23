@@ -133,7 +133,7 @@ export default function SettingsPanel() {
     0,
     PROXY_OPTIONS.findIndex((option) => option.value === prefs.proxyMode),
   );
-  const refreshFill = ((prefs.lowQuotaThreshold - 5) / 45) * 100;
+  const thresholdFill = ((prefs.lowQuotaThreshold - 5) / 45) * 100;
 
   // 后端状态变化（如刷新事件）时同步；本地有未保存修改时不覆盖。
   useEffect(() => {
@@ -503,7 +503,7 @@ export default function SettingsPanel() {
           <input
             type="range"
             className={styles.range}
-            style={{ '--range-fill': `${refreshFill}%` } as CSSProperties}
+            style={{ '--range-fill': `${thresholdFill}%` } as CSSProperties}
             min={5}
             max={50}
             step={5}

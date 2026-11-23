@@ -520,7 +520,7 @@ impl RelayStore {
     ) -> Result<RelayAccount, String> {
         let base_url = quota::normalize_base_url(base_url)?;
         // 先读出当前条目；联网识别不能持有条目锁。
-        let (api_key, account_token, account_user_id) = {
+        let (api_key, account_token, account_user_id, original_base_url, original_api_key) = {
             let entries = self.lock();
             let entry = entries
                 .iter()
@@ -537,6 +537,8 @@ impl RelayStore {
                 api_key,
                 entry.account_token.clone(),
                 entry.account_user_id.clone(),
+                entry.base_url.clone(),
+                entry.api_key.clone(),
             )
         };
 
@@ -553,6 +555,15 @@ impl RelayStore {
             .iter_mut()
             .find(|entry| entry.id == id)
             .ok_or_else(|| "找不到这条中转站账户，请重新添加。".to_string())?;
+        // 联网识别期间不持锁：若条目已被其他操作修改（另一次编辑、补充令牌），
+        // 不能用本次读到的旧值覆盖，请用户基于最新内容重试。
+        if entry.base_url != original_base_url
+            || entry.api_key != original_api_key
+            || entry.account_token != account_token
+            || entry.account_user_id != account_user_id
+        {
+            return Err("这条中转站账户刚被其他操作修改，请确认最新内容后重试。".to_string());
+        }
         entry.base_url = base_url;
         entry.api_key = api_key;
         entry.provider = detected.provider;
@@ -1121,7 +1132,9 @@ fn read_snapshot(dir: &Path) -> Option<StoredSnapshot> {
 mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::{mpsc, Arc};
     use std::thread;
+    use std::time::Duration;
 
     use super::*;
 
@@ -1143,6 +1156,41 @@ mod tests {
                     body.len()
                 );
                 let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        base
+    }
+
+    /// 每个连接独立处理并延迟 `delay` 再响应；首个请求到达时通过 `started` 通知调用方，
+    /// 用来稳定构造「联网识别期间条目被其他操作修改」的竞态。
+    fn serve_delayed(
+        steps: Vec<(&'static str, u16, &'static str)>,
+        delay: Duration,
+        started: Option<mpsc::Sender<()>>,
+    ) -> String {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("绑定回环端口");
+        let base = format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        thread::spawn(move || {
+            for (path, status, body) in steps {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                if let Some(started) = started.as_ref() {
+                    let _ = started.send(());
+                }
+                thread::spawn(move || {
+                    let mut buffer = [0u8; 8192];
+                    let read = stream.read(&mut buffer).unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buffer[..read]);
+                    assert!(request.starts_with(&format!("GET {path} ")), "{request}");
+                    thread::sleep(delay);
+                    let response = format!(
+                        "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                });
             }
         });
         base
@@ -1379,6 +1427,50 @@ mod tests {
         assert_eq!(store.list()[0].base_url, second);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_reports_a_concurrent_change_instead_of_overwriting_it() {
+        let body = r#"{"mode":"quota_limited","isValid":true,
+            "quota":{"limit":5,"used":1,"remaining":4}}"#;
+        // 添加条目与后完成的编辑都走这个快速服务。
+        let base = serve(vec![
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+            ("/api/usage/token/", 404, "{}"),
+            ("/v1/usage", 200, body),
+        ]);
+        let (started_tx, started_rx) = mpsc::channel();
+        let slow = serve_delayed(
+            vec![("/api/usage/token/", 404, "{}"), ("/v1/usage", 200, body)],
+            Duration::from_millis(200),
+            Some(started_tx),
+        );
+        let store = Arc::new(RelayStore::default());
+        let account = store.query(&base, "sk-old", None, None, None).unwrap();
+
+        // 这次编辑已经读完条目、正在联网识别。
+        let editing = Arc::clone(&store);
+        let id = account.id.clone();
+        let slow_base = slow.clone();
+        let pending = thread::spawn(move || editing.update(&id, &slow_base, None));
+        started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("编辑应已开始联网识别");
+
+        // 识别期间另一条编辑先完成写回：改了密钥。
+        store
+            .update(&account.id, &base, Some("sk-new"))
+            .expect("先完成的编辑应成功");
+
+        let error = pending.join().expect("join").unwrap_err();
+        assert!(error.contains("刚被其他操作修改"), "{error}");
+        // 冲突的那次编辑不写回任何字段。
+        let list = store.list();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].base_url, base);
+        assert!(store.contains(&base, "sk-new"));
+        assert!(!store.contains(&base, "sk-old"));
     }
 
     #[test]
