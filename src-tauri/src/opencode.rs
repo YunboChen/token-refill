@@ -4,7 +4,6 @@
 //! 作为 Bearer 令牌。返回 rolling（5 小时）/ weekly / monthly 三个窗口的
 //! 已用百分比与重置时间；百分比已经是账户维度的汇总值，不需要再按模型累加。
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -218,11 +217,6 @@ struct ProcessOutput {
     stdout: Vec<u8>,
 }
 
-fn read_capped(reader: impl Read) -> Vec<u8> {
-    let mut buffer = Vec::new();
-    let _ = reader.take(MAX_OUTPUT_BYTES).read_to_end(&mut buffer);
-    buffer
-}
 
 fn run_cli(binary: &Path, args: &[&str]) -> Result<ProcessOutput, ProviderError> {
     let mut command = Command::new(binary);
@@ -242,7 +236,7 @@ fn run_cli(binary: &Path, args: &[&str]) -> Result<ProcessOutput, ProviderError>
         .stdout
         .take()
         .ok_or_else(|| ProviderError::new("io", "无法读取 opencode 输出。"))?;
-    let stdout_handle = thread::spawn(move || read_capped(stdout));
+    let stdout_handle = thread::spawn(move || crate::cli::read_capped(stdout, MAX_OUTPUT_BYTES));
 
     let deadline = Instant::now() + CLI_TIMEOUT;
     let mut timed_out = false;
@@ -252,15 +246,13 @@ fn run_cli(binary: &Path, args: &[&str]) -> Result<ProcessOutput, ProviderError>
             Ok(None) => {
                 if Instant::now() >= deadline {
                     timed_out = true;
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    crate::cli::kill_process_tree(&mut child);
                     break None;
                 }
                 thread::sleep(Duration::from_millis(50));
             }
             Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                crate::cli::kill_process_tree(&mut child);
                 return Err(ProviderError::new("io", "等待 opencode 退出失败。"));
             }
         }

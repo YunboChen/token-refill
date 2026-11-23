@@ -904,8 +904,7 @@ impl AppServer {
 
 impl Drop for AppServer {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        crate::cli::kill_process_tree(&mut self.child);
     }
 }
 

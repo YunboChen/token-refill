@@ -11,7 +11,10 @@ use std::ffi::OsString;
 #[cfg(unix)]
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::io::Read;
+use std::process::{Child, Command};
+#[cfg(windows)]
+use std::process::Stdio;
 
 /// 给子进程设置 PATH：CLI 所在目录优先，其次是常见安装目录，最后是继承来的 PATH。
 pub fn apply_child_path(command: &mut Command, binary: &Path) {
@@ -35,6 +38,52 @@ pub fn apply_no_window(command: &mut Command) {
 
 #[cfg(not(windows))]
 pub fn apply_no_window(_command: &mut Command) {}
+
+/// 终止子进程及其后代并回收。
+///
+/// Windows 上 `.cmd` 启动器会再拉起 `node.exe` 等进程，只结束直接子进程会留下
+/// 孤儿进程；`taskkill /T` 按进程树清理。PID 来自本次创建的子进程，不拼接用户输入。
+pub fn kill_process_tree(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        let pid = child.id().to_string();
+        let mut taskkill = Command::new(taskkill_path());
+        taskkill
+            .args(["/T", "/F", "/PID", pid.as_str()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        apply_no_window(&mut taskkill);
+        let _ = taskkill.status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(windows)]
+fn taskkill_path() -> PathBuf {
+    env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .map(|root| root.join("System32").join("taskkill.exe"))
+        .unwrap_or_else(|| PathBuf::from("taskkill"))
+}
+
+/// 读取子进程输出，最多保留 `cap` 字节；超出部分继续读取并丢弃，
+/// 避免管道写满后子进程阻塞到超时。
+pub fn read_capped(mut reader: impl Read, cap: u64) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                let room = (cap as usize).saturating_sub(buffer.len());
+                buffer.extend_from_slice(&chunk[..read.min(room)]);
+            }
+        }
+    }
+    buffer
+}
 
 fn child_path(binary: &Path, inherited: Option<OsString>) -> Option<OsString> {
     let mut dirs: Vec<PathBuf> = Vec::new();
