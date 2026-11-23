@@ -559,28 +559,7 @@ impl LoginSession {
 /// 只终止直接子进程会留下仍在轮询登录结果的 Node 进程。`taskkill /T` 按
 /// 进程树清理；PID 来自本次创建的子进程，不拼接任何用户输入或 URL。
 fn kill_child(child: &mut Child) {
-    #[cfg(windows)]
-    {
-        let pid = child.id().to_string();
-        let mut taskkill = Command::new(taskkill_path());
-        taskkill
-            .args(["/T", "/F", "/PID", pid.as_str()])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        crate::cli::apply_no_window(&mut taskkill);
-        let _ = taskkill.status();
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-#[cfg(windows)]
-fn taskkill_path() -> PathBuf {
-    std::env::var_os("SystemRoot")
-        .map(PathBuf::from)
-        .map(|root| root.join("System32").join("taskkill.exe"))
-        .unwrap_or_else(|| PathBuf::from("taskkill"))
+    crate::cli::kill_process_tree(child);
 }
 
 /// 从 CLI 输出中提取并校验登录地址。只接受 Cursor 官方登录页。

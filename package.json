@@ -19,7 +19,7 @@
     "tauri:dev:next": "tauri dev --config src-tauri/tauri.next.conf.json",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml --locked",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --locked",
-    "test:web": "node --experimental-strip-types --test src/lib/attention.test.ts"
+    "test:web": "node --experimental-strip-types --test src/lib/attention.test.ts src/lib/format.test.ts"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
