@@ -802,7 +802,13 @@ fn derived_remaining_percent(total: f64, remaining: f64) -> i64 {
     if total <= 0.0 {
         return 0;
     }
-    clamp_percent(((remaining.clamp(0.0, total) / total) * 100.0).floor() as i64)
+    let percent = clamp_percent(((remaining.clamp(0.0, total) / total) * 100.0).floor() as i64);
+    // 仍有剩余时不显示 0%：0% 会被判定为「额度已用尽」并进入需处理。
+    if percent == 0 && remaining > 0.0 {
+        1
+    } else {
+        percent
+    }
 }
 
 /// 只有已用量时派生已用百分比；与剩余比例相反，这里向上取整，同样避免消耗被抹平。
@@ -2291,6 +2297,30 @@ fn write_state(path: &Path, state: &PersistedState) -> Result<(), String> {
     Ok(())
 }
 
+/// 读取状态文件；被其他进程短暂占用时重试几次。
+fn read_state_file(path: &Path) -> std::io::Result<String> {
+    let mut attempt = 0;
+    loop {
+        match fs::read_to_string(path) {
+            Ok(raw) => return Ok(raw),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(err),
+            Err(err) => {
+                attempt += 1;
+                if attempt >= 3 {
+                    return Err(err);
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
+        }
+    }
+}
+
+/// 复制而不是改名：原文件可能正被其他进程占用，改名同样会失败。
+fn backup_copy(path: &Path) {
+    let backup = path.with_extension(format!("json.unreadable-{}", epoch_now()));
+    let _ = fs::copy(path, backup);
+}
+
 fn backup_unreadable(path: &Path) {
     let backup = path.with_extension(format!("json.corrupt-{}", epoch_now()));
     let _ = fs::rename(path, backup);
@@ -2366,11 +2396,19 @@ impl LoadedState {
 }
 
 fn load_state(path: &Path) -> LoadedState {
-    let raw = match fs::read_to_string(path) {
+    let raw = match read_state_file(path) {
         Ok(raw) => raw,
-        // 文件不存在或暂时不可读时都从默认状态启动；
-        // 后续成功写入前不会覆盖原文件。
-        Err(_) => return LoadedState::writable(default_state()),
+        // 首次启动：文件不存在，从默认状态开始。
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return LoadedState::writable(default_state());
+        }
+        // 文件存在但读不出来（被杀毒 / 同步盘占用、权限、非 UTF-8 等）：
+        // 后续刷新会以默认状态覆盖原文件，因此先复制一份备份，保证数据可恢复。
+        Err(err) => {
+            eprintln!("读取应用状态失败，已备份原文件后以默认状态启动：{err}");
+            backup_copy(path);
+            return LoadedState::writable(default_state());
+        }
     };
 
     // 先只看版本号：更高版本写入的文件不能当成损坏文件改名备份，
@@ -6194,6 +6232,22 @@ mod tests {
         );
         assert!(is_account_due(&loaded.state.accounts[0], 15, 1_790_000_100));
         fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn derived_remaining_percent_keeps_tiny_remainder_above_zero() {
+        assert_eq!(derived_remaining_percent(10_000.0, 30.0), 1);
+        assert_eq!(derived_remaining_percent(10_000.0, 0.0), 0);
+        assert_eq!(derived_remaining_percent(100.0, 55.5), 55);
+    }
+
+    #[test]
+    fn missing_state_file_starts_from_default() {
+        let path = temp_state_path("missing");
+        let _ = fs::remove_file(&path);
+        let loaded = load_state(&path);
+        assert_eq!(loaded.state, default_state());
+        assert_eq!(loaded.newer_schema_version, None);
     }
 
     #[test]
