@@ -520,7 +520,7 @@ impl RelayStore {
     ) -> Result<RelayAccount, String> {
         let base_url = quota::normalize_base_url(base_url)?;
         // 先读出当前条目；联网识别不能持有条目锁。
-        let (api_key, account_token, account_user_id) = {
+        let (api_key, account_token, account_user_id, original_base_url, original_api_key) = {
             let entries = self.lock();
             let entry = entries
                 .iter()
@@ -537,6 +537,8 @@ impl RelayStore {
                 api_key,
                 entry.account_token.clone(),
                 entry.account_user_id.clone(),
+                entry.base_url.clone(),
+                entry.api_key.clone(),
             )
         };
 
@@ -553,6 +555,15 @@ impl RelayStore {
             .iter_mut()
             .find(|entry| entry.id == id)
             .ok_or_else(|| "找不到这条中转站账户，请重新添加。".to_string())?;
+        // 联网识别期间不持锁：若条目已被其他操作修改（另一次编辑、补充令牌），
+        // 不能用本次读到的旧值覆盖，请用户基于最新内容重试。
+        if entry.base_url != original_base_url
+            || entry.api_key != original_api_key
+            || entry.account_token != account_token
+            || entry.account_user_id != account_user_id
+        {
+            return Err("这条中转站账户刚被其他操作修改，请确认最新内容后重试。".to_string());
+        }
         entry.base_url = base_url;
         entry.api_key = api_key;
         entry.provider = detected.provider;
